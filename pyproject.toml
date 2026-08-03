@@ -1,0 +1,25 @@
+[project]
+name = "citysoul"
+version = "0.1.0"
+description = "城市靈魂 AR 遊戲 — 後端（FastAPI）"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.115.0",
+    "uvicorn[standard]==0.30.6",
+    "sqlalchemy==2.0.35",
+    "psycopg[binary]==3.2.3",
+    "pydantic==2.9.2",
+    "pydantic-settings==2.5.2",
+    "redis==5.0.8",
+    "python-dotenv==1.0.1",
+    "pyjwt==2.9.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==8.3.3",
+    "httpx==0.27.2",
+]
+
+[tool.uv]
+package = false

@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     database_url: str
     redis_url: str
 
+    # Session Token（S6／SDD第6節）簽章金鑰，刻意跟未來的 Encounter/Sense Token
+    # 分開管理（不同環境變數），避免共用同一把金鑰、共用同一套驗證邏輯。
+    session_token_secret: str
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 

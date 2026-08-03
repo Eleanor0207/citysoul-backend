@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class PlayerCreateRequest(BaseModel):
@@ -10,7 +10,14 @@ class PlayerCreateRequest(BaseModel):
     （對應 CONTEXT.md「匿名玩家」定義），這裡不接受任何硬體裝置 ID 當替代。
     """
 
-    device_id: str
+    device_id: str = Field(min_length=1, max_length=128)
+
+    @field_validator("device_id")
+    @classmethod
+    def device_id_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("device_id 不可為空白字元")
+        return value
 
 
 class PlayerResponse(BaseModel):
@@ -20,6 +27,7 @@ class PlayerResponse(BaseModel):
     device_id: str
     account_id: str | None
     created_at: datetime
+    session_token: str
 
 
 class SpiritResponse(BaseModel):

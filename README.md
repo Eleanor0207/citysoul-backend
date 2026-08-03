@@ -15,7 +15,7 @@
 
 ## 0. 前置需求
 
-- Python 3.11+
+- [uv](https://docs.astral.sh/uv/)（管理虛擬環境與套件，全專案統一用這個，方便之後遷移環境）
 - Docker + Docker Compose（本機跑 Postgres + Redis 用，之後才接 GCP）
 
 ## 1. 起本機資料庫/Redis
@@ -32,10 +32,15 @@ docker compose up -d
 ## 2. 裝 Python 套件
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate   # Windows: venv\Scripts\activate
-pip install -r requirements.txt
+uv sync
 ```
+
+這會照 `.python-version`（3.12）自動抓對應版本的 Python、在 `.venv` 建虛擬環境，
+並依 `pyproject.toml` + `uv.lock` 鎖定的版本安裝套件（含開發用的 `pytest`/`httpx`）。
+不需要手動 `pip install`，也不需要先手動建 venv。
+
+之後所有指令都用 `uv run <command>` 執行（例如 `uv run uvicorn ...`、`uv run pytest`），
+會自動使用專案的虛擬環境，不需要手動 `activate`。
 
 ## 3. 設定環境變數
 
@@ -48,7 +53,7 @@ cp .env.example .env
 ## 4. 初始化資料庫
 
 ```bash
-python -m scripts.init_db
+uv run python -m scripts.init_db
 ```
 
 這支腳本會：
@@ -61,7 +66,7 @@ python -m scripts.init_db
 ## 5. 啟動服務
 
 ```bash
-uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 ```
 
 打開 http://localhost:8000/docs 會看到自動產生的 API 文件。
@@ -80,6 +85,14 @@ curl -X POST http://localhost:8000/api/v1/players \
 # 查詢天文館這個 spirit
 curl http://localhost:8000/api/v1/spirits/taipei_planetarium
 ```
+
+## 7. 跑自動化測試
+
+```bash
+uv run pytest
+```
+
+測試需要本機 Postgres/Redis 已啟動（見第1步）。
 
 ---
 
@@ -106,23 +119,22 @@ cp .env.example .env
 確認 `.env` 裡 `DATABASE_URL` 的 user/password 是 `city_soul` / `city_soul_dev`（注意底線），
 跟 `docker-compose.yml` 裡 `POSTGRES_USER`/`POSTGRES_PASSWORD` 逐字一致。
 
-**3. Windows + Python 3.13：`psycopg2-binary` 常常沒有現成 wheel**
-這個專案已經改用 `psycopg[binary]`（psycopg3），在 Windows 新版 Python 上相容性好很多。
-如果你是照舊版指示裝了 `psycopg2-binary`，先解安裝乾淨再重裝：
+**3. `psycopg[binary]` 版本/平台 wheel 對不上**
+這個專案固定用 `psycopg[binary]`（psycopg3），`.python-version` 鎖定 3.12 是為了確保
+`uv sync` 能抓到現成的 wheel（3.14 目前還沒有對應 wheel）。如果懷疑環境跑歪了，
+直接重建虛擬環境比手動修補快：
 
 ```bash
-pip uninstall psycopg2-binary psycopg2 -y
-pip install -r requirements.txt
+rm -rf .venv
+uv sync
 ```
 
-同時確認 `.env` 的 `DATABASE_URL` 開頭是 `postgresql+psycopg://`（不是 `+psycopg2://`），
-兩者不能混用——scheme 寫 `+psycopg2` 但環境裡裝的是 psycopg3，就會出現連線層級的怪錯誤
-（包括看起來像帳密錯誤，實際上是驅動兜不起來）。
+同時確認 `.env` 的 `DATABASE_URL` 開頭是 `postgresql+psycopg://`（不是 `+psycopg2://`）。
 
 三步都做完後重跑：
 
 ```bash
-python -m scripts.init_db
+uv run python -m scripts.init_db
 ```
 
 ---
