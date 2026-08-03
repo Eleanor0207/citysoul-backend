@@ -4,7 +4,7 @@
 
 ### Issue tracker
 
-Issues live as GitHub issues on `jessietw2019-cyber/citysoul` (private repo), managed via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Issues live as GitHub issues on `jessietw2019-cyber/citysoul` (private repo), managed via the `gh` CLI, and are also mirrored to local-only files under `docs/issues/` (GitHub is authoritative). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

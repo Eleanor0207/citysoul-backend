@@ -13,6 +13,23 @@ Issues and PRDs for this repo live as GitHub issues at `jessietw2019-cyber/citys
 
 Infer the repo from `git remote -v` — `gh` does this automatically when run inside a clone.
 
+## Local mirror (docs/issues/)
+
+GitHub is the source of truth for identifiers, labels, and blocking edges, but every issue is
+also mirrored to a local file at `docs/issues/<number>-<slug>.md` (local-only, since `docs/` isn't
+pushed to the remote — see `.gitignore`; `docs/agents/` is the sole exception).
+
+- **On create**: after `gh issue create`, write a matching file using the same body content plus
+  a small header (`# <number> — <title>`, `**GitHub:** <url>`, `**Status:**`, `**Labels:**`).
+- **On status change** (closed, labels changed, blockers resolved): update the corresponding local
+  file's `Status:`/`Labels:` line and check off any acceptance criteria that were completed, don't
+  just leave the mirror stale.
+- **Numbering**: use the GitHub issue number as the file's leading number — no need to renumber
+  from 01 separately, since GitHub numbers already reflect creation order.
+- This mirror is for the user's own local reference (e.g. reading tickets offline, grepping across
+  tickets without `gh` calls) — always treat GitHub as authoritative if the two ever disagree, and
+  fix the local file to match, not the other way around.
+
 ## Pull requests as a triage surface
 
 **PRs as a request surface: no.** _(Set to `yes` if this repo treats external PRs as feature requests; `/triage` reads this flag.)_
