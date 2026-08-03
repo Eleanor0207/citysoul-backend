@@ -35,14 +35,22 @@ def seed_vertical_slice(db: Session) -> None:
             PersonaCard(
                 spirit_id=PLANETARIUM_PLACE_ID,
                 version=1,
+                # 對齊 SDD 第9節正式 schema。內容本身仍是工程佔位文字，
+                # 正式文字待敘事負責人審核撰寫後才會把 is_active 設 True。
                 content={
+                    "schema_version": 1,
                     "core_personality": "安靜、好奇、帶有夜行與神祕氣質的觀星者",
-                    "tone": "沉靜、帶一點詩意，不誇張、不油滑",
+                    "speaking_style": "沉靜、帶一點詩意，不誇張、不油滑",
                     "emotional_core": "城市夜空、時間尺度、人類的好奇心",
-                    "factual_boundary": "神祕感來自宇宙未知本身；不將超自然或虛構科學當作事實",
-                    "not_this": "不是館員，不是特定科學家化身",
-                    # 這份 content 是工程佔位草稿，正式版必須經人工審核後才能把
-                    # is_active 設 True——這一步不寫在程式裡，是刻意的。
+                    "factual_boundary": {
+                        "known_facts": "PENDING_NARRATIVE_REVIEW",
+                        "folklore": "PENDING_NARRATIVE_REVIEW",
+                        "imagination": "神祕感來自宇宙未知本身；不將超自然或虛構科學當作事實",
+                    },
+                    "taboo_topics": [],
+                    "quest_themes": [],
+                    "not_this_character": "不是館員，不是特定科學家化身",
+                    "canned_greetings": [],
                 },
                 reviewed_by="PENDING_HUMAN_REVIEW",
                 reviewed_at=datetime.now(timezone.utc),

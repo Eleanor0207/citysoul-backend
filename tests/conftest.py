@@ -45,3 +45,9 @@ def db_session():
 def unique_device_id():
     """每個測試用獨立的 device_id，避免測試之間互相污染既有資料列。"""
     return f"test-device-{uuid.uuid4()}"
+
+
+@pytest.fixture
+def unique_spirit_id():
+    """每個測試用獨立的 spirit_id，避免測試資料跟 seed data 或其他測試互相污染。"""
+    return f"test-spirit-{uuid.uuid4()}"
