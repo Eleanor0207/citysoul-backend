@@ -1,3 +1,5 @@
+import 'package:citysoul_app/core/lat_lng.dart';
+import 'package:citysoul_app/services/location_provider.dart';
 import 'package:citysoul_app/services/player_api.dart';
 import 'package:citysoul_app/services/secure_store.dart';
 
@@ -35,5 +37,16 @@ class FakePlayerApi implements PlayerApi {
       accountId: null,
       sessionToken: 'fake-session-token-$callCount',
     );
+  }
+}
+
+/// 假的 [LocationProvider]，回傳固定座標，不打真實定位平台 API。
+class FakeLocationProvider implements LocationProvider {
+  int callCount = 0;
+
+  @override
+  Future<LatLng> getCurrentPosition() async {
+    callCount++;
+    return const LatLng(latitude: 25.0955, longitude: 121.5186);
   }
 }

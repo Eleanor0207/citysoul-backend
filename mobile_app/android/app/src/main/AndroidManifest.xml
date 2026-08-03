@@ -1,4 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 只要前景定位權限（S1），刻意不加 ACCESS_BACKGROUND_LOCATION——
+         對應 CONTEXT.md「前景即時情境反應」原則：不在背景追蹤/保存玩家位置。 -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <application
         android:label="citysoul_app"
         android:name="${applicationName}"

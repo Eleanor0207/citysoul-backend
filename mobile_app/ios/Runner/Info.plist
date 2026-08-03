@@ -26,6 +26,10 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- 只要前景定位（S1），刻意不加 NSLocationAlwaysAndWhenInUseUsageDescription——
+	     對應 CONTEXT.md「前景即時情境反應」原則：不在背景追蹤/保存玩家位置。 -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>需要定位權限來判斷你是否靠近城市靈魂的召喚點</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
