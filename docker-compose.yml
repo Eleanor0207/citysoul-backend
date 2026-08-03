@@ -1,0 +1,20 @@
+services:
+  db:
+    # pgvector/pgvector 官方映像檔已內建 pgvector extension，跟 Cloud SQL 上手動裝 pgvector 行為一致
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: city_soul
+      POSTGRES_PASSWORD: city_soul_dev
+      POSTGRES_DB: city_soul
+    ports:
+      - "5432:5432"
+    volumes:
+      - city_soul_pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  city_soul_pgdata:
