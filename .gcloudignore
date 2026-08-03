@@ -1,0 +1,36 @@
+# gcloud CLI 上傳原始碼（gcloud run deploy --source、gcloud builds submit 等）時
+# 排除的檔案。跟 .gitignore 分開維護：這裡排除的是「不該進雲端建置環境」的東西，
+# 範圍比 git 版控更嚴格（例如前端專案、文件、測試都跟後端部署無關）。
+
+.git
+.gitignore
+.gcloudignore
+
+# 本機開發專用，不該帶進雲端建置
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+uv.lock
+
+# 文件與規格（只留在本機，不上雲端也不上版控，見 .gitignore）
+docs/
+
+# Flutter 前端專案，跟後端部署無關
+mobile_app/
+
+# 後端測試，不需要跟著部署到 Cloud Run
+tests/
+
+# 已棄用的 Unity+AR 原型
+unity-flutter-bridge-demo/
+
+# IDE/editor
+.idea/
+.vscode/
+
+# 其他開發期產物
+.scratch/
+node_modules/

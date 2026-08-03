@@ -12,3 +12,11 @@ build/
 
 # Abandoned Unity+AR prototype (superseded by 2.5D Billboard, see project_dev.md) — too large for VCS
 unity-flutter-bridge-demo/
+
+# Project docs/specs stay local only, not pushed to the remote.
+# Exception: docs/agents/ holds the mattpocock-skills config that CLAUDE.md
+# references (issue-tracker.md/triage-labels.md/domain.md) — needs to survive
+# a fresh clone for the skills to keep working.
+docs/*
+!docs/agents/
+!docs/agents/**
