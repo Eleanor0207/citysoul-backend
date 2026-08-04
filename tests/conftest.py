@@ -24,6 +24,8 @@ from app.modules.brain import models as brain_models  # noqa: F401
 def _ensure_schema():
     with engine.begin() as conn:
         conn.execute(text("CREATE SCHEMA IF NOT EXISTS brain"))
+        # brain.memory_embeddings 的 VECTOR 欄位需要 pgvector（B6）
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     Base.metadata.create_all(bind=engine)
 
 
