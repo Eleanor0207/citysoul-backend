@@ -1,8 +1,13 @@
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.modules.body import models, schemas
+from app.modules.body.auth import require_session_token
+from app.modules.body.encounter_tokens import issue_encounter_token
+from app.modules.body.geo import haversine_distance_m
 from app.modules.body.tokens import issue_session_token
 
 router = APIRouter(prefix="/api/v1", tags=["body"])
@@ -37,6 +42,42 @@ def create_or_get_player(payload: schemas.PlayerCreateRequest, db: Session = Dep
         account_id=player.account_id,
         created_at=player.created_at,
         session_token=session_token,
+    )
+
+
+@router.post("/summon", response_model=schemas.SummonResponse)
+def summon(
+    payload: schemas.SummonRequest,
+    player_id: uuid.UUID = Depends(require_session_token),
+    db: Session = Depends(get_db),
+):
+    """
+    S2．在場驗證與召喚（SDD 第7.1／8.4節）。
+
+    Sprint2 只做「在場成立就核發相遇憑證」這條最窄的路：
+    - 防作弊 mock location 觀察期 log → ticket #14
+    - 過期未完成任務的失敗判定、回應中的 quest 欄位 → ticket #15
+    兩者都會回來改這支 handler，現在刻意留白，不先寫沒有資料表可依靠的邏輯。
+    """
+    spirit = db.query(models.Spirit).filter_by(place_id=payload.spirit_id).first()
+
+    # is_active=false 跟不存在一律回 404（對齊 SDD 第8.2節的 spirits 查詢）：
+    # 下架的靈魂對玩家來說就是不存在，不需要區分成兩種錯誤讓人推敲。
+    if spirit is None or not spirit.is_active:
+        raise HTTPException(status_code=404, detail="spirit not found")
+
+    distance_m = haversine_distance_m(
+        payload.latitude, payload.longitude, spirit.latitude, spirit.longitude
+    )
+
+    # SDD 第7.1節：distance <= summon_radius_m 才在場成立（含邊界值）。
+    # 半徑固定不動態放寬（第7節決策1）。
+    if distance_m > spirit.summon_radius_m:
+        raise HTTPException(status_code=403, detail="not within summon radius")
+
+    return schemas.SummonResponse(
+        encounter_token=issue_encounter_token(player_id, spirit.place_id),
+        spirit_id=spirit.place_id,
     )
 
 

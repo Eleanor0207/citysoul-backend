@@ -30,6 +30,32 @@ class PlayerResponse(BaseModel):
     session_token: str
 
 
+class SummonRequest(BaseModel):
+    """
+    S2．在場驗證請求（SDD 第8.4節）。
+
+    `gps_accuracy_m` 與 `is_mock_location` 現在只是被接收下來、還沒被使用：
+    防作弊觀察期的 log 記錄是 ticket #14 的範圍。先把欄位定義好，App 端才不用
+    等 #14 落地才改請求格式。
+    """
+
+    spirit_id: str = Field(min_length=1, max_length=64)
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    gps_accuracy_m: float | None = None
+    is_mock_location: bool = False
+
+
+class SummonResponse(BaseModel):
+    """
+    Sprint2 範圍刻意不含 SDD 第8.4節的 `quest` 欄位——quest_progress 表
+    要等 S4（ticket #15）才建立。等 #15 落地後再擴充這個 response。
+    """
+
+    encounter_token: str
+    spirit_id: str
+
+
 class SpiritResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
