@@ -30,6 +30,24 @@ _LAT, _LON = 25.0955, 121.5186
 _EXPIRED = timedelta(seconds=ENCOUNTER_TOKEN_EXPIRE_SECONDS + 1)
 
 
+def _today_taipei_at(hour: int) -> datetime:
+    """
+    「台北今天」的某個時刻，以 UTC 表示。
+
+    走 API 的測試必須用這個，不能用 `datetime.now(timezone.utc).replace(hour=...)`：
+    後者釘的是 **UTC 今天**，而 API 內部用真實時鐘算的是 **台北今天**。UTC 16:00
+    之後兩者就是不同日期，注入的嘗試次數會在 API 呼叫時被當成「昨天的」而重置。
+
+    這個 bug 真的發生過——測試寫好當天在 UTC 16:00 前跑都是綠的，過了台北午夜
+    才爆，而且爆在專門處理台北午夜的那個模組上。
+    """
+    return (
+        datetime.now(TAIPEI)
+        .replace(hour=hour, minute=0, second=0, microsecond=0)
+        .astimezone(timezone.utc)
+    )
+
+
 @pytest.fixture
 def spirit(db_session):
     row = models.Spirit(
@@ -182,7 +200,7 @@ def _burn_attempts(db_session, player_id, spirit_id, start, count):
 
 def test_third_failure_locks_out_for_the_day(db_session, player, spirit):
     player_id, _ = player
-    start = datetime.now(timezone.utc).replace(hour=3)  # 早一點，確保加幾次逾時不會跨日
+    start = _today_taipei_at(1)  # 台北凌晨，確保加幾次逾時不會跨過台北午夜
 
     now = _burn_attempts(db_session, player_id, spirit.place_id, start, MAX_DAILY_ATTEMPTS)
     state = evaluate_on_summon(
@@ -196,7 +214,7 @@ def test_third_failure_locks_out_for_the_day(db_session, player, spirit):
 def test_locked_out_state_issues_no_new_attempt(db_session, player, spirit):
     """鎖定當天不該再開新的嘗試——`current_token_issued_at` 不被刷新。"""
     player_id, _ = player
-    start = datetime.now(timezone.utc).replace(hour=3)
+    start = _today_taipei_at(1)
 
     now = _burn_attempts(db_session, player_id, spirit.place_id, start, MAX_DAILY_ATTEMPTS)
     evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.place_id, now=now)
@@ -210,7 +228,7 @@ def test_daily_limit_reached_is_never_written_to_the_database(db_session, player
     `daily_limit_reached` 只是查詢當下算出來的結果，存進 DB 隔天就是錯的。
     """
     player_id, _ = player
-    start = datetime.now(timezone.utc).replace(hour=3)
+    start = _today_taipei_at(1)
 
     now = _burn_attempts(db_session, player_id, spirit.place_id, start, MAX_DAILY_ATTEMPTS)
     evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.place_id, now=now)
@@ -226,7 +244,7 @@ def test_attempts_reset_after_taipei_midnight(db_session, player, spirit):
     昨天用完 3 次被鎖定，今天（台北時間）再挑戰 → 次數歸零、可重新挑戰。
     """
     player_id, _ = player
-    yesterday = datetime.now(timezone.utc).replace(hour=3) - timedelta(days=1)
+    yesterday = _today_taipei_at(1) - timedelta(days=1)
 
     _burn_attempts(db_session, player_id, spirit.place_id, yesterday, MAX_DAILY_ATTEMPTS)
     assert _progress(db_session, player_id, spirit.place_id).attempts_today == MAX_DAILY_ATTEMPTS
@@ -286,7 +304,7 @@ def test_attempts_are_per_spirit(db_session, player, spirit, client):
     db_session.commit()
 
     try:
-        start = datetime.now(timezone.utc).replace(hour=3)
+        start = _today_taipei_at(1)
         _burn_attempts(db_session, player_id, spirit.place_id, start, MAX_DAILY_ATTEMPTS)
 
         state = evaluate_on_summon(
@@ -330,7 +348,7 @@ def test_summon_still_issues_token_when_daily_limit_reached(
     encounter_token 照發，只有任務被鎖住。
     """
     player_id, token = player
-    start = datetime.now(timezone.utc).replace(hour=3)
+    start = _today_taipei_at(1)
     _burn_attempts(db_session, player_id, spirit.place_id, start, MAX_DAILY_ATTEMPTS)
 
     resp = _summon(client, token, spirit)

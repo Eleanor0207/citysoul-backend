@@ -6,7 +6,8 @@ How the engineering skills should consume this repo's domain documentation when 
 
 - **`CONTEXT.md`** at the repo root — the canonical product glossary. Also mirrored at `docs/CONTEXT.md` (identical copy); treat the two as one source.
 - **`docs/city_soul_AR_document_index.md`** — reading-order map and "supersedes" table across all the spec documents in `docs/`. Consult it before trusting any individual spec file's content, since later documents override earlier ones.
-- **`docs/SDD.md`** — the consolidated System Design Document, already merged from all current-authority spec files per the index's override table. Prefer this over re-deriving from the individual spec files.
+- **`SDD_v2.1_Unity_3D.md`** at the repo root — **the single authority.** Anything conflicting with it loses, including `docs/SDD.md` (v1), which is superseded: v1 describes a Flutter + 2.5D Billboard client that no longer exists. v2.1's §1 carries the full overturn table; read it before trusting any older spec.
+- **`docs/SDD.md`** — v1, **superseded**. Kept only for historical context on decisions that v2.1 explicitly says to carry over unchanged (business rules, API contracts, DB schema).
 - **`docs/adr/`** — read ADRs that touch the area you're about to work in.
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront.
@@ -39,4 +40,4 @@ If your output contradicts an existing ADR or a "current authority" spec documen
 
 > _Contradicts ADR-0001 (GCP Vertex AI for MVP dialogue) — but worth reopening because…_
 
-When a spec conflict is between two individual `city_soul_AR_*.md` files, defer to `city_soul_AR_document_index.md`'s override table (later document wins) and to `docs/SDD.md` as the merged result.
+When a spec conflict is between two individual `city_soul_AR_*.md` files, defer to `city_soul_AR_document_index.md`'s override table (later document wins). But `SDD_v2.1_Unity_3D.md` outranks all of them and `docs/SDD.md` alike — check it first, since the client stack and visual layer were fully replaced there.
