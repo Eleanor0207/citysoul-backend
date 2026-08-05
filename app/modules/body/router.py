@@ -9,6 +9,7 @@ from app.modules.body.anticheat import run_observation_checks
 from app.modules.body.auth import require_session_token
 from app.modules.body.encounter_tokens import issue_encounter_token
 from app.modules.body.geo import haversine_distance_m
+from app.modules.body.quests import evaluate_on_summon
 from app.modules.body.tokens import issue_session_token
 
 router = APIRouter(prefix="/api/v1", tags=["body"])
@@ -55,8 +56,6 @@ def summon(
     """
     S2．在場驗證與召喚（SDD 第7.1／8.4節）。
 
-    過期未完成任務的失敗判定與回應中的 quest 欄位還沒做（ticket #15），
-    要等 quest_progress 表建立後才會回來補。
     """
     spirit = db.query(models.Spirit).filter_by(place_id=payload.spirit_id).first()
 
@@ -85,9 +84,19 @@ def summon(
         gps_accuracy_m=payload.gps_accuracy_m,
     )
 
+    # S4 任務狀態機（ticket #15）。即使今天的挑戰次數已用完，仍然照常核發
+    # encounter_token——AC 明訂「在場驗證仍可通過（玩家可對話）」，被鎖住的
+    # 只有任務挑戰，不是相遇本身。
+    quest_state = evaluate_on_summon(db, player_id=player_id, spirit_id=spirit.place_id)
+
     return schemas.SummonResponse(
         encounter_token=issue_encounter_token(player_id, spirit.place_id),
         spirit_id=spirit.place_id,
+        quest=schemas.QuestStateResponse(
+            quest_id=quest_state.quest_id,
+            status=quest_state.status,
+            attempts_today=quest_state.attempts_today,
+        ),
     )
 
 

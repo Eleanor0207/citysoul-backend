@@ -45,14 +45,23 @@ class SummonRequest(BaseModel):
     is_mock_location: bool = False
 
 
-class SummonResponse(BaseModel):
+class QuestStateResponse(BaseModel):
     """
-    Sprint2 範圍刻意不含 SDD 第8.4節的 `quest` 欄位——quest_progress 表
-    要等 S4（ticket #15）才建立。等 #15 落地後再擴充這個 response。
+    SDD 第8.4節的 `quest` 欄位。
+
+    `status` 可能是 `in_progress` / `completed` / `daily_limit_reached`，
+    最後一個只存在於回應中，不是資料庫狀態（見 models.QuestProgress）。
     """
 
+    quest_id: str
+    status: str
+    attempts_today: int
+
+
+class SummonResponse(BaseModel):
     encounter_token: str
     spirit_id: str
+    quest: QuestStateResponse | None = None
 
 
 class SpiritResponse(BaseModel):
