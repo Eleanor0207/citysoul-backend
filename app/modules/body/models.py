@@ -1,8 +1,8 @@
 """
 身體模組資料表：players、spirits。
 
-resonance／daily_event_cache／push_subscriptions 排在後面的 Sprint
-（對應 S5/S10/S11），現在先不建，避免一次生太多還沒用到的表。
+daily_event_cache／push_subscriptions 排在後面的 Sprint（對應 S10/S11），
+現在先不建，避免一次生太多還沒用到的表。
 
 刻意不存在的表：任何形式的「玩家移動軌跡 / 位置歷史」表。
 這是 CONTEXT.md「在場紀錄」與「前景即時情境反應」兩條定義疊加後的硬限制，
@@ -10,7 +10,17 @@ resonance／daily_event_cache／push_subscriptions 排在後面的 Sprint
 """
 import uuid
 
-from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import (
+    Boolean,
+    Column,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 
@@ -75,4 +85,54 @@ class QuestProgress(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Resonance(Base):
+    """
+    S5．玩家與單一城市靈魂之間的關係進度（SDD 第3.1節）。
+
+    `stage` 是 `resonance_value` 跨過 10/40/100 之後的結果，存下來只是為了
+    查詢方便；真正的事實來源是 `resonance_value`。兩者若對不上，以 value 為準
+    （見 `resonance.stage_for_value`）。
+    """
+
+    __tablename__ = "resonance"
+
+    player_id = Column(UUID(as_uuid=True), ForeignKey("players.player_id"), primary_key=True)
+    spirit_id = Column(String(64), ForeignKey("spirits.place_id"), primary_key=True)
+    resonance_value = Column(Integer, nullable=False, default=0)
+    stage = Column(Integer, nullable=False, default=0)
+    last_updated_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ResonanceEvent(Base):
+    """
+    共鳴事件帳本：確保單一收藏或任務不重複加值（SDD 第3.1／7.5節）。
+
+    `UNIQUE(player_id, source_type, source_id)` 是防重複入帳的**唯一**依靠——
+    不是先查再寫的應用層檢查。兩個並行請求都查到「還沒入過帳」然後都寫入，
+    這種競態只有資料庫約束擋得住。所以入帳流程是「先寫帳本、撞到約束就當作
+    重複」，不是「先查帳本、沒有才寫」。
+
+    注意這個 UNIQUE **不含 `spirit_id`**：SDD schema 就是這樣定義的，同一個
+    player 的同一個 source_id 全域只能入帳一次，跨靈魂也不行。
+    """
+
+    __tablename__ = "resonance_events"
+
+    resonance_event_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    player_id = Column(UUID(as_uuid=True), ForeignKey("players.player_id"), nullable=False)
+    spirit_id = Column(String(64), ForeignKey("spirits.place_id"), nullable=False)
+    source_type = Column(String(32), nullable=False)  # 'encounter_collection' / 'quest'
+    source_id = Column(String(128), nullable=False)
+    amount = Column(Integer, nullable=False)  # encounter_collection=10；quest=20
+    awarded_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "player_id", "source_type", "source_id", name="uq_resonance_events_source"
+        ),
     )
