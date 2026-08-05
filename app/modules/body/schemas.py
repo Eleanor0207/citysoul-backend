@@ -34,9 +34,8 @@ class SummonRequest(BaseModel):
     """
     S2．在場驗證請求（SDD 第8.4節）。
 
-    `gps_accuracy_m` 與 `is_mock_location` 現在只是被接收下來、還沒被使用：
-    防作弊觀察期的 log 記錄是 ticket #14 的範圍。先把欄位定義好，App 端才不用
-    等 #14 落地才改請求格式。
+    `gps_accuracy_m` 與 `is_mock_location` 供 S3 防作弊觀察期使用
+    （見 `anticheat.py`）：偵測到只記 log，不影響這次召喚的結果。
     """
 
     spirit_id: str = Field(min_length=1, max_length=64)

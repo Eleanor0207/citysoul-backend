@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.modules.body import models, schemas
+from app.modules.body.anticheat import run_observation_checks
 from app.modules.body.auth import require_session_token
 from app.modules.body.encounter_tokens import issue_encounter_token
 from app.modules.body.geo import haversine_distance_m
@@ -54,10 +55,8 @@ def summon(
     """
     S2．在場驗證與召喚（SDD 第7.1／8.4節）。
 
-    Sprint2 只做「在場成立就核發相遇憑證」這條最窄的路：
-    - 防作弊 mock location 觀察期 log → ticket #14
-    - 過期未完成任務的失敗判定、回應中的 quest 欄位 → ticket #15
-    兩者都會回來改這支 handler，現在刻意留白，不先寫沒有資料表可依靠的邏輯。
+    過期未完成任務的失敗判定與回應中的 quest 欄位還沒做（ticket #15），
+    要等 quest_progress 表建立後才會回來補。
     """
     spirit = db.query(models.Spirit).filter_by(place_id=payload.spirit_id).first()
 
@@ -74,6 +73,17 @@ def summon(
     # 半徑固定不動態放寬（第7節決策1）。
     if distance_m > spirit.summon_radius_m:
         raise HTTPException(status_code=403, detail="not within summon radius")
+
+    # S3 觀察期（ticket #14）：只記 log，不阻擋，也不會讓例外往外拋。
+    # 刻意放在在場驗證通過之後——CONTEXT.md 對「在場紀錄」的定義是「完成在場
+    # 驗證所需的地標、時間與反作弊結果」，沒通過驗證的請求不構成在場紀錄。
+    run_observation_checks(
+        db,
+        player_id=player_id,
+        spirit=spirit,
+        is_mock_location=payload.is_mock_location,
+        gps_accuracy_m=payload.gps_accuracy_m,
+    )
 
     return schemas.SummonResponse(
         encounter_token=issue_encounter_token(player_id, spirit.place_id),
