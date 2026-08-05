@@ -9,6 +9,8 @@ node_modules/
 build/
 .idea/
 .vscode/
+# 個人的多資料夾 workspace 檔，路徑假設 citysoul-client 就在隔壁目錄
+*.code-workspace
 
 # Abandoned Unity+AR prototype (superseded by 2.5D Billboard, see project_dev.md) — too large for VCS
 unity-flutter-bridge-demo/
