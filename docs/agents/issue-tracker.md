@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-Issues and PRDs for this repo live as GitHub issues at `jessietw2019-cyber/citysoul` (private). Use the `gh` CLI for all operations.
+Issues and PRDs for this repo live as GitHub issues at `city-soul-taipei/citysoul-backend` (private). Use the `gh` CLI for all operations.
 
 ## Conventions
 
