@@ -5,7 +5,7 @@
 - S6 匿名玩家身分系統
 - B3 人格卡載入與版本管理
 - B7 短期記憶（Redis）連線層
-- 附帶：`spirits` 表 + 天文館垂直切片 seed data（Sprint2 的 S2 在場驗證會用到）
+- 附帶：`spirits` 表 + 龍山寺垂直切片 seed data（Sprint2 的 S2 在場驗證會用到）
 
 **沒做的東西是刻意的**：S1 GPS 擷取其實是手機端（Flutter）的事，後端這邊
 沒有東西可以刻；quest_progress／resonance／daily_event_cache 排在 Sprint3
@@ -61,7 +61,7 @@ uv run python -m scripts.init_db
 1. 建立 `brain` schema（放腦袋模組的表，跟身體的表隔開，對應 WBS-API 決策4）
 2. 啟用 `vector` extension（先備好給 Sprint2 的 pgvector 表用）
 3. 建立 `players`／`spirits`／`brain.persona_cards` 三張表
-4. 塞入天文館垂直切片的 seed data（`spirits` 一筆 + 一張**未審核**的人格卡草稿）
+4. 塞入龍山寺垂直切片的 seed data（`spirits` 一筆 + 一張**未審核**的人格卡草稿）
 
 ## 5. 啟動服務
 
@@ -82,8 +82,8 @@ curl -X POST http://localhost:8000/api/v1/players \
   -H "Content-Type: application/json" \
   -d '{"device_id": "test-device-001"}'
 
-# 查詢天文館這個 spirit
-curl http://localhost:8000/api/v1/spirits/taipei_planetarium
+# 查詢龍山寺這個 spirit
+curl http://localhost:8000/api/v1/spirits/longshan_temple
 ```
 
 ## 7. 跑自動化測試
@@ -146,11 +146,11 @@ uv run python -m scripts.init_db
 | `app/modules/body/models.py` `router.py` `schemas.py` | S6                                  | 匿名玩家身分：以 device_id 為唯一鍵，重複呼叫不重建                                                   |
 | `app/modules/brain/models.py` `loader.py`               | B3                                  | 人格卡放獨立`brain` schema；`is_active` 只能由人工審核流程 flip，程式碼裡沒有寫任何自動通過的路徑 |
 | `app/core/redis_client.py`                                | B7                                  | 對話 session 的 key 命名慣例先定下來，Sprint3 的 Prompt 組裝引擎（B2）會直接呼叫這裡的`get_session` |
-| `app/db/seed.py`                                          | 對應 CONTEXT.md「封閉測試垂直切片」 | 刻意只 seed 天文館一筆，不要因為手滑就把十個首發靈魂建進來                                            |
+| `app/db/seed.py`                                          | 對應 CONTEXT.md「封閉測試垂直切片」 | 刻意只 seed 龍山寺一筆，不要因為手滑就把十個首發靈魂建進來                                            |
 
 ## 下一步（Sprint 2）
 
 1. `spirits` 表已經有了，接著做 S2 在場驗證：收玩家 GPS，算跟 `summon_radius_m` 的距離
 2. B1 Vertex AI Gemini 串接：需要 GCP 專案 + 服務帳號金鑰，先去 GCP Console 開好專案
 3. B6：在 `brain` schema 底下加 `memory_embeddings` 表（`vector` extension 這次已經先啟用了，直接建表即可）
-4. 天文館的人格卡草稿目前 `is_active=False`，記得找人工審核流程之前先不要手動改成 True——這條是 CONTEXT.md「人格卡」定義的邊界，不是技術限制
+4. 龍山寺的人格卡草稿目前 `is_active=False`，記得找人工審核流程之前先不要手動改成 True——這條是 CONTEXT.md「人格卡」定義的邊界，不是技術限制
