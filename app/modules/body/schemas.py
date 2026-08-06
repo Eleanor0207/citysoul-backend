@@ -64,6 +64,42 @@ class SummonResponse(BaseModel):
     quest: QuestStateResponse | None = None
 
 
+class DialogueRequest(BaseModel):
+    """
+    對話請求（SDD 第8.5節）。
+
+    `user_input` 的長度上限先用保守值。SDD 提到 `prompt_max_chars` 會依實測調整，
+    但那要等真的接上 Gemini、看到成本數據之後才有依據。
+    """
+
+    user_input: str = Field(min_length=1, max_length=500)
+
+    @field_validator("user_input")
+    @classmethod
+    def user_input_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("user_input 不可為空白字元")
+        return value
+
+
+class DialogueResponse(BaseModel):
+    """
+    對話回應。
+
+    ⚠️ **這是走通端到端用的最小版本**，目前只做 B12 快速問候比對——命中回預寫
+    台詞，未命中回人工預寫的 fallback。完整版（Gemini 生成、TTS 語音、安全邊界、
+    Prompt 組裝）見 issue #42／#45。
+
+    `tts` 欄位刻意還不存在：SDD v2.1 §10.1 定義它只含 `audio_url`，等 B10（#21）
+    落地才會加上。現在放一個永遠是 null 的欄位只會讓客戶端寫出無用的處理分支。
+    """
+
+    reply_text: str
+    # 'canned' = 命中預寫招呼；'fallback' = 未命中，回人工預寫台詞。
+    # 客戶端不需要據此改變行為，但除錯與觀察命中率時很有用。
+    source: str
+
+
 class SpiritResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

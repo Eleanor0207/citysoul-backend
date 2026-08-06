@@ -1,16 +1,28 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.modules.body import models, schemas
 from app.modules.body.anticheat import run_observation_checks
 from app.modules.body.auth import require_session_token
-from app.modules.body.encounter_tokens import issue_encounter_token
+from app.modules.body.encounter_tokens import (
+    ENCOUNTER_TOKEN_HEADER,
+    issue_encounter_token,
+    require_encounter_token,
+)
 from app.modules.body.geo import haversine_distance_m
 from app.modules.body.quests import evaluate_on_summon
 from app.modules.body.tokens import issue_session_token
+from app.modules.brain.greetings import match_canned_greeting
+
+# 未命中快速問候時的人工預寫台詞。
+#
+# CONTEXT.md：「無合格輸入或生成失敗時使用人工預寫台詞」。在 Gemini（#8）接上
+# 之前，**所有**未命中都會走到這裡——這是刻意的，讓端到端流程在沒有 GCP 憑證的
+# 情況下也能完整跑通。接上 B1 之後，這句話會退回它原本的角色：只在模型失敗時出現。
+FALLBACK_REPLY = "（城市靈魂安靜地看著你）……這件事我還沒想清楚。要不要先跟我說說你眼前看到的？"
 
 router = APIRouter(prefix="/api/v1", tags=["body"])
 
@@ -98,6 +110,49 @@ def summon(
             attempts_today=quest_state.attempts_today,
         ),
     )
+
+
+@router.post("/spirits/{place_id}/dialogue", response_model=schemas.DialogueResponse)
+def dialogue(
+    place_id: str,
+    payload: schemas.DialogueRequest,
+    session_player_id: uuid.UUID = Depends(require_session_token),
+    encounter_token: str | None = Header(default=None, alias=ENCOUNTER_TOKEN_HEADER),
+    db: Session = Depends(get_db),
+):
+    """
+    對話端點（**最小可用版**）。
+
+    目前只走 B12 快速問候比對：命中回預寫台詞，未命中回人工預寫的 fallback。
+    這讓「走到地標→召喚→對話→看到回應」這條路**在沒有 GCP 憑證的情況下就能
+    完整跑通**——本機 Avast 的 TLS 攔截目前擋著 Vertex AI，不該連帶讓整條核心
+    迴圈無法驗證。
+
+    尚未接上、各有獨立 ticket 的部分：
+    - 配額檢查（#32）
+    - B4 安全邊界（#11）、B2 Prompt 組裝（#12）、B1 Gemini（#8）→ 見 #42／#45
+    - B10 TTS 語音（#21）
+    - B7 短期記憶寫入
+
+    驗證沿用 SDD 第6節：Session Token（Authorization header）＋ Encounter Token
+    （X-Encounter-Token header）。兩者用**不同的驗證邏輯**，不共用函式。
+    """
+    encounter_player_id = require_encounter_token(place_id, encounter_token)
+
+    # 兩張憑證必須屬於同一個玩家。少了這道檢查，A 的 session 配上 B 的相遇憑證
+    # 就能通過——那等於讓沒到現場的人借用別人的在場證明。
+    if encounter_player_id != session_player_id:
+        raise HTTPException(status_code=403, detail="token holder mismatch")
+
+    spirit = db.query(models.Spirit).filter_by(place_id=place_id).first()
+    if spirit is None or not spirit.is_active:
+        raise HTTPException(status_code=404, detail="spirit not found")
+
+    canned = match_canned_greeting(db, place_id, payload.user_input)
+    if canned is not None:
+        return schemas.DialogueResponse(reply_text=canned, source="canned")
+
+    return schemas.DialogueResponse(reply_text=FALLBACK_REPLY, source="fallback")
 
 
 @router.get("/spirits/{place_id}", response_model=schemas.SpiritResponse)

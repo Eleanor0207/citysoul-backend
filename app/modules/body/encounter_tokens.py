@@ -14,6 +14,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import jwt
+from fastapi import Depends, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import settings
 
@@ -40,3 +42,42 @@ def issue_encounter_token(player_id: uuid.UUID | str, spirit_id: str) -> str:
         "exp": now + timedelta(seconds=ENCOUNTER_TOKEN_EXPIRE_SECONDS),
     }
     return jwt.encode(payload, settings.encounter_token_secret, algorithm=ALGORITHM)
+
+
+# HTTP header 名稱刻意不是 Authorization——那個位置給 session token。
+# 相遇憑證是**額外**的一張，兩者同時存在（SDD 第6節：Session Token 必要，
+# 再加 Encounter 或 Sense 至少一張），所以必須走不同的 header。
+ENCOUNTER_TOKEN_HEADER = "X-Encounter-Token"
+
+_encounter_bearer = HTTPBearer(auto_error=False, scheme_name="EncounterToken")
+
+
+def require_encounter_token(spirit_id: str, raw_token: str | None) -> uuid.UUID:
+    """
+    驗證相遇憑證，回傳 player_id。
+
+    刻意**不**重用 `auth.require_session_token` 的任何一行——SDD 第6節要求三種
+    token 用不同中介層區分。這裡的重複是刻意的：一旦兩者共用驗證函式，某天有人
+    放寬其中一邊的條件，另一邊會跟著被放寬而沒有人察覺。
+
+    `spirit_id` 不符時回 403 而非 401：憑證本身是有效的，只是不適用於這個地標
+    （SDD 第8.5節錯誤碼定義）。
+    """
+    if not raw_token:
+        raise HTTPException(status_code=401, detail="missing encounter token")
+
+    try:
+        decoded = jwt.decode(raw_token, settings.encounter_token_secret, algorithms=[ALGORITHM])
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="invalid encounter token")
+
+    if decoded.get("purpose") != "encounter":
+        raise HTTPException(status_code=401, detail="invalid encounter token")
+
+    if decoded.get("spirit_id") != spirit_id:
+        raise HTTPException(status_code=403, detail="encounter token is for a different spirit")
+
+    try:
+        return uuid.UUID(decoded["sub"])
+    except (KeyError, ValueError):
+        raise HTTPException(status_code=401, detail="invalid encounter token")
