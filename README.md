@@ -50,6 +50,20 @@ cp .env.example .env
 
 本機預設值已經跟 docker-compose.yml 對好，不用改就能跑。
 
+### requirements.txt 是產生出來的，不要手改
+
+相依的真相來源是 `pyproject.toml` ＋ `uv.lock`。`requirements.txt` 只是給
+不用 uv 的環境（Docker、Cloud Run、CI）的匯出檔，改了它不會影響任何人的安裝。
+
+改過相依之後重新產生：
+
+```bash
+uv export --no-hashes --no-dev --no-emit-project --no-annotate \
+  --format requirements-txt -o requirements.txt
+```
+
+要包含測試相依就拿掉 `--no-dev`。
+
 ### ⚠️ GCP 憑證：不要產生 service account 金鑰
 
 存取 Vertex AI 走 **Application Default Credentials**。本機跑一次：
