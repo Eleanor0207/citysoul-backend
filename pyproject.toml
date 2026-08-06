@@ -15,6 +15,8 @@ dependencies = [
     "pyjwt==2.9.0",
     "pgvector==0.3.6",
     "tzdata>=2026.3",
+    # B1 Vertex AI（ADR-0001）。憑證走 ADC，不需要額外的金鑰套件（ADR-0003）。
+    "google-cloud-aiplatform>=1.71.0",
 ]
 
 [dependency-groups]
