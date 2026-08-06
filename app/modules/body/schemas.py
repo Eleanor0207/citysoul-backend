@@ -128,4 +128,8 @@ class SpiritResponse(BaseModel):
     latitude: float
     longitude: float
     summon_radius_m: int
+    # 客戶端要靠這個畫出「150m 內淡淡發光、50m 內完全點亮」的三段式標記（S7）。
+    # 少了它，客戶端只能把 150 寫死在自己這邊——那條路一旦走了，之後調整半徑
+    # 就得同時改後端與發版客戶端。
+    sense_radius_m: int
     is_active: bool

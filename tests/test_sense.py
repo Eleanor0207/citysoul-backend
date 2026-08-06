@@ -97,6 +97,17 @@ def test_spirit_has_sense_radius_defaulting_to_150(db_session, unique_spirit_id)
         db_session.commit()
 
 
+def test_get_spirit_exposes_sense_radius(client, spirit):
+    """
+    客戶端要靠這個欄位畫三段式標記（S7）。沒有它，客戶端只能把 150 寫死，
+    之後調整半徑就得同時改後端與發版客戶端。
+    """
+    body = client.get(f"/api/v1/spirits/{spirit.place_id}").json()
+
+    assert body["sense_radius_m"] == _SENSE_RADIUS_M
+    assert body["summon_radius_m"] == _SUMMON_RADIUS_M
+
+
 def test_sense_radius_is_wider_than_summon_radius(spirit):
     """
     兩個半徑是兩段不同的體驗，不是同一個值。感應範圍必須比召喚範圍大——
