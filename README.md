@@ -50,6 +50,26 @@ cp .env.example .env
 
 本機預設值已經跟 docker-compose.yml 對好，不用改就能跑。
 
+### ⚠️ GCP 憑證：不要產生 service account 金鑰
+
+存取 Vertex AI 走 **Application Default Credentials**。本機跑一次：
+
+```bash
+gcloud auth application-default login
+gcloud config set project citysoul
+```
+
+**不要**去 Console 下載 service account 金鑰 JSON，也不要把金鑰放進 Secret
+Manager——那只是把金鑰換個地方放，它仍然長期有效、仍然要輪替、仍然可能被寫進
+log。ADC 拿到的是短期 token，沒有東西需要輪替，也沒有東西可以外洩。
+
+`.env` 因此**沒有任何 GCP 憑證欄位**，只有「呼叫哪個模型」。
+
+> 完整理由見 `docs/adr/0003-adc-over-service-account-keys.md`（本機檔案，
+> `docs/` 不進版控）。
+
+如果金鑰不小心進了 git：**刪 commit 沒有用，必須輪替那把金鑰。**
+
 ## 4. 初始化資料庫
 
 ```bash
