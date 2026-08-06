@@ -4,7 +4,7 @@ Ticket #8．B1 Vertex AI Gemini 串接與失敗回退。
 驗收標準對照見 GitHub issue #8。
 
 這個檔案**完全不需要 GCP 憑證**：真實 SDK 從來沒被載入，模型物件由
-`model_factory` 注入。唯一會碰到真實服務的是最後那個測試，沒有憑證時自動 skip。
+`client_factory` 注入。唯一會碰到真實服務的是最後那個測試，沒有憑證時自動 skip。
 """
 import os
 import threading
@@ -21,41 +21,71 @@ from app.modules.brain.gemini import (
 )
 
 
+class _StubCandidate:
+    def __init__(self, finish_reason):
+        self.finish_reason = finish_reason
+
+
 class _StubResponse:
-    def __init__(self, text):
+    def __init__(self, text, finish_reason="FinishReason.STOP"):
         self.text = text
+        self.candidates = [_StubCandidate(finish_reason)]
 
 
-class _StubModel:
-    """假的 GenerativeModel。記下呼叫參數，或依設定拋出例外。"""
+class _StubModels:
+    """對應 google-genai 的 `client.models`。記下呼叫參數，或依設定拋例外。"""
 
-    def __init__(self, *, text="今夜的香火比平常更盛一些。", raises=None):
+    def __init__(self, *, text, finish_reason, raises):
         self._text = text
+        self._finish_reason = finish_reason
         self._raises = raises
         self.calls = []
 
-    def generate_content(self, prompt, **kwargs):
-        self.calls.append({"prompt": prompt, **kwargs})
+    def generate_content(self, *, model, contents, config):
+        self.calls.append({"model": model, "contents": contents, "config": config})
 
         if self._raises is not None:
             raise self._raises
 
-        return _StubResponse(self._text)
+        return _StubResponse(self._text, self._finish_reason)
 
 
-class _HangingModel:
-    """永遠不回應的模型，用來驗證逾時。測試結束時放行，不留下卡住的執行緒。"""
+class _StubClient:
+    def __init__(
+        self,
+        *,
+        text="今夜的香火比平常更盛一些。",
+        finish_reason="FinishReason.STOP",
+        raises=None,
+    ):
+        self.models = _StubModels(text=text, finish_reason=finish_reason, raises=raises)
 
-    def __init__(self):
-        self.released = threading.Event()
+    @property
+    def calls(self):
+        return self.models.calls
 
-    def generate_content(self, prompt, **kwargs):
-        self.released.wait(timeout=10)
+
+class _HangingModels:
+    def __init__(self, released):
+        self._released = released
+        self.calls = []
+
+    def generate_content(self, **kwargs):
+        self.calls.append(kwargs)
+        self._released.wait(timeout=10)
         return _StubResponse("太遲了")
 
 
-def _client(model, **kwargs):
-    return VertexAIGeminiClient(model_factory=lambda: model, **kwargs)
+class _HangingClient:
+    """永遠不回應的 client，用來驗證逾時。10 秒後自行放行，不留卡死的執行緒。"""
+
+    def __init__(self):
+        self.released = threading.Event()
+        self.models = _HangingModels(self.released)
+
+
+def _client(stub, **kwargs):
+    return VertexAIGeminiClient(client_factory=lambda: stub, **kwargs)
 
 
 # ── 介面 ──────────────────────────────────────────────────────────────
@@ -76,7 +106,7 @@ def test_abstract_base_cannot_be_instantiated():
 # ── 成功路徑 ──────────────────────────────────────────────────────────
 
 def test_successful_call_returns_the_model_text_unchanged():
-    model = _StubModel(text="今夜的香火比平常更盛一些。")
+    model = _StubClient(text="今夜的香火比平常更盛一些。")
 
     result = _client(model).generate("你是誰？")
 
@@ -85,17 +115,17 @@ def test_successful_call_returns_the_model_text_unchanged():
 
 def test_surrounding_whitespace_is_trimmed():
     """模型常在前後帶換行。那不是內容，直接顯示會讓對話框莫名多出空行。"""
-    result = _client(_StubModel(text="\n  你來了。  \n")).generate("你好")
+    result = _client(_StubClient(text="\n  你來了。  \n")).generate("你好")
 
     assert result == "你來了。"
 
 
 def test_the_prompt_reaches_the_model_unmodified():
-    model = _StubModel()
+    model = _StubClient()
 
     _client(model).generate("這座廟最早是什麼時候蓋的？")
 
-    assert model.calls[0]["prompt"] == "這座廟最早是什麼時候蓋的？"
+    assert model.calls[0]["contents"] == "這座廟最早是什麼時候蓋的？"
 
 
 # ── 失敗回退：本模組最重要的性質 ──────────────────────────────────────
@@ -116,7 +146,7 @@ def test_failures_fall_back_without_raising(failure):
     這是整個模組最重要的性質：模型暫時不可用不得中斷召喚流程。玩家已經走到
     廟埕了，他不該因為我們的雲端服務打嗝而看到錯誤畫面。
     """
-    result = _client(_StubModel(raises=failure)).generate("你好")
+    result = _client(_StubClient(raises=failure)).generate("你好")
 
     assert result == FALLBACK_REPLY
 
@@ -132,7 +162,7 @@ def test_an_unexpected_exception_type_also_falls_back():
     # BaseException 不被 `except Exception` 攔截，所以用它的子類別驗證會**穿透**
     # ——這條記錄的是真實邊界，不是宣稱「什麼都攔得住」。
     with pytest.raises(SomethingNobodyAnticipated):
-        _client(_StubModel(raises=SomethingNobodyAnticipated())).generate("你好")
+        _client(_StubClient(raises=SomethingNobodyAnticipated())).generate("你好")
 
 
 def test_model_construction_failure_also_falls_back():
@@ -143,7 +173,7 @@ def test_model_construction_failure_also_falls_back():
     def explode():
         raise RuntimeError("could not find default credentials")
 
-    client = VertexAIGeminiClient(model_factory=explode)
+    client = VertexAIGeminiClient(client_factory=explode)
 
     assert client.generate("你好") == FALLBACK_REPLY
 
@@ -153,8 +183,8 @@ def test_empty_response_is_treated_as_a_failure():
     空字串在型別上是「成功」，但對玩家而言跟失敗沒有差別——對話框會是空的。
     常見原因是被安全過濾器擋下，那正是該回退的情況。
     """
-    assert _client(_StubModel(text="")).generate("你好") == FALLBACK_REPLY
-    assert _client(_StubModel(text="   \n ")).generate("你好") == FALLBACK_REPLY
+    assert _client(_StubClient(text="")).generate("你好") == FALLBACK_REPLY
+    assert _client(_StubClient(text="   \n ")).generate("你好") == FALLBACK_REPLY
 
 
 def test_fallback_is_never_empty():
@@ -171,7 +201,7 @@ def test_failure_reason_is_recorded_for_observability():
     「模型失敗」與「模型回了這句話」在回傳值上無法區分，那是刻意的取捨。
     但要能觀察成功率，所以原因留在這裡而不是只丟進 log。
     """
-    client = _client(_StubModel(raises=TimeoutError("deadline exceeded")))
+    client = _client(_StubClient(raises=TimeoutError("deadline exceeded")))
     client.generate("你好")
 
     assert client.last_failure_reason is not None
@@ -180,11 +210,11 @@ def test_failure_reason_is_recorded_for_observability():
 
 def test_failure_reason_is_cleared_on_a_later_success():
     """殘留的失敗原因會讓觀測數據長期偏高，比沒有數據更糟。"""
-    model = _StubModel(raises=TimeoutError("x"))
+    model = _StubClient(raises=TimeoutError("x"))
     client = _client(model)
     client.generate("你好")
 
-    model._raises = None
+    model.models._raises = None
     client.generate("你好")
 
     assert client.last_failure_reason is None
@@ -197,22 +227,66 @@ def test_output_length_is_capped_at_the_call_parameter_level():
     長度上限必須在呼叫參數，不是靠 prompt 請模型「簡短回答」——後者沒有保證，
     而這個值直接決定單次呼叫的成本上限（🔴 高風險「AI 對話成本與延遲」）。
     """
-    model = _StubModel()
+    model = _StubClient()
 
     _client(model, max_output_tokens=128).generate("你好")
 
-    assert model.calls[0]["generation_config"]["max_output_tokens"] == 128
+    assert model.calls[0]["config"].max_output_tokens == 128
 
 
 def test_output_cap_defaults_to_the_setting():
-    model = _StubModel()
+    model = _StubClient()
 
     _client(model).generate("你好")
 
-    assert (
-        model.calls[0]["generation_config"]["max_output_tokens"]
-        == settings.gemini_max_output_tokens
+    assert model.calls[0]["config"].max_output_tokens == settings.gemini_max_output_tokens
+
+
+def test_thinking_config_is_omitted_by_default():
+    """
+    `thinking_level` 只有 gemini-3.5 系列接受；2.5 系列傳了會直接回
+    `400 INVALID_ARGUMENT`。預設模型是 2.5-flash-lite，所以預設不能傳。
+    """
+    model = _StubClient()
+
+    _client(model).generate("你好")
+
+    assert model.calls[0]["config"].thinking_config is None
+
+
+def test_thinking_config_is_sent_when_configured():
+    model = _StubClient()
+
+    _client(model, thinking_level="LOW").generate("你好")
+
+    assert model.calls[0]["config"].thinking_config.thinking_level == "LOW"
+
+
+def test_truncated_response_is_flagged_but_still_returned():
+    """
+    實測 gemini-3.5-flash 在 512 tokens 下回「那是在清乾隆三年（西元1738年），
+    先民們懷抱」——非空、看起來成功，但斷在句子中間（thinking 先吃掉了約 500）。
+
+    半句話通常還是比通用回退台詞有用，所以照樣回傳；但要留下觀測旗標，因為這個
+    訊號的正確處置是調高預算或換模型，不是在程式裡加修剪 heuristic 把它藏起來。
+    """
+    model = _StubClient(
+        text="那是在清乾隆三年（西元1738年），先民們懷抱",
+        finish_reason="FinishReason.MAX_TOKENS",
     )
+    client = _client(model)
+
+    result = client.generate("你好")
+
+    assert result == "那是在清乾隆三年（西元1738年），先民們懷抱"
+    assert client.last_truncated is True
+
+
+def test_untruncated_response_is_not_flagged():
+    client = _client(_StubClient())
+    client.generate("你好")
+
+    assert client.last_truncated is False
 
 
 def test_a_hanging_call_falls_back_instead_of_blocking_forever():
@@ -225,14 +299,14 @@ def test_a_hanging_call_falls_back_instead_of_blocking_forever():
     """
     started = time.monotonic()
 
-    result = _client(_HangingModel(), timeout_seconds=0.3).generate("你好")
+    result = _client(_HangingClient(), timeout_seconds=0.3).generate("你好")
 
     assert result == FALLBACK_REPLY
     assert time.monotonic() - started < 2.0, "應該在逾時後就放棄，不是等模型回來"
 
 
 def test_timeout_reason_is_recorded():
-    client = _client(_HangingModel(), timeout_seconds=0.3)
+    client = _client(_HangingClient(), timeout_seconds=0.3)
     client.generate("你好")
 
     assert "秒未回應" in client.last_failure_reason
@@ -246,7 +320,7 @@ def test_a_model_raising_TimeoutError_is_not_reported_as_our_own_timeout():
     TimeoutError 會被當成「我們主動放棄」。回退行為一樣，但 last_failure_reason
     會說謊——而那個欄位存在的唯一理由就是觀測。
     """
-    client = _client(_StubModel(raises=TimeoutError("deadline exceeded")))
+    client = _client(_StubClient(raises=TimeoutError("deadline exceeded")))
     client.generate("你好")
 
     assert "TimeoutError" in client.last_failure_reason

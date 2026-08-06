@@ -24,11 +24,29 @@ class Settings(BaseSettings):
     #
     # 底下三個都只是「呼叫哪個模型」，不是秘密，進 git 沒有問題。
     gcp_project_id: str = "citysoul"
-    gcp_location: str = "asia-east1"
-    # ⚠️ 這個字串沒有對照過 Vertex AI 上真正可用的模型清單。第一次真實呼叫
-    # 若回 404 / model not found，先用 `gcloud ai models list --region=...`
-    # 確認名稱，不要往程式邏輯裡找原因。
-    gemini_model: str = "gemini-3.5-flash"
+
+    # ⚠️ 不是 asia-east1。實測（2026-08）該區域**一個 Gemini 模型都沒有**，
+    # 所有名稱都回 404。SDD 與舊 .env.example 寫的 asia-east1 是錯的。
+    gcp_location: str = "global"
+
+    # 實測比較（2026-08，提示詞：龍山寺什麼時候蓋的，要求兩三句）：
+    #
+    #   模型                     thinking  預算   延遲   計費 token
+    #   gemini-3.5-flash         LOW       1024   4.8s   479 thinking ＋ 88 輸出
+    #   gemini-3.5-flash         LOW        512   5.2s   截斷（thinking 就吃掉 489）
+    #   gemini-2.5-flash-lite    —          256   1.0s   47 輸出，無 thinking
+    #
+    # 選 lite：兩者都答對了乾隆三年／1738，但玩家站在廟埕前，1 秒與 5 秒的
+    # 差別感覺得出來；而每輪多付約 500 個 thinking token 正是 SDD 列為 🔴
+    # 高風險的「AI 對話成本與延遲」。ADR-0001 要的也是「單一快速模型」。
+    #
+    # 要換回 3.5-flash 的話，記得**同時**把 max_output_tokens 調到 1024 以上
+    # 並設 thinking_level=LOW，否則會拿到斷在句子中間的回應。
+    gemini_model: str = "gemini-2.5-flash-lite"
+
+    # 只有 gemini-3.5 系列接受；2.5 系列傳了會直接回 400 INVALID_ARGUMENT。
+    # 預設不傳。
+    gemini_thinking_level: str | None = None
 
     # 模型輸出上限。放在設定而不是 prompt 文字裡——靠 prompt 請模型「請簡短回答」
     # 是沒有保證的，而這個值直接決定成本上限（🔴 高風險「AI 對話成本與延遲」）。

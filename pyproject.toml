@@ -16,13 +16,15 @@ dependencies = [
     "pgvector==0.3.6",
     "tzdata>=2026.3",
     # B1 Vertex AI（ADR-0001）。憑證走 ADC，不需要額外的金鑰套件（ADR-0003）。
-    "google-cloud-aiplatform>=1.71.0",
+    "google-genai>=1.60",
 ]
 
 [dependency-groups]
 dev = [
     "pytest==8.3.3",
-    "httpx==0.27.2",
+    # 從 ==0.27.2 放寬：google-genai 需要 >=0.28.1。TestClient 走 httpx，
+    # 全套測試通過即代表這個升級沒有破壞既有行為。
+    "httpx>=0.28.1",
 ]
 
 [tool.uv]
