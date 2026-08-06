@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # 就能拿來冒充 15 分鐘的相遇憑證，在場驗證形同虛設。
     session_token_secret: str
     encounter_token_secret: str
-    # Sense Token（30分鐘，/sense）尚未實作，等該支 API 落地時再加。
+    sense_token_secret: str
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

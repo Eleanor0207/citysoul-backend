@@ -45,6 +45,26 @@ class SummonRequest(BaseModel):
     is_mock_location: bool = False
 
 
+class SenseRequest(BaseModel):
+    """
+    S2-new．感應範圍驗證請求（SDD 第8.3節）。
+
+    刻意**不**收 `gps_accuracy_m` 與 `is_mock_location`：那兩個欄位是給 S3 防作弊
+    觀察期用的，而觀察期記錄的是「在場」——CONTEXT.md 對在場紀錄的定義是完成
+    在場驗證所需的地標與時間，感應範圍不構成在場。150 公尺外的一次感應不該產生
+    任何可用來推測玩家位置的紀錄。
+    """
+
+    spirit_id: str = Field(min_length=1, max_length=64)
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+
+
+class SenseResponse(BaseModel):
+    sense_token: str
+    spirit_id: str
+
+
 class QuestStateResponse(BaseModel):
     """
     SDD 第8.4節的 `quest` 欄位。

@@ -43,8 +43,12 @@ class Spirit(Base):
     """
     地標／召喚點基本資料。
 
-    封閉測試垂直切片階段（CONTEXT.md）只會有天文館這一筆，
+    封閉測試垂直切片階段（CONTEXT.md）只會有龍山寺這一筆，
     seed script 也只塞這一筆，不要一次把十個首發靈魂都建進來。
+
+    兩個半徑是**兩段不同的體驗**，不是同一個值的寬鬆版本（SDD 第7.1／7.2節）：
+    `sense_radius_m`（150m）進入感應範圍，地標淡淡發光、可以隔空聊天；
+    `summon_radius_m`（50m）才算在場成立，可以召喚與挑戰任務。
     """
 
     __tablename__ = "spirits"
@@ -54,6 +58,9 @@ class Spirit(Base):
     latitude = Column(Float, nullable=False)
     longitude = Column(Float, nullable=False)
     summon_radius_m = Column(Integer, nullable=False, default=50)
+    # server_default 而不是只有 default：既有資料列在 ALTER TABLE 時要拿到 150，
+    # 而 Python 端的 default 只在 ORM 建立新物件時生效，補不了舊資料。
+    sense_radius_m = Column(Integer, nullable=False, default=150, server_default="150")
     is_active = Column(Boolean, nullable=False, default=True)
 
 

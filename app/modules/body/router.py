@@ -14,6 +14,7 @@ from app.modules.body.encounter_tokens import (
 )
 from app.modules.body.geo import haversine_distance_m
 from app.modules.body.quests import evaluate_on_summon
+from app.modules.body.sense_tokens import issue_sense_token
 from app.modules.body.tokens import issue_session_token
 from app.modules.brain.greetings import match_canned_greeting
 
@@ -56,6 +57,48 @@ def create_or_get_player(payload: schemas.PlayerCreateRequest, db: Session = Dep
         account_id=player.account_id,
         created_at=player.created_at,
         session_token=session_token,
+    )
+
+
+@router.post("/sense", response_model=schemas.SenseResponse)
+def sense(
+    payload: schemas.SenseRequest,
+    player_id: uuid.UUID = Depends(require_session_token),
+    db: Session = Depends(get_db),
+):
+    """
+    S2-new．感應範圍驗證（SDD 第8.3節）。
+
+    跟 `/summon` 長得很像，但**行為上少了三件事**，而那三件事正是它存在的理由：
+
+    1. **不跑 S3 防作弊觀察期。** 觀察期記的是「在場」，而 CONTEXT.md 對在場
+       紀錄的定義是完成在場驗證所需的地標與時間——150 公尺外不構成在場。
+    2. **不做任何任務判定、不核發任務**（SDD 第7.2節）。這是與 `/summon`
+       最關鍵的行為差異：呼叫這支不會建立或修改任何 `quest_progress` 列。
+    3. **不核發 encounter token。** 感應憑證換不到在場證明，玩家還是得走過去。
+
+    共用的只有純函式（距離計算）與 session 驗證。token 的核發與驗證邏輯
+    完全獨立，見 `sense_tokens.py` 的模組註解。
+    """
+    spirit = db.query(models.Spirit).filter_by(place_id=payload.spirit_id).first()
+
+    # 下架優先於距離判定：即使玩家就站在正中心，is_active=false 也是 404。
+    # 對玩家來說，下架的靈魂跟不存在的靈魂沒有差別（對齊 /summon 的處理）。
+    if spirit is None or not spirit.is_active:
+        raise HTTPException(status_code=404, detail="spirit not found")
+
+    distance_m = haversine_distance_m(
+        payload.latitude, payload.longitude, spirit.latitude, spirit.longitude
+    )
+
+    # distance <= sense_radius_m 才算進入感應範圍（含邊界值），比照第7.1節
+    # 對召喚半徑的處理。
+    if distance_m > spirit.sense_radius_m:
+        raise HTTPException(status_code=403, detail="not within sense radius")
+
+    return schemas.SenseResponse(
+        sense_token=issue_sense_token(player_id, spirit.place_id),
+        spirit_id=spirit.place_id,
     )
 
 

@@ -32,6 +32,7 @@ def seed_vertical_slice(db: Session) -> None:
                 latitude=25.0373983,
                 longitude=121.4997318,
                 summon_radius_m=50,
+                sense_radius_m=150,
                 is_active=True,
             )
         )
