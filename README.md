@@ -39,7 +39,11 @@ uv sync
 並依 `pyproject.toml` + `uv.lock` 鎖定的版本安裝套件（含開發用的 `pytest`/`httpx`）。
 不需要手動 `pip install`，也不需要先手動建 venv。
 
-之後所有指令都用 `uv run <command>` 執行（例如 `uv run uvicorn ...`、`uv run pytest`），
+之後所有指令都用 `uv run python -m <module>` 執行（例如 `uv run python -m pytest`）。
+
+> ⚠️ Windows 上不要用 `uv run pytest` / `uv run uvicorn` 這種直接叫執行檔的形式，
+> 會噴 `uv trampoline failed to canonicalize script path`。走 `python -m` 沒有這個問題。
+
 會自動使用專案的虛擬環境，不需要手動 `activate`。
 
 ## 3. 設定環境變數
@@ -100,7 +104,7 @@ uv run python -m scripts.init_db
 ## 5. 啟動服務
 
 ```bash
-uv run uvicorn app.main:app --reload
+uv run python -m uvicorn app.main:app --reload --reload-dir app
 ```
 
 打開 http://localhost:8000/docs 會看到自動產生的 API 文件。
@@ -123,7 +127,7 @@ curl http://localhost:8000/api/v1/spirits/longshan_temple
 ## 7. 跑自動化測試
 
 ```bash
-uv run pytest
+uv run python -m pytest
 ```
 
 測試需要本機 Postgres/Redis 已啟動（見第1步）。
