@@ -21,12 +21,20 @@
 ## 1. 起本機資料庫/Redis
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
+
+**`--build` 是必要的**（issue #46）：`db` 服務不是直接拉官方映像檔，而是
+`Dockerfile.postgres`（`FROM pgvector/pgvector:pg16` 再疊裝 `postgresql-16-postgis-3`）。
+官方 `pgvector/pgvector` 映像檔只有 pgvector，沒有 PostGIS——而 `brain.districts`
+的地理圍欄（`ST_Contains`）需要 PostGIS，B6 長期記憶檢索需要 pgvector，兩者
+都要、沒有現成映像檔兩個都有，所以自建一層。第一次啟動、或改了
+`Dockerfile.postgres` 之後都要帶 `--build`，否則會用到舊的映像檔快取。
 
 會起兩個容器：
 
-- `db`：Postgres 16 + pgvector extension（跟 Cloud SQL 上會裝的 extension 一致，本機先驗證行為）
+- `db`：Postgres 16 ＋ pgvector ＋ PostGIS extension（Cloud SQL for PostgreSQL 16
+  兩者皆支援：PostGIS 3.5.2、pgvector 0.8.0，[官方文件](https://docs.cloud.google.com/sql/docs/postgres/extensions)）
 - `redis`：Redis 7
 
 ## 2. 裝 Python 套件

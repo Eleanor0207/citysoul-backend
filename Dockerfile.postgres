@@ -1,0 +1,11 @@
+# 本機開發用的 Postgres 映像檔（issue #46）。
+
+# 官方 `pgvector/pgvector:pg16` 只裝了 pgvector（B6 長期記憶檢索要用），
+# 沒有 PostGIS（`brain.districts` 地理圍欄要用）。目前沒有現成映像檔兩者都有，
+# 所以疊一層自己裝——`FROM pgvector/pgvector:pg16` 保留原本已驗證能動的
+# pgvector 行為，只多加 postgis。
+FROM pgvector/pgvector:pg16
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-16-postgis-3 \
+    && rm -rf /var/lib/apt/lists/*
