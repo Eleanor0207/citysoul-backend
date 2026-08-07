@@ -130,6 +130,7 @@ def test_get_spirit_wire_contract_is_independent_of_column_names(client, spirit)
         "summon_radius_m",
         "sense_radius_m",
         "is_active",
+        "orientation",
     }
     assert body["place_id"] == spirit.spirit_id
     assert body["name"] == spirit.display_name

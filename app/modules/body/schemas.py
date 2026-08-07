@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -82,10 +83,14 @@ class QuestStateResponse(BaseModel):
 
     `status` 可能是 `in_progress` / `completed` / `daily_limit_reached`，
     最後一個只存在於回應中，不是資料庫狀態（見 models.QuestProgress）。
+
+    型別是 `Literal` 而不是裸 `str`：契約凍結前（#30）這三個值只活在中文
+    註解裡，OpenAPI 產出的是無型別的 `string`，client 端拿不到 enum，也
+    無法用編譯器擋住打錯字的魔術字串。
     """
 
     quest_id: str
-    status: str
+    status: Literal["in_progress", "completed", "daily_limit_reached"]
     attempts_today: int
 
 
@@ -131,6 +136,18 @@ class DialogueResponse(BaseModel):
     source: str
 
 
+class OrientationResponse(BaseModel):
+    """
+    SDD v2.1 §10.2：靈魂相對召喚點的方位設定，供客戶端 3DoF 定向服務使用。
+
+    包成巢狀物件而不是兩個平鋪欄位，讓客戶端能把「方位設定」當成一個可
+    整包傳給 `OrientationService` 的值，對齊 SDD 的回應範例。
+    """
+
+    bearing_deg: float
+    height_offset_m: float
+
+
 class SpiritResponse(BaseModel):
     """
     `GET /api/v1/spirits/{placeId}` 的回應。
@@ -143,6 +160,9 @@ class SpiritResponse(BaseModel):
 
     改 DB 欄位名不需要動客戶端，這正是兩者脫鉤的用途；反過來說，**要改這裡的
     欄位名時，必須連同 client 一起改**。
+
+    `orientation` 不能靠 `from_attributes` 自動從 ORM 物件的平面欄位長出來
+    ——router 端改成明確用關鍵字建構這個 model（其他回應本來就是這樣寫）。
     """
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
@@ -157,3 +177,17 @@ class SpiritResponse(BaseModel):
     # 就得同時改後端與發版客戶端。
     sense_radius_m: int = Field(validation_alias="sense_radius_meters")
     is_active: bool
+    orientation: OrientationResponse
+
+
+class ErrorResponse(BaseModel):
+    """
+    統一的錯誤回應契約模型（#30）。
+
+    形狀對齊 FastAPI `HTTPException` 既有的 `{"detail": ...}`——這裡只是讓
+    契約描述它，**不改變任何現有錯誤的實際 JSON 形狀**。自動觸發的 422
+    驗證錯誤形狀不同（`detail` 是陣列），不用這個模型，FastAPI 已經自動
+    宣告過。
+    """
+
+    detail: str
