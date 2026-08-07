@@ -17,6 +17,7 @@ dependencies = [
     "tzdata>=2026.3",
     # B1 Vertex AI（ADR-0001）。憑證走 ADC，不需要額外的金鑰套件（ADR-0003）。
     "google-genai>=1.60",
+    "alembic>=1.19.0",
 ]
 
 [dependency-groups]

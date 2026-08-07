@@ -1,32 +1,33 @@
 """
 測試共用 fixture。
 
-假設本機 docker-compose 起的 Postgres/Redis 已經在跑，且 `scripts.init_db`
-已經跑過一次（建過 schema）。測試對真實服務跑，不 mock DB/Redis——這是
-CONTEXT.md／SDD 反覆強調的「後端確定性規則」精神的自然延伸：驗證的是
-真實行為，不是「這段程式碼呼叫了正確的 mock」。
+假設本機 docker-compose 起的 Postgres/Redis 已經在跑；schema 由這裡的
+`_ensure_schema` fixture 跑 migration 建好，不需要先手動跑 `scripts.init_db`。
+測試對真實服務跑，不 mock DB/Redis——這是 CONTEXT.md／SDD 反覆強調的
+「後端確定性規則」精神的自然延伸：驗證的是真實行為，不是「這段程式碼呼叫了
+正確的 mock」。
 """
 import uuid
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import text
 
-from app.core.database import Base, SessionLocal, engine
+from app.core.database import SessionLocal
 from app.main import app
-
-# 確保表存在（如果測試環境還沒跑過 scripts.init_db）
-from app.modules.body import models as body_models  # noqa: F401
-from app.modules.brain import models as brain_models  # noqa: F401
+from scripts.init_db import upgrade_to_head
 
 
 @pytest.fixture(scope="session", autouse=True)
 def _ensure_schema():
-    with engine.begin() as conn:
-        conn.execute(text("CREATE SCHEMA IF NOT EXISTS brain"))
-        # brain.memory_embeddings 的 VECTOR 欄位需要 pgvector（B6）
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-    Base.metadata.create_all(bind=engine)
+    """
+    把測試資料庫推到最新的 migration。
+
+    這裡刻意**不用 `Base.metadata.create_all()`**。用 create_all 的話，測試永遠
+    是對著「models 說應該長怎樣」跑，migration 寫錯了也不會有任何測試變紅——
+    而正式環境拿到的是 migration 的結果，不是 models。改成跑 migration 之後，
+    「migration 與 models 不一致」這件事會直接讓整套測試炸掉。
+    """
+    upgrade_to_head()
 
 
 @pytest.fixture
