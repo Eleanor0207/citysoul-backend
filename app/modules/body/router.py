@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
@@ -14,12 +15,25 @@ from app.modules.body.encounter_tokens import (
     require_encounter_token,
 )
 from app.modules.body.geo import haversine_distance_m
-from app.modules.body.quests import evaluate_on_summon
+from app.modules.body.quests import (
+    STATUS_COMPLETED,
+    effective_state,
+    evaluate_on_summon,
+    spirit_id_for_quest,
+)
 from app.modules.body.quota import QuotaExceededError, consume, default_tier_id
+from app.modules.body.resonance import (
+    AMOUNT_QUEST,
+    SOURCE_QUEST,
+    apply_resonance,
+    next_threshold,
+    stage_for_value,
+)
 from app.modules.body.sense_tokens import SENSE_TOKEN_HEADER, issue_sense_token, require_sense_token
 from app.modules.body.tokens import issue_session_token
 from app.modules.brain.gemini import GeminiClient, VertexAIGeminiClient
 from app.modules.brain.greetings import match_canned_greeting
+from app.modules.brain.models import MemoryEmbedding
 from app.modules.brain.prompt_builder import assemble_dialogue_prompt
 from app.modules.brain.safety import GeminiSafetyChecker, SafetyChecker, enforce_safety_boundary
 from app.modules.brain.tts import GoogleCloudTTSClient, TTSClient
@@ -213,6 +227,184 @@ def summon(
             attempts_today=quest_state.attempts_today,
         ),
     )
+
+
+def _quest_list_item(row: models.QuestProgress) -> schemas.QuestListItem:
+    """`QuestProgress` 列 → API 回應形狀，唯讀重算（見 `quests.effective_state`）。"""
+    state = effective_state(row)
+    return schemas.QuestListItem(
+        quest_id=row.quest_id,
+        spirit_id=spirit_id_for_quest(row.quest_id),
+        status=state.status,
+        attempts_today=state.attempts_today,
+    )
+
+
+@router.get("/quests/daily", response_model=schemas.QuestListResponse)
+def list_daily_quests(
+    player_id: uuid.UUID = Depends(require_session_token),
+    db: Session = Depends(get_db),
+):
+    """
+    S4．玩家任務列表查詢（issue #33，SDD v1 §8.7）。
+
+    只查詢，不寫入——`daily_limit_reached` 與跨日後的 `attempts_today=0` 都是
+    查詢當下用 `quests.effective_state` 重算出來的，資料庫裡的 `status` 可能
+    仍是 `in_progress`（那是對的，見該函式的說明）。
+    """
+    rows = db.query(models.QuestProgress).filter_by(player_id=player_id).all()
+    return schemas.QuestListResponse(quests=[_quest_list_item(row) for row in rows])
+
+
+@router.post("/quests/{quest_id}/complete", response_model=schemas.QuestCompleteResponse)
+def complete_quest(
+    quest_id: str,
+    payload: schemas.QuestCompleteRequest,
+    session_player_id: uuid.UUID = Depends(require_session_token),
+    encounter_token: str | None = Header(default=None, alias=ENCOUNTER_TOKEN_HEADER),
+    db: Session = Depends(get_db),
+):
+    """
+    S4／S5．任務完成前半：狀態機寫入 ＋ 共鳴入帳（issue #34，SDD §7.5 前半）。
+
+    只接受 Encounter Token（**不接受 Sense**，SDD 第6節）：完成任務需要「真的
+    在場」，感應範圍不夠格。刻意不比照 dialogue 端點呼叫
+    `_require_presence_token`——那支函式會接受 Sense 當替代，這裡不行，用
+    共用邏輯反而會不小心放寬這條規則。
+
+    `payload.completion_evidence` 不驗證內容：完成條件由前端的可驗證微任務
+    邏輯保證，這支端點只負責記帳，不重新判定任務有沒有完成。
+
+    刻意**不呼叫任何腦袋模組**（issue #34 AC3）：`quest_wrapper_text`／
+    `unlock_story` 這裡固定回 `None`，敘事生成是 #43 的範圍。
+    """
+    if encounter_token is None:
+        raise HTTPException(status_code=401, detail="missing encounter token")
+
+    spirit_id = spirit_id_for_quest(quest_id)
+    encounter_player_id = require_encounter_token(spirit_id, encounter_token)
+    if encounter_player_id != session_player_id:
+        raise HTTPException(status_code=403, detail="token holder mismatch")
+
+    progress = (
+        db.query(models.QuestProgress)
+        .filter_by(player_id=session_player_id, quest_id=quest_id)
+        .first()
+    )
+    if progress is None:
+        raise HTTPException(status_code=404, detail="quest not found")
+
+    # 重複提交是正常使用者行為（網路重試、連點兩下）：狀態已是 completed 時
+    # 不重新蓋一次 completed_at，維持第一次完成的時間戳才是事實。
+    if progress.status != STATUS_COMPLETED:
+        progress.status = STATUS_COMPLETED
+        progress.completed_at = datetime.now(timezone.utc)
+        db.commit()
+
+    # 共鳴入帳去重靠 S5 既有的 `resonance_events` UNIQUE 約束（先寫、撞到才
+    # 當重複），不是這裡再查一次「有沒有完成過」——兩邊各自防重複，任何一邊
+    # 出錯都還有另一邊擋著。
+    result = apply_resonance(
+        db,
+        player_id=session_player_id,
+        spirit_id=spirit_id,
+        source_type=SOURCE_QUEST,
+        source_id=quest_id,
+        amount=AMOUNT_QUEST,
+    )
+
+    return schemas.QuestCompleteResponse(
+        resonance_value=result.resonance_value,
+        newly_unlocked_stages=result.newly_unlocked_stages,
+    )
+
+
+@router.get("/resonance/{spirit_id}", response_model=schemas.ResonanceQueryResponse)
+def get_resonance(
+    spirit_id: str,
+    player_id: uuid.UUID = Depends(require_session_token),
+    db: Session = Depends(get_db),
+):
+    """
+    S5．單一靈魂共鳴進度查詢（issue #35，SDD v1 §8.9）。
+
+    `stage`／`next_threshold` 一律由 `resonance_value` 重算（`resonance.stage_for_value`
+    ／`next_threshold`），不信任任何快取欄位——`resonance_value` 才是事實來源
+    （見 `models.Resonance` 的說明）。
+    """
+    spirit = db.query(models.Spirit).filter_by(spirit_id=spirit_id).first()
+    if spirit is None or not spirit.is_active:
+        raise HTTPException(status_code=404, detail="spirit not found")
+
+    row = db.query(models.Resonance).filter_by(player_id=player_id, spirit_id=spirit_id).first()
+    # 還沒開始不是錯誤——玩家可能連召喚都沒召喚過這個靈魂。
+    value = row.resonance_value if row is not None else 0
+
+    return schemas.ResonanceQueryResponse(
+        spirit_id=spirit_id,
+        resonance_value=value,
+        stage=stage_for_value(value),
+        next_threshold=next_threshold(value),
+    )
+
+
+@router.get("/profile", response_model=schemas.ProfileResponse)
+def get_profile(
+    player_id: uuid.UUID = Depends(require_session_token),
+    db: Session = Depends(get_db),
+):
+    """
+    玩家個人頁彙總（issue #36，v2.1 §10.3 漏列補回；SDD v1 §8.10）。
+
+    純身體自己的表直查，不呼叫腦袋。`stage` 用跟 `get_resonance` 完全同一支
+    `stage_for_value`——兩支端點不得各自重算門檻邏輯，那會製造「同一個玩家
+    在 Profile 頁跟共鳴頁看到不同 stage」這種只能靠巧合才不會發生的 bug。
+    """
+    quest_rows = db.query(models.QuestProgress).filter_by(player_id=player_id).all()
+    resonance_rows = db.query(models.Resonance).filter_by(player_id=player_id).all()
+
+    return schemas.ProfileResponse(
+        quests=[_quest_list_item(row) for row in quest_rows],
+        resonance=[
+            schemas.ProfileResonanceItem(
+                spirit_id=row.spirit_id,
+                resonance_value=row.resonance_value,
+                stage=stage_for_value(row.resonance_value),
+            )
+            for row in resonance_rows
+        ],
+    )
+
+
+@router.get("/players/me/memory-summary", response_model=schemas.MemorySummaryResponse)
+def get_memory_summary(
+    player_id: uuid.UUID = Depends(require_session_token),
+    db: Session = Depends(get_db),
+):
+    """
+    B6．玩家記憶摘要查詢（issue #37）。
+
+    只讀取，不生成——摘要生成是 B8 nightly batch（#40）的職責，本端點在
+    #40 上線前只會看到既有的 `dialogue_summary` 來源記錄，這是預期行為。
+
+    隱私邊界（CONTEXT.md「玩家記憶僅屬單一玩家」）：`filter_by(player_id=...)`
+    是唯一的過濾條件，拿掉它會讓別的玩家對同一靈魂的記憶洩漏出來——這正是
+    issue #37 AC3 特別設計成「Q 的記錄比 P 多」來確保測得到的情況。
+    """
+    rows = (
+        db.query(MemoryEmbedding)
+        .filter_by(player_id=player_id)
+        .order_by(MemoryEmbedding.spirit_id, MemoryEmbedding.created_at)
+        .all()
+    )
+
+    memories_by_spirit: dict[str, list[schemas.MemorySummaryItem]] = {}
+    for row in rows:
+        memories_by_spirit.setdefault(row.spirit_id, []).append(
+            schemas.MemorySummaryItem(summary_text=row.summary_text, created_at=row.created_at)
+        )
+
+    return schemas.MemorySummaryResponse(memories_by_spirit=memories_by_spirit)
 
 
 @router.post(

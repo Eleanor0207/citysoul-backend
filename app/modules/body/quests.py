@@ -63,6 +63,18 @@ def quest_id_for_spirit(spirit_id: str) -> str:
     return f"{spirit_id}:daily"
 
 
+# quest_id_for_spirit() 的反函式（issue #33）。quest_progress 沒有 spirit_id
+# 欄位，GET /quests/daily 的回應卻需要它——目前唯一的來源就是這個命名慣例。
+# 之後導入任務目錄表時，這支函式要換成查表，呼叫端（router.py）不用跟著改。
+_QUEST_ID_SUFFIX = ":daily"
+
+
+def spirit_id_for_quest(quest_id: str) -> str:
+    if not quest_id.endswith(_QUEST_ID_SUFFIX):
+        raise ValueError(f"無法從 quest_id 反推 spirit_id（格式不符）：{quest_id!r}")
+    return quest_id[: -len(_QUEST_ID_SUFFIX)]
+
+
 def taipei_today(now: datetime) -> date:
     """把一個帶時區的時間點換算成 Asia/Taipei 的日期。"""
     return now.astimezone(TAIPEI).date()
@@ -80,6 +92,30 @@ class QuestState:
         self.quest_id = quest_id
         self.status = status
         self.attempts_today = attempts_today
+
+
+def effective_state(progress: QuestProgress, *, now: datetime | None = None) -> QuestState:
+    """
+    唯讀版本的狀態計算（issue #33／#36 的查詢端點用這個，不是 `evaluate_on_summon`）。
+
+    `evaluate_on_summon` 只該在 `/summon` 被呼叫一次——它有副作用（可能把
+    `attempts_today` 歸零、可能記一次失敗嘗試，兩者都會 commit）。查詢端點
+    只是「玩家現在看到的狀態是什麼」，不該因為被查詢就順便改寫資料庫，
+    尤其是「今天已跨到新的一天」這件事：查詢的當下重算就好，不需要也不該
+    寫回 DB——沒有人召喚的時候，這一列本來就不會有人在乎它現在該不該重置。
+    """
+    now = now or datetime.now(timezone.utc)
+    today = taipei_today(now)
+
+    # 跨日：顯示 0，不寫回 attempts_date／attempts_today。
+    attempts_today = 0 if progress.attempts_date != today else progress.attempts_today
+
+    if attempts_today >= MAX_DAILY_ATTEMPTS:
+        status = STATUS_DAILY_LIMIT_REACHED
+    else:
+        status = progress.status
+
+    return QuestState(progress.quest_id, status, attempts_today)
 
 
 def evaluate_on_summon(

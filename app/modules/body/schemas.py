@@ -160,3 +160,103 @@ class SpiritResponse(BaseModel):
     # 就得同時改後端與發版客戶端。
     sense_radius_m: int = Field(validation_alias="sense_radius_meters")
     is_active: bool
+
+
+class QuestListItem(BaseModel):
+    """
+    `GET /quests/daily` 的單筆任務（issue #33 SDD v1 §8.7）。
+
+    `spirit_id` 不是資料庫欄位，是從 `quest_id` 反推的（見
+    `quests.spirit_id_for_quest`）——`quest_progress` 表本身沒有這一欄。
+    """
+
+    quest_id: str
+    spirit_id: str
+    status: str
+    attempts_today: int
+
+
+class QuestListResponse(BaseModel):
+    quests: list[QuestListItem]
+
+
+class QuestCompleteRequest(BaseModel):
+    """
+    `POST /quests/{questId}/complete`（issue #34）。
+
+    `completion_evidence` 刻意是不驗證內容的 dict：後端確定性規則判定完成
+    與否是由呼叫端（客戶端的可驗證微任務邏輯）自己保證的前提，這裡不重新
+    驗一次任務內容——CONTEXT.md「可驗證微任務」的定義是「以後端確定性規則
+    驗證完成與否」，而完成條件本身屬於任務設計，不是這支端點的職責。
+    """
+
+    completion_evidence: dict = Field(default_factory=dict)
+
+
+class QuestCompleteResponse(BaseModel):
+    """
+    issue #34：本票刻意讓 `quest_wrapper_text`／`unlock_story` 回 `null`——
+    那兩個需要腦袋生成（B11／B2），屬於 #43。SDD §7.5 本來就允許它們是
+    `null`，這是合法的完整回應，不是半成品。
+    """
+
+    quest_wrapper_text: str | None = None
+    resonance_value: int
+    unlock_story: str | None = None
+    # 跨過的門檻階段清單（issue #34 AC5）。SDD 的回應範例沒列這個欄位名，
+    # 但 AC 明訂要「回報新達成 stage」——沿用 `resonance.ResonanceResult`
+    # 同樣的欄位名，維持服務層與 API 層對「跨門檻」這件事用同一種說法。
+    newly_unlocked_stages: list[int] = Field(default_factory=list)
+
+
+class ResonanceQueryResponse(BaseModel):
+    """`GET /resonance/{spiritId}`（issue #35 SDD v1 §8.9）。"""
+
+    spirit_id: str
+    resonance_value: int
+    stage: int
+    next_threshold: int | None
+
+
+class ProfileResonanceItem(BaseModel):
+    spirit_id: str
+    resonance_value: int
+    stage: int
+
+
+class ProfileResponse(BaseModel):
+    """
+    `GET /profile`（issue #36，v2.1 §10.3 漏列，補回；SDD v1 §8.10）。
+
+    純身體自己的表直查，不呼叫腦袋——`quests`／`resonance` 兩個陣列長度不必
+    相同（玩家可能對某靈魂有共鳴但沒有任務進度列，反之亦然）。
+    """
+
+    quests: list[QuestListItem]
+    resonance: list[ProfileResonanceItem]
+
+
+class MemorySummaryItem(BaseModel):
+    """
+    `GET /players/me/memory-summary` 的單筆記憶（issue #37）。
+
+    刻意不含 `embedding`——向量是內部實作，對玩家無意義，回應會因此暴增
+    數十 KB（AC 明訂檢查）。
+    """
+
+    summary_text: str
+    created_at: datetime
+
+
+class MemorySummaryResponse(BaseModel):
+    """依 `spirit_id` 分組（issue #37 AC2）。"""
+
+    memories_by_spirit: dict[str, list[MemorySummaryItem]]
+
+
+class AvatarAssetResponse(BaseModel):
+    """`GET /assets/{avatarId}`（issue #38，v2.1 §7.4）。"""
+
+    avatar_id: str
+    bundle_url: str
+    version: str
