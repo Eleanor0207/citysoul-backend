@@ -209,9 +209,22 @@ def test_encounter_token_not_verifiable_with_session_secret(client, session_toke
         jwt.decode(body["encounter_token"], settings.session_token_secret, algorithms=["HS256"])
 
 
-def test_two_secrets_are_actually_different():
-    """守門測試：金鑰若被設成同一把，上面那些「不可互相冒充」的測試就失去意義。"""
-    assert settings.session_token_secret != settings.encounter_token_secret
+def test_all_three_secrets_are_actually_different():
+    """
+    守門測試：金鑰若有任何兩把相同，上面那些「不可互相冒充」的測試就失去意義
+    ——它們會照樣通過，因為驗簽本來就會過。
+
+    三把兩兩比對，不是只比 session 與 encounter。`sense_token_secret` 是 #18
+    才加的第三把，當時沒有跟著擴這個測試；只要有兩把一樣，SDD 第6節那套
+    「90 天的 session token 不能拿來冒充 15 分鐘的相遇憑證」就形同虛設。
+    """
+    secrets = {
+        "session": settings.session_token_secret,
+        "encounter": settings.encounter_token_secret,
+        "sense": settings.sense_token_secret,
+    }
+
+    assert len(set(secrets.values())) == 3, f"有金鑰重複：{secrets}"
 
 
 # ── haversine 純函式 ──────────────────────────────────────────────────

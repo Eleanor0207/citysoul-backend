@@ -181,6 +181,25 @@ uv run python -m pytest
 
 測試需要本機 Postgres/Redis 已啟動（見第1步）。
 
+### CI
+
+`.github/workflows/test.yml` 在 push 到 `main` 與對 `main` 開 PR 時跑，
+四道關卡：
+
+| 步驟 | 擋住什麼 |
+|---|---|
+| `alembic upgrade head` | 全新空資料庫建不起來（開發機的資料庫是逐步演化來的，證明不了這件事） |
+| `downgrade base` → `upgrade head` | migration 不可逆 |
+| `alembic check` | models 加了欄位但忘記寫 migration |
+| `pytest -q` | 其餘全部 |
+
+`alembic check` 那道是重點：少了它，有人在 `models.py` 加欄位卻沒寫 migration
+時，測試仍然全綠（conftest 跑的是 migration，那個欄位根本不存在，而剛好沒有
+測試碰到它），要到部署才炸。
+
+CI **不需要任何 GCP 憑證**（ADR-0003）。Gemini 的真實呼叫測試在沒有憑證時
+自動 skip。三把 token 金鑰在 CI 用假值，但**必須兩兩不同**，有測試在守。
+
 ---
 
 ## 遇到 `password authentication failed` 怎麼辦

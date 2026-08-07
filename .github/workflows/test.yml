@@ -1,0 +1,101 @@
+name: test
+
+# 只認 main。功能分支要驗證就開 PR——那也是唯一會需要驗證的時候。
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+  pull_request:
+    branches: [main]
+    paths-ignore: ['**.md']
+
+# 同一個分支連推兩次時，取消還在跑的舊的那次。private repo 的 Actions 額度
+# 是有上限的，而已經被取代的那次結果沒有人會看。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      # 跟 docker-compose.yml 同一個映像檔。用官方 postgres 映像檔的話
+      # `CREATE EXTENSION vector` 會失敗，而那是 brain.memory_embeddings 的前提。
+      #
+      # ⚠️ 這個映像檔沒有 PostGIS（見 issue #46）。等 districts 要做的時候，
+      # 這裡跟 docker-compose.yml 要一起換成自建映像檔。
+      db:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: city_soul
+          POSTGRES_PASSWORD: city_soul_dev
+          POSTGRES_DB: city_soul
+        ports: ['5432:5432']
+        # 少了這個，後面的步驟會在 Postgres 還沒接受連線時就開始跑，
+        # 而失敗訊息會是「connection refused」，看起來像設定錯誤。
+        options: >-
+          --health-cmd "pg_isready -U city_soul"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+psycopg://city_soul:city_soul_dev@localhost:5432/city_soul
+      REDIS_URL: redis://localhost:6379/0
+
+      # CI 專用的假金鑰。三把**必須兩兩不同**——只要有兩把相同，那兩種 token
+      # 就能互相冒充，而 SDD 第6節的分層驗證正是靠它們不同才成立。有測試在驗
+      # 這件事，所以這裡填成一樣的話 CI 會紅，而不是靜靜地失去保護。
+      #
+      # 這些不是秘密，不需要放 GitHub secrets：它們只在這個容器裡活幾分鐘，
+      # 而且簽出來的 token 除了測試自己以外沒有任何東西會接受。
+      SESSION_TOKEN_SECRET: ci-session-secret
+      ENCOUNTER_TOKEN_SECRET: ci-encounter-secret
+      SENSE_TOKEN_SECRET: ci-sense-secret
+
+      # ⚠️ 刻意**沒有**任何 GCP 憑證（ADR-0003：不產生 service account 金鑰，
+      # 也不把金鑰塞進 secrets）。Gemini 的真實呼叫測試在沒有憑證時會自動 skip，
+      # 所以 CI 不需要碰 GCP。真的要在 CI 打 Vertex AI 的話，走 Workload
+      # Identity Federation 換發短期 token，不要加 secrets。
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # .python-version 鎖 3.12（psycopg[binary] 的 wheel 供應狀況，見 README）
+      - run: uv sync --frozen
+
+      # 一路建到最新版。這同時也是「全新空資料庫可以從零建起來」的驗證——
+      # 開發機上的資料庫是逐步演化來的，證明不了這件事。
+      - name: alembic upgrade head
+        run: uv run python -m alembic upgrade head
+
+      # 每一支 migration 都能退。README 說了這句話，這裡讓它每次 commit 都被驗。
+      # 退到底再建回來，比 `downgrade -1` 涵蓋得更完整，而且在空資料庫上很快。
+      - name: migrations are reversible
+        run: |
+          uv run python -m alembic downgrade base
+          uv run python -m alembic upgrade head
+
+      # models 與 migration 對不上時，這一步會紅。
+      #
+      # 這是整套 Alembic 設計的守門員：少了它，有人在 models.py 加一個欄位卻
+      # 忘記寫 migration，測試仍然全綠（conftest 跑的是 migration，那個欄位
+      # 根本不存在，而剛好沒有測試碰到它），然後在部署時才炸。
+      - name: models match migrations
+        run: uv run python -m alembic check
+
+      - run: uv run python -m pytest -q
