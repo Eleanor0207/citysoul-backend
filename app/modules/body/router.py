@@ -20,6 +20,8 @@ from app.modules.body.sense_tokens import SENSE_TOKEN_HEADER, issue_sense_token,
 from app.modules.body.tokens import issue_session_token
 from app.modules.brain.gemini import GeminiClient, VertexAIGeminiClient
 from app.modules.brain.greetings import match_canned_greeting
+from app.modules.brain.prompt_builder import assemble_dialogue_prompt
+from app.modules.brain.safety import GeminiSafetyChecker, SafetyChecker, enforce_safety_boundary
 from app.modules.brain.tts import GoogleCloudTTSClient, TTSClient
 
 # usage_tier_limits 已種好的 resource_type（migration 0004）。只在這裡出現
@@ -40,6 +42,28 @@ def get_gemini_client() -> GeminiClient:
 def get_tts_client() -> TTSClient:
     """同上，測試換成 `FakeTTSClient`。"""
     return GoogleCloudTTSClient()
+
+
+def get_safety_classifier_client() -> GeminiClient:
+    """
+    B4（安全邊界檢查，issue #11）分類專用的 Gemini client——**刻意跟**
+    `get_gemini_client()`（用來生成實際回覆）**是不同的 dependency**，即使
+    正式環境兩者背後可能是同一個 Vertex AI 專案。
+
+    分開的理由是可測試性，不是效能：如果兩者共用同一個 fake，測試就沒辦法
+    只針對「安全分類」或只針對「回覆生成」個別下 spy——issue #45 AC1 明訂
+    「不安全時 B1 一次都沒被呼叫」，這裡的「B1」指的是**生成回覆**那次呼叫，
+    不包含分類本身用掉的那一次（分類是 B4 自己的實作細節，不算在「下游」
+    裡）。合成一個 dependency 會讓這兩種呼叫的次數混在同一個計數器上，
+    測試就無法分開驗證。
+    """
+    return VertexAIGeminiClient()
+
+
+def get_safety_checker(
+    client: GeminiClient = Depends(get_safety_classifier_client),
+) -> SafetyChecker:
+    return GeminiSafetyChecker(client)
 
 
 def _require_presence_token(
@@ -206,22 +230,21 @@ def dialogue(
     sense_token: str | None = Header(default=None, alias=SENSE_TOKEN_HEADER),
     gemini_client: GeminiClient = Depends(get_gemini_client),
     tts_client: TTSClient = Depends(get_tts_client),
+    safety_checker: SafetyChecker = Depends(get_safety_checker),
     db: Session = Depends(get_db),
 ):
     """
-    對話端點（issue #42 可用版）。
+    對話端點（issue #45 完整版）。
 
     ```
     驗證 Session Token ＋（Encounter 或 Sense Token）
       → 配額檢查（#32）
-      → B12 固定招呼比對 → 命中直接回預寫台詞，不呼叫 Gemini
-      → 未命中 → B1 Gemini（#8）
+      → B12 固定招呼比對 → 命中直接回預寫台詞，不呼叫 B4／B2／B1
+      → 未命中 → B4 安全邊界（#11）→ 不安全就婉拒，不繼續往下
+                              → 安全 → B2 Prompt 組裝（#12）→ B1 Gemini（#8）
       → B10 TTS（#21）
       → B7 短期記憶寫入
     ```
-
-    **刻意不含**：B4 安全邊界（#11）與 B2 完整 Prompt 組裝（#12）——Phase 3，
-    見 #45。Gemini 這裡直接餵 `user_input`，不組 system instruction。
 
     `user_input` 空白或超長由 `DialogueRequest` 的 pydantic 驗證在進到這支
     函式之前就擋下（422），配額因此不會被消耗——格式錯誤不該扣玩家額度。
@@ -238,7 +261,7 @@ def dialogue(
     if spirit is None or not spirit.is_active:
         raise HTTPException(status_code=404, detail="spirit not found")
 
-    # 配額是第一道關卡，排在 B12／Gemini 之前——被擋下的請求不該產生任何
+    # 配額是第一道關卡，排在 B12／B4／B2／B1 之前——被擋下的請求不該產生任何
     # 生成成本（issue #32）。
     try:
         consume(db, player_id=session_player_id, resource=DIALOGUE_QUOTA_RESOURCE)
@@ -258,12 +281,35 @@ def dialogue(
     if canned is not None:
         reply_text, source = canned, "canned"
     else:
-        # `GeminiClient.generate()` 永遠回傳非空字串、永遠不拋例外（見
-        # gemini.py 模組說明）——這裡不需要 try/except，模型失敗時它自己
-        # 回退到人工預寫台詞，這一層看不出兩者的差別，也不需要看出。
-        reply_text, source = gemini_client.generate(payload.user_input), "generated"
+        # `_generated` 用一個可變旗標記錄「有沒有真的走到生成那一步」，而不是
+        # 另外再呼叫一次 `safety_checker.check()` 來判斷 source——安全分類本身
+        # 呼叫 Gemini，多呼叫一次等於讓玩家的每一句話都被分類兩遍、多付一次
+        # 那個成本，`enforce_safety_boundary`（issue #11）已經只呼叫一次
+        # `check()`，這裡跟著遵守同一條規則。
+        generated = {"value": False}
 
-    # 同理：TTS 失敗回 None，純文字照常顯示，不拋例外。
+        def _generate_reply() -> str:
+            generated["value"] = True
+            assembled = assemble_dialogue_prompt(
+                db,
+                player_id=session_player_id,
+                spirit_id=place_id,
+                player_input=payload.user_input,
+            )
+            # 沒有生效人格卡時 B2 回傳 None（issue #12 AC5）：退回只餵原始
+            # 輸入給 Gemini，跟 #42 可用版對「沒有人格卡」情境的處理一致，
+            # 不是新行為。
+            prompt = assembled.as_prompt() if assembled is not None else payload.user_input
+            # `GeminiClient.generate()` 永遠回傳非空字串、永遠不拋例外（見
+            # gemini.py 模組說明）——這裡不需要 try/except，模型失敗時它自己
+            # 回退到人工預寫台詞，這一層看不出兩者的差別，也不需要看出。
+            return gemini_client.generate(prompt)
+
+        reply_text = enforce_safety_boundary(safety_checker, payload.user_input, _generate_reply)
+        source = "generated" if generated["value"] else "refused"
+
+    # 同理：TTS 失敗回 None，純文字照常顯示，不拋例外。婉拒台詞也要合成語音
+    # ——玩家聽到的仍然是角色在說話，不是無聲的系統訊息。
     tts_result = tts_client.synthesize(reply_text)
 
     # 感應／召喚兩種模式共用同一把 session key（`player_id` + `spirit_id`），

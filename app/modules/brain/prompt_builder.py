@@ -68,6 +68,16 @@ class AssembledPrompt:
     system_instruction: str
     user_turn: str
 
+    def as_prompt(self) -> str:
+        """
+        B1（`GeminiClient.generate`，issue #8）目前只吃單一 prompt 字串——
+        沒有分開的 system／user 角色參數，那是 #8 當初的介面選擇，不是這裡
+        能改的事。等 B1 真的需要角色分離時再回頭改這裡，System Instruction
+        永遠在 User Turn 之前組裝完成，兩者只是串接，不是這支函式該決定的
+        別的東西（issue #45：對話端點串接 B2 輸出時使用）。
+        """
+        return f"{self.system_instruction}\n\n{self.user_turn}"
+
 
 def build_system_instruction(persona: CharacterPersona, historical_boundary: str) -> str:
     """
