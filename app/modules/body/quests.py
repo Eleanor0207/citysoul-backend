@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.body.encounter_tokens import ENCOUNTER_TOKEN_EXPIRE_SECONDS
 from app.modules.body.models import QuestProgress
+from app.modules.body.resonance import AMOUNT_QUEST, SOURCE_QUEST, apply_resonance
 
 # SDD 第7節決策8：所有「每日一次」「隔天重置」統一以 Asia/Taipei 午夜為基準。
 TAIPEI = ZoneInfo("Asia/Taipei")
@@ -61,6 +62,20 @@ def quest_id_for_spirit(spirit_id: str) -> str:
     等真的有多個任務、或任務內容需要編輯時，這裡要換成查任務目錄表。
     """
     return f"{spirit_id}:daily"
+
+
+def spirit_id_for_quest(quest_id: str) -> str | None:
+    """
+    `quest_id_for_spirit` 的反向。格式不符時回 `None`（呼叫端轉 404），
+    不要猜——猜錯的話會拿別人的靈魂去比對 encounter token。
+
+    跟 `quest_id_for_spirit` 一樣是垂直切片階段的簡化：有了任務目錄表之後，
+    這裡要換成查表，而不是繼續拆字串。
+    """
+    prefix, separator, suffix = quest_id.rpartition(":")
+    if not separator or suffix != "daily" or not prefix:
+        return None
+    return prefix
 
 
 def taipei_today(now: datetime) -> date:
@@ -132,6 +147,86 @@ def evaluate_on_summon(
 
     db.commit()
     return QuestState(quest_id, progress.status, progress.attempts_today)
+
+
+class QuestCompletionResult:
+    """
+    `complete_quest` 的回傳值。`newly_unlocked_stages` 原樣從 S5 的
+    `ResonanceResult` 帶上來——呼叫端（#43）要靠它決定要不要生成解鎖敘事。
+    """
+
+    def __init__(
+        self,
+        *,
+        quest_id: str,
+        resonance_value: int,
+        stage: int,
+        newly_unlocked_stages: list[int],
+    ):
+        self.quest_id = quest_id
+        self.resonance_value = resonance_value
+        self.stage = stage
+        self.newly_unlocked_stages = newly_unlocked_stages
+
+
+def complete_quest(
+    db: Session,
+    *,
+    player_id: uuid.UUID | str,
+    spirit_id: str,
+    quest_id: str,
+    now: datetime | None = None,
+) -> QuestCompletionResult:
+    """
+    SDD §7.5 前半：判定完成 → 寫 `quest_progress` → 共鳴入帳 → 回報是否跨門檻。
+
+    **完成判定是後端確定性規則，不呼叫任何 LLM**（CONTEXT.md）。這支函式
+    從頭到尾沒有碰腦袋模組，這件事本身就是 AC 的一部分。
+
+    v2.1 §6.4 的呼叫順序硬規則：身體必須「先寫完自己的表、再呼叫腦袋」。
+    這支只做前半（寫表），敘事生成留給 #43 在這之後呼叫，順序天然正確。
+
+    重複提交是正常使用者行為（網路重試、連點兩下），不是錯誤：去重完全靠
+    S5 `resonance_events` 的 UNIQUE 約束，這裡不先查再寫。
+    """
+    now = now or datetime.now(timezone.utc)
+    today = taipei_today(now)
+    player_uuid = uuid.UUID(str(player_id))
+
+    progress = (
+        db.query(QuestProgress).filter_by(player_id=player_uuid, quest_id=quest_id).first()
+    )
+    if progress is None:
+        progress = QuestProgress(
+            player_id=player_uuid,
+            quest_id=quest_id,
+            status=STATUS_IN_PROGRESS,
+            attempts_today=0,
+            attempts_date=today,
+        )
+        db.add(progress)
+
+    if progress.status != STATUS_COMPLETED:
+        progress.status = STATUS_COMPLETED
+        progress.completed_at = now
+        progress.current_token_issued_at = None
+    db.commit()
+
+    result = apply_resonance(
+        db,
+        player_id=player_uuid,
+        spirit_id=spirit_id,
+        source_type=SOURCE_QUEST,
+        source_id=quest_id,
+        amount=AMOUNT_QUEST,
+    )
+
+    return QuestCompletionResult(
+        quest_id=quest_id,
+        resonance_value=result.resonance_value,
+        stage=result.stage,
+        newly_unlocked_stages=result.newly_unlocked_stages,
+    )
 
 
 def _reset_attempts_if_new_day(progress: QuestProgress, *, today: date) -> None:

@@ -13,7 +13,7 @@ from app.modules.body.encounter_tokens import (
     require_encounter_token,
 )
 from app.modules.body.geo import haversine_distance_m
-from app.modules.body.quests import evaluate_on_summon
+from app.modules.body.quests import complete_quest, evaluate_on_summon, spirit_id_for_quest
 from app.modules.body.quota import default_tier_id
 from app.modules.body.sense_tokens import issue_sense_token
 from app.modules.body.tokens import issue_session_token
@@ -210,3 +210,47 @@ def get_spirit(place_id: str, db: Session = Depends(get_db)):
     if not spirit:
         raise HTTPException(status_code=404, detail="spirit not found")
     return spirit
+
+
+@router.post("/quests/{quest_id}/complete", response_model=schemas.QuestCompleteResponse)
+def complete_quest_endpoint(
+    quest_id: str,
+    payload: schemas.QuestCompleteRequest,
+    session_player_id: uuid.UUID = Depends(require_session_token),
+    encounter_token: str | None = Header(default=None, alias=ENCOUNTER_TOKEN_HEADER),
+    db: Session = Depends(get_db),
+):
+    """
+    S4／S5．任務完成與共鳴入帳（SDD §7.5 前半，#34）。
+
+    需要 Session Token ＋ **Encounter Token**。持 Sense Token 者不可呼叫這支
+    （SDD 第6節）——那張憑證只證明「在 150m 感應範圍內」，而挑戰任務要求
+    真的到現場（50m）。這裡不接受 `X-Sense-Token`，沒有另外寫檢查：
+    `require_encounter_token` 用的是 encounter 的金鑰與 `purpose` claim，
+    sense token 本來就過不了。
+
+    `unlock_story` 與 `quest_wrapper_text` 一律回 `null`——敘事生成屬 #43。
+    """
+    spirit_id = spirit_id_for_quest(quest_id)
+    if spirit_id is None:
+        raise HTTPException(status_code=404, detail="quest not found")
+
+    encounter_player_id = require_encounter_token(spirit_id, encounter_token)
+
+    # 兩張憑證必須屬於同一個玩家（比照 dialogue 端點）。
+    if encounter_player_id != session_player_id:
+        raise HTTPException(status_code=403, detail="token holder mismatch")
+
+    spirit = db.query(models.Spirit).filter_by(spirit_id=spirit_id).first()
+    if spirit is None or not spirit.is_active:
+        raise HTTPException(status_code=404, detail="spirit not found")
+
+    result = complete_quest(
+        db, player_id=session_player_id, spirit_id=spirit_id, quest_id=quest_id
+    )
+
+    return schemas.QuestCompleteResponse(
+        quest_wrapper_text=None,
+        resonance_value=result.resonance_value,
+        unlock_story=None,
+    )

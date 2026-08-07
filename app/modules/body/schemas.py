@@ -157,3 +157,30 @@ class SpiritResponse(BaseModel):
     # 就得同時改後端與發版客戶端。
     sense_radius_m: int = Field(validation_alias="sense_radius_meters")
     is_active: bool
+
+
+class QuestCompleteRequest(BaseModel):
+    """
+    `POST /api/v1/quests/{questId}/complete` 的請求（SDD §7.5）。
+
+    `completion_evidence` 目前不影響判定——完成條件是後端確定性規則
+    （CONTEXT.md：不由 LLM 判定），而垂直切片階段的規則就是「帶著有效的
+    相遇憑證送出」。欄位先收下來，等真的有需要驗證的證據型任務時再用；
+    現在不收的話，客戶端之後要加回來又是一次破壞性變更。
+    """
+
+    completion_evidence: dict = Field(default_factory=dict)
+
+
+class QuestCompleteResponse(BaseModel):
+    """
+    SDD §7.5 的完成回應。
+
+    `quest_wrapper_text` 與 `unlock_story` **在這張票（#34）永遠是 null**
+    ——它們需要腦袋生成（B11／B2），拆給 #43。§7.5 本來就允許
+    `unlock_story` 為 null，所以這是合法的完整回應，不是半成品。
+    """
+
+    quest_wrapper_text: str | None = None
+    resonance_value: int
+    unlock_story: str | None = None
