@@ -61,6 +61,31 @@ _EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="gemini")
 FALLBACK_REPLY = "（城市靈魂安靜地看著你）……這件事我還沒想清楚。要不要先跟我說說你眼前看到的？"
 
 
+def create_genai_client():
+    """
+    建一個 ADC 認證的 `genai.Client`（ADR-0003：沒有金鑰檔，本機/正式環境
+    走同一條路徑）。
+
+    抽成模組層級函式而不是留在 `VertexAIGeminiClient` 裡，是因為 B13
+    （地標視覺辨識，多模態）需要一模一樣的 client 建構邏輯，只是送的內容
+    不同（文字＋圖片，不是純文字）——重複這幾行不會換到任何東西，只會換來
+    兩份憑證邏輯漂移的風險。
+    """
+    import google.auth
+    from google import genai
+
+    credentials, _ = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+
+    return genai.Client(
+        enterprise=True,
+        project=settings.gcp_project_id,
+        location=settings.gcp_location,
+        credentials=credentials,
+    )
+
+
 class GeminiClient(ABC):
     """
     對話生成的抽象介面。
@@ -109,20 +134,7 @@ class VertexAIGeminiClient(GeminiClient):
         self.last_truncated: bool = False
 
     def _create_client(self):
-        import google.auth
-        from google import genai
-
-        # 沒有金鑰檔：ADC 自己找（ADR-0003）。
-        credentials, _ = google.auth.default(
-            scopes=["https://www.googleapis.com/auth/cloud-platform"]
-        )
-
-        return genai.Client(
-            enterprise=True,
-            project=settings.gcp_project_id,
-            location=settings.gcp_location,
-            credentials=credentials,
-        )
+        return create_genai_client()
 
     def _ensure_client(self):
         if self._client is None:
