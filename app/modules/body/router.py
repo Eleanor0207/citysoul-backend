@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.redis_client import append_session_turn
 from app.modules.body import models, schemas
 from app.modules.body.anticheat import run_observation_checks
 from app.modules.body.auth import require_session_token
@@ -14,19 +15,49 @@ from app.modules.body.encounter_tokens import (
 )
 from app.modules.body.geo import haversine_distance_m
 from app.modules.body.quests import evaluate_on_summon
-from app.modules.body.quota import default_tier_id
-from app.modules.body.sense_tokens import issue_sense_token
+from app.modules.body.quota import QuotaExceededError, consume, default_tier_id
+from app.modules.body.sense_tokens import SENSE_TOKEN_HEADER, issue_sense_token, require_sense_token
 from app.modules.body.tokens import issue_session_token
+from app.modules.brain.gemini import GeminiClient, VertexAIGeminiClient
 from app.modules.brain.greetings import match_canned_greeting
+from app.modules.brain.tts import GoogleCloudTTSClient, TTSClient
 
-# 未命中快速問候時的人工預寫台詞。
-#
-# CONTEXT.md：「無合格輸入或生成失敗時使用人工預寫台詞」。在 Gemini（#8）接上
-# 之前，**所有**未命中都會走到這裡——這是刻意的，讓端到端流程在沒有 GCP 憑證的
-# 情況下也能完整跑通。接上 B1 之後，這句話會退回它原本的角色：只在模型失敗時出現。
-FALLBACK_REPLY = "（城市靈魂安靜地看著你）……這件事我還沒想清楚。要不要先跟我說說你眼前看到的？"
+# usage_tier_limits 已種好的 resource_type（migration 0004）。只在這裡出現
+# 一次——呼叫端不重複寫這個字串，改資源名稱只需要改這裡。
+DIALOGUE_QUOTA_RESOURCE = "dialogue_calls_daily"
 
 router = APIRouter(prefix="/api/v1", tags=["body"])
+
+
+def get_gemini_client() -> GeminiClient:
+    """
+    FastAPI dependency，讓測試可以用 `app.dependency_overrides` 換成
+    `FakeGeminiClient`，完全不需要 GCP 憑證——跟 `get_db` 是同一種用法。
+    """
+    return VertexAIGeminiClient()
+
+
+def get_tts_client() -> TTSClient:
+    """同上，測試換成 `FakeTTSClient`。"""
+    return GoogleCloudTTSClient()
+
+
+def _require_presence_token(
+    spirit_id: str, encounter_token: str | None, sense_token: str | None
+) -> uuid.UUID:
+    """
+    SDD 第6節：Session Token 必要，再加 Encounter 或 Sense 至少一張。
+
+    兩張都沒帶才是「缺憑證」；帶了其中一張就用那一張的驗證邏輯（各自獨立，
+    不共用，見 `encounter_tokens.py`／`sense_tokens.py` 的模組說明），驗證
+    失敗時直接讓那張憑證自己的錯誤往外拋，不嘗試退而驗證另一張——玩家帶哪張
+    憑證來，就該對那張憑證負責，兩張憑證的失敗原因混在一起只會讓除錯更難。
+    """
+    if encounter_token is not None:
+        return require_encounter_token(spirit_id, encounter_token)
+    if sense_token is not None:
+        return require_sense_token(spirit_id, sense_token)
+    raise HTTPException(status_code=401, detail="missing encounter or sense token")
 
 
 @router.post("/players", response_model=schemas.PlayerResponse)
@@ -160,47 +191,88 @@ def summon(
     )
 
 
-@router.post("/spirits/{place_id}/dialogue", response_model=schemas.DialogueResponse)
+@router.post(
+    "/spirits/{place_id}/dialogue",
+    response_model=schemas.DialogueResponse,
+    # `tts=None` 時整個欄位從 JSON 消失，不是序列化成 `"tts": null`——
+    # 見 `schemas.DialogueResponse` 的說明。
+    response_model_exclude_none=True,
+)
 def dialogue(
     place_id: str,
     payload: schemas.DialogueRequest,
     session_player_id: uuid.UUID = Depends(require_session_token),
     encounter_token: str | None = Header(default=None, alias=ENCOUNTER_TOKEN_HEADER),
+    sense_token: str | None = Header(default=None, alias=SENSE_TOKEN_HEADER),
+    gemini_client: GeminiClient = Depends(get_gemini_client),
+    tts_client: TTSClient = Depends(get_tts_client),
     db: Session = Depends(get_db),
 ):
     """
-    對話端點（**最小可用版**）。
+    對話端點（issue #42 可用版）。
 
-    目前只走 B12 快速問候比對：命中回預寫台詞，未命中回人工預寫的 fallback。
-    這讓「走到地標→召喚→對話→看到回應」這條路**在沒有 GCP 憑證的情況下就能
-    完整跑通**——本機 Avast 的 TLS 攔截目前擋著 Vertex AI，不該連帶讓整條核心
-    迴圈無法驗證。
+    ```
+    驗證 Session Token ＋（Encounter 或 Sense Token）
+      → 配額檢查（#32）
+      → B12 固定招呼比對 → 命中直接回預寫台詞，不呼叫 Gemini
+      → 未命中 → B1 Gemini（#8）
+      → B10 TTS（#21）
+      → B7 短期記憶寫入
+    ```
 
-    尚未接上、各有獨立 ticket 的部分：
-    - 配額檢查（#32）
-    - B4 安全邊界（#11）、B2 Prompt 組裝（#12）、B1 Gemini（#8）→ 見 #42／#45
-    - B10 TTS 語音（#21）
-    - B7 短期記憶寫入
+    **刻意不含**：B4 安全邊界（#11）與 B2 完整 Prompt 組裝（#12）——Phase 3，
+    見 #45。Gemini 這裡直接餵 `user_input`，不組 system instruction。
 
-    驗證沿用 SDD 第6節：Session Token（Authorization header）＋ Encounter Token
-    （X-Encounter-Token header）。兩者用**不同的驗證邏輯**，不共用函式。
+    `user_input` 空白或超長由 `DialogueRequest` 的 pydantic 驗證在進到這支
+    函式之前就擋下（422），配額因此不會被消耗——格式錯誤不該扣玩家額度。
     """
-    encounter_player_id = require_encounter_token(place_id, encounter_token)
+    presence_player_id = _require_presence_token(place_id, encounter_token, sense_token)
 
-    # 兩張憑證必須屬於同一個玩家。少了這道檢查，A 的 session 配上 B 的相遇憑證
-    # 就能通過——那等於讓沒到現場的人借用別人的在場證明。
-    if encounter_player_id != session_player_id:
+    # 兩張憑證必須屬於同一個玩家。少了這道檢查，A 的 session 配上 B 的相遇／
+    # 感應憑證就能通過——那等於讓沒到現場（或沒進感應範圍）的人借用別人的
+    # 在場證明。
+    if presence_player_id != session_player_id:
         raise HTTPException(status_code=403, detail="token holder mismatch")
 
     spirit = db.query(models.Spirit).filter_by(spirit_id=place_id).first()
     if spirit is None or not spirit.is_active:
         raise HTTPException(status_code=404, detail="spirit not found")
 
+    # 配額是第一道關卡，排在 B12／Gemini 之前——被擋下的請求不該產生任何
+    # 生成成本（issue #32）。
+    try:
+        consume(db, player_id=session_player_id, resource=DIALOGUE_QUOTA_RESOURCE)
+    except QuotaExceededError as exc:
+        # detail 只帶這個玩家自己的資訊（`QuotaExceededError` 的設計就是如此），
+        # 不會不小心洩漏其他玩家的用量或內部設定值。
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "resource": exc.resource,
+                "limit": exc.limit,
+                "reset_at": exc.reset_at.isoformat(),
+            },
+        )
+
     canned = match_canned_greeting(db, place_id, payload.user_input)
     if canned is not None:
-        return schemas.DialogueResponse(reply_text=canned, source="canned")
+        reply_text, source = canned, "canned"
+    else:
+        # `GeminiClient.generate()` 永遠回傳非空字串、永遠不拋例外（見
+        # gemini.py 模組說明）——這裡不需要 try/except，模型失敗時它自己
+        # 回退到人工預寫台詞，這一層看不出兩者的差別，也不需要看出。
+        reply_text, source = gemini_client.generate(payload.user_input), "generated"
 
-    return schemas.DialogueResponse(reply_text=FALLBACK_REPLY, source="fallback")
+    # 同理：TTS 失敗回 None，純文字照常顯示，不拋例外。
+    tts_result = tts_client.synthesize(reply_text)
+
+    # 感應／召喚兩種模式共用同一把 session key（`player_id` + `spirit_id`），
+    # 玩家從 150m 聊到 50m 召喚時對話自然延續（SDD 第7.3節）。
+    session_key_player_id = str(session_player_id)
+    append_session_turn(session_key_player_id, place_id, {"role": "user", "text": payload.user_input})
+    append_session_turn(session_key_player_id, place_id, {"role": "assistant", "text": reply_text})
+
+    return schemas.DialogueResponse(reply_text=reply_text, source=source, tts=tts_result)
 
 
 @router.get("/spirits/{place_id}", response_model=schemas.SpiritResponse)

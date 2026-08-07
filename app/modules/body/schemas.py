@@ -3,6 +3,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.modules.brain.tts import TTSResult
+
 
 class PlayerCreateRequest(BaseModel):
     """
@@ -115,20 +117,21 @@ class DialogueRequest(BaseModel):
 
 class DialogueResponse(BaseModel):
     """
-    對話回應。
+    對話回應（issue #42 可用版）。
 
-    ⚠️ **這是走通端到端用的最小版本**，目前只做 B12 快速問候比對——命中回預寫
-    台詞，未命中回人工預寫的 fallback。完整版（Gemini 生成、TTS 語音、安全邊界、
-    Prompt 組裝）見 issue #42／#45。
-
-    `tts` 欄位刻意還不存在：SDD v2.1 §10.1 定義它只含 `audio_url`，等 B10（#21）
-    落地才會加上。現在放一個永遠是 null 的欄位只會讓客戶端寫出無用的處理分支。
+    `tts` 為 `None` 時，路由層會用 `response_model_exclude_none=True` 把這個
+    欄位整個從 JSON 拿掉，不會序列化成 `"tts": null`——TTS 合成失敗時是「這輪
+    沒有語音」，不是「有一個空的語音物件」，兩者對客戶端的處理分支意義不同
+    （同 B10 `tts.py` 模組說明）。安全邊界（B4）與完整 Prompt 組裝（B2）見
+    issue #45。
     """
 
     reply_text: str
-    # 'canned' = 命中預寫招呼；'fallback' = 未命中，回人工預寫台詞。
-    # 客戶端不需要據此改變行為，但除錯與觀察命中率時很有用。
+    # 'canned' = 命中預寫招呼；'generated' = 未命中，交給 Gemini 生成
+    # （B1 呼叫失敗時的降級台詞也算在 'generated' 裡——那是 B1 自己的責任，
+    # 見 gemini.py 模組說明；這一層看不出、也不需要看出兩者的差別）。
     source: str
+    tts: TTSResult | None = None
 
 
 class SpiritResponse(BaseModel):

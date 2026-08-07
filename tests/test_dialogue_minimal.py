@@ -1,8 +1,20 @@
 """
-對話端點最小可用版：B12 快速問候比對 ＋ fallback。
+對話端點：憑證把關 ＋ B12 命中／未命中的基本行為。
 
-完整版（Gemini／TTS／安全邊界／Prompt 組裝）見 issue #42／#45。這裡只驗
-「憑證把關」與「命中／未命中」兩件事——它們是這條端到端路徑成立的前提。
+issue #42 把 Gemini／TTS／配額接上之後，這支檔案縮小成只驗證「憑證把關」跟
+「命中／未命中兩種路徑分別選對 source」——這兩件事在 #42 之後仍然成立，不用
+搬到新測試檔重複驗一次。**配額、Sense Token、spy 驗證 Gemini／TTS 呼叫次數、
+TTS 失敗降級、`tts.audio_url` 形狀**這些 #42 新增的行為，見 `test_dialogue.py`。
+
+## 這裡改掉的兩件事
+
+- `test_miss_returns_fallback` → 未命中現在會呼叫 Gemini（`source` 從
+  `"fallback"` 變成 `"generated"`），不再直接回 `router.FALLBACK_REPLY`——
+  那個常數本身已經跟著 #42 一起移除，見 `router.py` 的 diff。
+- `test_response_has_no_tts_field` 整條移除：`tts` 欄位現在會出現（`conftest`
+  的 autouse fixture 預設用 `FakeTTSClient` 合成成功），這條測試的前提已經
+  不成立。`tts` 到底該不該出現、出現時長什麼樣子，屬於 `test_dialogue.py`
+  的範圍。
 """
 import uuid
 from datetime import datetime, timezone
@@ -13,7 +25,6 @@ import pytest
 from app.core.config import settings
 from app.modules.body import models
 from app.modules.body.encounter_tokens import ENCOUNTER_TOKEN_HEADER, issue_encounter_token
-from app.modules.body.router import FALLBACK_REPLY
 from app.modules.brain.models import (
     CannedGreeting,
     Character,
@@ -160,22 +171,29 @@ def test_canned_greeting_hit(client, spirit, player, active_card):
     pid, sess = player
     enc = issue_encounter_token(pid, spirit.spirit_id)
     body = _say(client, spirit, sess, enc, "你好").json()
-    assert body == {"reply_text": _GREETING, "source": "canned"}
+    assert body["reply_text"] == _GREETING
+    assert body["source"] == "canned"
 
 
-def test_miss_returns_fallback(client, spirit, player, active_card):
+def test_miss_goes_through_generation(client, spirit, player, active_card):
+    """
+    未命中固定招呼時交給 Gemini（這裡是 conftest 預設注入的 `FakeGeminiClient`）
+    生成，`source` 是 `"generated"`——是否命中內部真的呼叫了模型、還是模型
+    失敗後自己回退，這一層看不出也不需要看出（見 `gemini.py` 模組說明）。
+    """
     pid, sess = player
     enc = issue_encounter_token(pid, spirit.spirit_id)
     body = _say(client, spirit, sess, enc, "圓頂是什麼時候蓋的？").json()
-    assert body == {"reply_text": FALLBACK_REPLY, "source": "fallback"}
+    assert body["source"] == "generated"
+    assert body["reply_text"]  # 非空字串即可，內容由 B1 決定，不是這層的責任
 
 
-def test_no_active_persona_falls_back(client, spirit, player):
-    """人格是 active=False 的草稿（或根本還沒建）時，一律 fallback，不拋例外。"""
+def test_no_active_persona_falls_through_to_generation(client, spirit, player):
+    """人格是 active=False 的草稿（或根本還沒建）時，一律當作未命中，不拋例外。"""
     pid, sess = player
     enc = issue_encounter_token(pid, spirit.spirit_id)
     body = _say(client, spirit, sess, enc, "你好").json()
-    assert body["source"] == "fallback"
+    assert body["source"] == "generated"
 
 
 @pytest.mark.parametrize("bad_input", ["", "   "])
@@ -191,14 +209,3 @@ def test_inactive_spirit_returns_404(client, spirit, player, db_session):
     spirit.is_active = False
     db_session.commit()
     assert _say(client, spirit, sess, enc, "你好").status_code == 404
-
-
-def test_response_has_no_tts_field(client, spirit, player, active_card):
-    """
-    B10 尚未落地，回應刻意不含 `tts`。放一個永遠是 null 的欄位，只會讓客戶端
-    寫出無用的處理分支（SDD v2.1 §10.1 定義 tts 只含 audio_url）。
-    """
-    pid, sess = player
-    enc = issue_encounter_token(pid, spirit.spirit_id)
-    body = _say(client, spirit, sess, enc, "你好").json()
-    assert set(body) == {"reply_text", "source"}
