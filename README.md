@@ -232,6 +232,12 @@ v2 路由真的存在。
 版本相容原則：**只加不減**。後端可以新增欄位，不能刪除或改名既有欄位；
 `citysoul-client` 忽略任何自己不認識的欄位。
 
+`contract.yml` 還有第二個 job `gate-self-test`：跟這次 PR 的實際契約無關
+（所以不受 `breaking-change` 標籤影響，永遠都跑），對著 `tests/fixtures/
+contract_gate/` 底下兩組固定的 fixture 跑同一套 `oasdiff` 設定——一組純
+加欄位（該放行）、一組刪必填欄位（該擋下）。守的是「閘門本身有沒有靜默失效」
+（例如哪天改壞了 `fail-on` 設定），不是這次 PR 改了什麼。
+
 ---
 
 ## 遇到 `password authentication failed` 怎麼辦

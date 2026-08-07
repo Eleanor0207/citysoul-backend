@@ -54,3 +54,46 @@ jobs:
           revision: contracts/openapi.json
           fail-on: ERR
           review: false
+
+  # #30 user story 21（Lead）：閘門的判定邏輯本身要有測試守著，不然「閘門
+  # 其實沒在擋」這種靜默失效不會被發現。跟上面那個 job 用同一個 action 版本、
+  # 同一組設定（fail-on: ERR），對著兩組固定的 fixture 跑，跟這次 PR 的
+  # 實際契約無關——所以不受 breaking-change 標籤影響，永遠都跑。
+  gate-self-test:
+    name: verify the gate actually catches breaking changes
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # 正控制組：純新增欄位不該被擋（user story 11）。這步驟失敗代表閘門
+      # 誤殺了合法的相容演進。
+      - name: additive-only change must pass
+        uses: oasdiff/oasdiff-action/breaking@v0.1.12
+        with:
+          base: tests/fixtures/contract_gate/safe_base.json
+          revision: tests/fixtures/contract_gate/safe_revision.json
+          fail-on: ERR
+          review: false
+
+      # 負控制組：刪掉必填欄位是教科書等級的破壞性變更，一定要被擋。用
+      # continue-on-error 把「這步驟失敗」轉成一個可以斷言的訊號——這裡
+      # job 該紅的情境是「它沒擋下來」，不是「它擋下來了」。
+      - name: known-breaking change must be caught
+        id: breaking_check
+        continue-on-error: true
+        uses: oasdiff/oasdiff-action/breaking@v0.1.12
+        with:
+          base: tests/fixtures/contract_gate/breaking_base.json
+          revision: tests/fixtures/contract_gate/breaking_revision.json
+          fail-on: ERR
+          review: false
+
+      - name: fail if the gate missed a known breaking change
+        if: steps.breaking_check.outcome != 'failure'
+        run: |
+          echo "::error::閘門對已知的破壞性變更 fixture 沒有擋下來——閘門本身可能靜默失效了。"
+          exit 1
