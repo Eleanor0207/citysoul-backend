@@ -42,6 +42,15 @@ from app.modules.brain.tts import GoogleCloudTTSClient, TTSClient
 # 一次——呼叫端不重複寫這個字串，改資源名稱只需要改這裡。
 DIALOGUE_QUOTA_RESOURCE = "dialogue_calls_daily"
 
+# 路由宣告實際會回傳的錯誤碼（issue #30）：讓 OpenAPI 契約看得到 401／403／
+# 404／429，而不是只有 SDD 散文裡才查得到。每支路由依自己實際會拋的組合
+# `{**_ERROR_401, **_ERROR_403, ...}`——集中定義成常數，逐支路由手key會漏，
+# 而且描述文字容易在不同端點之間不小心寫得不一致。
+_ERROR_401 = {401: {"model": schemas.ErrorResponse, "description": "缺少或無效的憑證"}}
+_ERROR_403 = {403: {"model": schemas.ErrorResponse, "description": "憑證有效，但不適用於這個資源"}}
+_ERROR_404 = {404: {"model": schemas.ErrorResponse, "description": "資源不存在或已下架"}}
+_ERROR_429 = {429: {"model": schemas.ErrorResponse, "description": "配額已用滿"}}
+
 router = APIRouter(prefix="/api/v1", tags=["body"])
 
 
@@ -134,7 +143,11 @@ def create_or_get_player(payload: schemas.PlayerCreateRequest, db: Session = Dep
     )
 
 
-@router.post("/sense", response_model=schemas.SenseResponse)
+@router.post(
+    "/sense",
+    response_model=schemas.SenseResponse,
+    responses={**_ERROR_401, **_ERROR_403, **_ERROR_404},
+)
 def sense(
     payload: schemas.SenseRequest,
     player_id: uuid.UUID = Depends(require_session_token),
@@ -176,7 +189,11 @@ def sense(
     )
 
 
-@router.post("/summon", response_model=schemas.SummonResponse)
+@router.post(
+    "/summon",
+    response_model=schemas.SummonResponse,
+    responses={**_ERROR_401, **_ERROR_403, **_ERROR_404},
+)
 def summon(
     payload: schemas.SummonRequest,
     player_id: uuid.UUID = Depends(require_session_token),
@@ -240,7 +257,7 @@ def _quest_list_item(row: models.QuestProgress) -> schemas.QuestListItem:
     )
 
 
-@router.get("/quests/daily", response_model=schemas.QuestListResponse)
+@router.get("/quests/daily", response_model=schemas.QuestListResponse, responses={**_ERROR_401})
 def list_daily_quests(
     player_id: uuid.UUID = Depends(require_session_token),
     db: Session = Depends(get_db),
@@ -256,7 +273,11 @@ def list_daily_quests(
     return schemas.QuestListResponse(quests=[_quest_list_item(row) for row in rows])
 
 
-@router.post("/quests/{quest_id}/complete", response_model=schemas.QuestCompleteResponse)
+@router.post(
+    "/quests/{quest_id}/complete",
+    response_model=schemas.QuestCompleteResponse,
+    responses={**_ERROR_401, **_ERROR_403, **_ERROR_404},
+)
 def complete_quest(
     quest_id: str,
     payload: schemas.QuestCompleteRequest,
@@ -281,7 +302,14 @@ def complete_quest(
     if encounter_token is None:
         raise HTTPException(status_code=401, detail="missing encounter token")
 
-    spirit_id = spirit_id_for_quest(quest_id)
+    try:
+        spirit_id = spirit_id_for_quest(quest_id)
+    except ValueError:
+        # 格式不符的 quest_id 沒有對應的任務可以完成——跟真的查不到那一列
+        # quest_progress 是同一種情況，都是 404，不該讓 ValueError 一路
+        # 往外拋變成 500（issue #30：路由宣告的錯誤碼要跟實作一致）。
+        raise HTTPException(status_code=404, detail="quest not found")
+
     encounter_player_id = require_encounter_token(spirit_id, encounter_token)
     if encounter_player_id != session_player_id:
         raise HTTPException(status_code=403, detail="token holder mismatch")
@@ -319,7 +347,11 @@ def complete_quest(
     )
 
 
-@router.get("/resonance/{spirit_id}", response_model=schemas.ResonanceQueryResponse)
+@router.get(
+    "/resonance/{spirit_id}",
+    response_model=schemas.ResonanceQueryResponse,
+    responses={**_ERROR_401, **_ERROR_404},
+)
 def get_resonance(
     spirit_id: str,
     player_id: uuid.UUID = Depends(require_session_token),
@@ -348,7 +380,7 @@ def get_resonance(
     )
 
 
-@router.get("/profile", response_model=schemas.ProfileResponse)
+@router.get("/profile", response_model=schemas.ProfileResponse, responses={**_ERROR_401})
 def get_profile(
     player_id: uuid.UUID = Depends(require_session_token),
     db: Session = Depends(get_db),
@@ -376,7 +408,11 @@ def get_profile(
     )
 
 
-@router.get("/players/me/memory-summary", response_model=schemas.MemorySummaryResponse)
+@router.get(
+    "/players/me/memory-summary",
+    response_model=schemas.MemorySummaryResponse,
+    responses={**_ERROR_401},
+)
 def get_memory_summary(
     player_id: uuid.UUID = Depends(require_session_token),
     db: Session = Depends(get_db),
@@ -413,6 +449,7 @@ def get_memory_summary(
     # `tts=None` 時整個欄位從 JSON 消失，不是序列化成 `"tts": null`——
     # 見 `schemas.DialogueResponse` 的說明。
     response_model_exclude_none=True,
+    responses={**_ERROR_401, **_ERROR_403, **_ERROR_404, **_ERROR_429},
 )
 def dialogue(
     place_id: str,
@@ -513,16 +550,27 @@ def dialogue(
     return schemas.DialogueResponse(reply_text=reply_text, source=source, tts=tts_result)
 
 
-@router.get("/spirits/{place_id}", response_model=schemas.SpiritResponse)
+@router.get(
+    "/spirits/{place_id}", response_model=schemas.SpiritResponse, responses={**_ERROR_404}
+)
 def get_spirit(place_id: str, db: Session = Depends(get_db)):
-    """對應對外 API 清單：GET /api/v1/spirits/{placeId}（Sprint1 先只回基本資料）。"""
+    """
+    對應對外 API 清單：GET /api/v1/spirits/{placeId}（Sprint1 先只回基本資料）。
+
+    `is_active=false` 也回 404（issue #30 補上，寫專屬測試檔時發現這裡漏了
+    這個檢查）——對齊 `/sense`／`/summon`／`/resonance/{spiritId}` 一致的
+    處理原則：下架的靈魂對玩家來說就是不存在，不該讓這支端點單獨露出一個
+    已下架靈魂的基本資料。
+    """
     spirit = db.query(models.Spirit).filter_by(spirit_id=place_id).first()
-    if not spirit:
+    if spirit is None or not spirit.is_active:
         raise HTTPException(status_code=404, detail="spirit not found")
     return spirit
 
 
-@router.get("/assets/{avatar_id}", response_model=schemas.AvatarAssetResponse)
+@router.get(
+    "/assets/{avatar_id}", response_model=schemas.AvatarAssetResponse, responses={**_ERROR_404}
+)
 def get_avatar_asset(avatar_id: str, db: Session = Depends(get_db)):
     """
     Unity Addressables catalog／bundle 版本查詢（issue #38，v2.1 §7.4）。

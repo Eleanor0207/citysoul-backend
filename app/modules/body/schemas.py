@@ -1,9 +1,23 @@
 import uuid
 from datetime import datetime
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.modules.brain.tts import TTSResult
+
+
+class ErrorResponse(BaseModel):
+    """
+    統一錯誤回應模型（issue #30）。
+
+    形狀對齊 FastAPI `HTTPException` 既有的 `{"detail": ...}`——**不改變任何
+    現有錯誤的實際 JSON 形狀**，只是讓契約描述它，讓 codegen 產出單一錯誤
+    DTO。`detail` 用 `Any`：多數端點是字串，配額超限（429）是物件
+    （`resource`／`limit`／`reset_at`），契約要能同時涵蓋兩種而不失真。
+    """
+
+    detail: Any
 
 
 class PlayerCreateRequest(BaseModel):
@@ -78,16 +92,22 @@ class SenseResponse(BaseModel):
     spirit_id: str
 
 
+QuestStatus = Literal["in_progress", "completed", "daily_limit_reached"]
+
+
 class QuestStateResponse(BaseModel):
     """
     SDD 第8.4節的 `quest` 欄位。
 
-    `status` 可能是 `in_progress` / `completed` / `daily_limit_reached`，
-    最後一個只存在於回應中，不是資料庫狀態（見 models.QuestProgress）。
+    `status` 是 `Literal`（issue #30）而不是裸 `str`——OpenAPI 因此產出真正
+    的 `enum`，Unity 端才有 enum 可解析（SDD v2.1 §11.2.1 硬規則5）。三個值
+    的語意分界不變：`in_progress`／`completed` 是資料庫狀態，
+    `daily_limit_reached` **只存在於 API 回應**，是查詢當下依 `attempts_date`
+    算出來的結果（見 `quests.effective_state`），不落地。
     """
 
     quest_id: str
-    status: str
+    status: QuestStatus
     attempts_today: int
 
 
@@ -134,6 +154,19 @@ class DialogueResponse(BaseModel):
     tts: TTSResult | None = None
 
 
+class OrientationInfo(BaseModel):
+    """
+    SDD v2.1 §10.2：3DoF 定向用的靈魂方位設定（issue #30）。
+
+    `bearing_deg`：相對召喚點的方位角，真北 0°、順時針。`height_offset_m`：
+    垂直偏移。兩者包成巢狀物件（不是攤平兩個欄位），對齊 SDD 的回應範例，
+    也讓客戶端能把「方位設定」整包傳給 `OrientationService`。
+    """
+
+    bearing_deg: float
+    height_offset_m: float
+
+
 class SpiritResponse(BaseModel):
     """
     `GET /api/v1/spirits/{placeId}` 的回應。
@@ -160,6 +193,42 @@ class SpiritResponse(BaseModel):
     # 就得同時改後端與發版客戶端。
     sense_radius_m: int = Field(validation_alias="sense_radius_meters")
     is_active: bool
+    orientation: OrientationInfo
+
+    @model_validator(mode="before")
+    @classmethod
+    def _nest_orientation(cls, data: Any) -> Any:
+        """
+        `bearing_deg`／`height_offset_m` 在 `Spirit` ORM 是攤平欄位（issue
+        #30：SDD 的回應範例要巢狀 `orientation`，但底層資料表沒有理由跟著
+        巢狀化——那兩個值只在這支 API 才需要包成一包）。這裡在驗證前把
+        ORM 物件轉成 dict、組出 `orientation`，其餘欄位名維持原樣讓既有的
+        `validation_alias` 映射繼續生效。
+        """
+        if isinstance(data, dict):
+            if "orientation" in data:
+                return data
+            return {
+                **data,
+                "orientation": {
+                    "bearing_deg": data.get("bearing_deg", 0.0),
+                    "height_offset_m": data.get("height_offset_m", 0.0),
+                },
+            }
+
+        return {
+            "spirit_id": data.spirit_id,
+            "display_name": data.display_name,
+            "latitude": data.latitude,
+            "longitude": data.longitude,
+            "summon_radius_meters": data.summon_radius_meters,
+            "sense_radius_meters": data.sense_radius_meters,
+            "is_active": data.is_active,
+            "orientation": {
+                "bearing_deg": data.bearing_deg,
+                "height_offset_m": data.height_offset_m,
+            },
+        }
 
 
 class QuestListItem(BaseModel):
@@ -172,7 +241,7 @@ class QuestListItem(BaseModel):
 
     quest_id: str
     spirit_id: str
-    status: str
+    status: QuestStatus  # 同 QuestStateResponse.status（issue #30），同一個 enum
     attempts_today: int
 
 

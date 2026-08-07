@@ -17,6 +17,7 @@ from sqlalchemy import (
     Column,
     Date,
     DateTime,
+    Float,
     ForeignKey,
     Identity,
     Index,
@@ -121,6 +122,15 @@ class Spirit(Base):
     summon_radius_meters = Column(Integer, nullable=False, default=50)
     sense_radius_meters = Column(Integer, nullable=False, default=150, server_default="150")
     is_active = Column(Boolean, nullable=False, default=True)
+    # SDD v2.1 §10.2：3DoF 定向用的方位設定（issue #30）。真北 0°、順時針；
+    # 預設 0 表示「還沒特別設定過」，不是「這個靈魂沒有方位」——3DoF 服務
+    # 收到 0 一樣會用，只是角色會固定朝向正北，不是缺角度資料的錯誤狀態。
+    #
+    # 型別刻意用 DOUBLE PRECISION（issue #30 明訂），不是 lat/lon 那種
+    # NUMERIC——這兩個值驅動的是視覺呈現，不是像 haversine 那樣拿來做
+    # 「50m 內才算在場」的規則判斷，浮點誤差在這裡不影響任何遊戲規則。
+    bearing_deg = Column(Float, nullable=False, default=0, server_default="0")
+    height_offset_m = Column(Float, nullable=False, default=0, server_default="0")
 
     __table_args__ = (
         UniqueConstraint("character_id", name="uq_spirits_character_id"),

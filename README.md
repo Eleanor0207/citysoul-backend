@@ -205,8 +205,31 @@ uv run python -m pytest
 時，測試仍然全綠（conftest 跑的是 migration，那個欄位根本不存在，而剛好沒有
 測試碰到它），要到部署才炸。
 
-CI **不需要任何 GCP 憑證**（ADR-0003）。Gemini 的真實呼叫測試在沒有憑證時
+CI **不需要任何 GCP 憑證**（ADR-0003）。Gemini／TTS 的真實呼叫測試在沒有憑證時
 自動 skip。三把 token 金鑰在 CI 用假值，但**必須兩兩不同**，有測試在守。
+
+### API 契約（issue #30）
+
+`contracts/openapi.json` 是後端與 `citysoul-client` 之間**受保護的正式契約**
+——不是 FastAPI 順手產出的副產品，是 commit 進 git、被 CI 守著的東西。
+
+改動任何 API 回應／請求形狀（新增／刪除欄位、改型別、改必填）之後：
+
+```bash
+uv run python -m scripts.generate_openapi_contract
+```
+
+重新產出並把 `contracts/openapi.json` 的變動一起 commit。忘記做這件事的話，
+`tests/test_api_contract.py::test_committed_snapshot_matches_freshly_generated_contract`
+會在本機 `pytest` 就紅，不用等 CI。
+
+**版本相容原則：只加不減。** 可以新增欄位；不得刪除或改名既有欄位、不得把
+既有的可選欄位變成必填。客戶端的 codegen 假設舊的 DTO 在新契約下仍然合法，
+拿掉或改壞既有欄位會讓它們的編譯期型別安全失去意義。真的需要破壞性變更時，
+PR 標上 `breaking-change` 並**同時**提交 `/api/v2` 路由——這是流程規範，由
+review 把關，CI 的 `contract-gate` job（比對 PR 前後的
+`contracts/openapi.json`，用 [oasdiff](https://github.com/oasdiff/oasdiff)）
+不會自動放行，需要人工確認這次異動是刻意的。
 
 ---
 

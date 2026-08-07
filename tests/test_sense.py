@@ -119,6 +119,10 @@ def test_get_spirit_wire_contract_is_independent_of_column_names(client, spirit)
 
     這個測試存在的意義是：下次有人「順手」把 schemas 的欄位名也改成跟 DB 一致
     的時候，它要變紅。要改的話，client 的 DTO 必須同一次一起改。
+
+    `orientation` 是 issue #30（SDD v2.1 §10.2）新增的巢狀物件，屬於
+    「只加不減」的相容演進，不是欄位改名——所以這裡把它加進期望集合，而不是
+    當成違反契約穩定性的訊號。
     """
     body = client.get(f"/api/v1/spirits/{spirit.spirit_id}").json()
 
@@ -130,6 +134,7 @@ def test_get_spirit_wire_contract_is_independent_of_column_names(client, spirit)
         "summon_radius_m",
         "sense_radius_m",
         "is_active",
+        "orientation",
     }
     assert body["place_id"] == spirit.spirit_id
     assert body["name"] == spirit.display_name

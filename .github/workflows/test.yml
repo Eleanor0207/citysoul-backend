@@ -20,26 +20,8 @@ jobs:
     runs-on: ubuntu-latest
 
     services:
-      # 跟 docker-compose.yml 同一個映像檔。用官方 postgres 映像檔的話
-      # `CREATE EXTENSION vector` 會失敗，而那是 brain.memory_embeddings 的前提。
-      #
-      # ⚠️ 這個映像檔沒有 PostGIS（見 issue #46）。等 districts 要做的時候，
-      # 這裡跟 docker-compose.yml 要一起換成自建映像檔。
-      db:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_USER: city_soul
-          POSTGRES_PASSWORD: city_soul_dev
-          POSTGRES_DB: city_soul
-        ports: ['5432:5432']
-        # 少了這個，後面的步驟會在 Postgres 還沒接受連線時就開始跑，
-        # 而失敗訊息會是「connection refused」，看起來像設定錯誤。
-        options: >-
-          --health-cmd "pg_isready -U city_soul"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
+      # Redis 還是直接拉官方映像檔——沒有自建的理由，只有 Postgres 需要
+      # 疊 PostGIS（見下方 build 步驟）。
       redis:
         image: redis:7-alpine
         ports: ['6379:6379']
@@ -64,9 +46,9 @@ jobs:
       SENSE_TOKEN_SECRET: ci-sense-secret
 
       # ⚠️ 刻意**沒有**任何 GCP 憑證（ADR-0003：不產生 service account 金鑰，
-      # 也不把金鑰塞進 secrets）。Gemini 的真實呼叫測試在沒有憑證時會自動 skip，
-      # 所以 CI 不需要碰 GCP。真的要在 CI 打 Vertex AI 的話，走 Workload
-      # Identity Federation 換發短期 token，不要加 secrets。
+      # 也不把金鑰塞進 secrets）。Gemini／TTS 的真實呼叫測試在沒有憑證時會
+      # 自動 skip，所以 CI 不需要碰 GCP。真的要在 CI 打 Vertex AI 的話，走
+      # Workload Identity Federation 換發短期 token，不要加 secrets。
 
     steps:
       - uses: actions/checkout@v7
@@ -76,6 +58,26 @@ jobs:
       - uses: astral-sh/setup-uv@v9.0.0
         with:
           enable-cache: true
+
+      # Postgres 改用手動 build + run，不是 `services:` 的 `image:`——那個
+      # 欄位只能拉現成映像檔，沒辦法先 build 自己的 Dockerfile.postgres
+      # （issue #46：官方 `pgvector/pgvector:pg16` 沒有 PostGIS，
+      # `brain.districts` 的地理圍欄跟這裡新增的 `is_point_in_polygon` 都
+      # 需要它；migration 0007 的 `CREATE EXTENSION postgis` 在純 pgvector
+      # 映像檔上會直接失敗）。跟 `docker-compose.yml` 用同一支 Dockerfile，
+      # 本機能跑的東西 CI 也要能跑，兩邊不該用不同的資料庫映像檔。
+      - name: build and start Postgres (pgvector + PostGIS)
+        run: |
+          docker build -t citysoul-postgres -f Dockerfile.postgres .
+          docker run -d --name citysoul-postgres -p 5432:5432 \
+            -e POSTGRES_USER=city_soul \
+            -e POSTGRES_PASSWORD=city_soul_dev \
+            -e POSTGRES_DB=city_soul \
+            citysoul-postgres
+          for i in $(seq 1 30); do
+            docker exec citysoul-postgres pg_isready -U city_soul && break
+            sleep 1
+          done
 
       # .python-version 鎖 3.12（psycopg[binary] 的 wheel 供應狀況，見 README）
       - run: uv sync --frozen
@@ -101,3 +103,27 @@ jobs:
         run: uv run python -m alembic check
 
       - run: uv run python -m pytest -q
+
+  # API 契約閘門（issue #30）。只在 PR 上跑：比對這次改動前後的
+  # `contracts/openapi.json`，抓破壞性變更（刪欄位／改型別／改必填）。
+  # 純新增欄位放行；閘門本身的核心判斷邏輯（快照是否過期）已經有本機
+  # `pytest` 守著（見 tests/test_api_contract.py），這裡只做「拿正確的兩份
+  # 快照去比對」這件事。
+  #
+  # ⚠️ 這個 job 尚未在真實 PR 上跑過（本 session 沒有 push 權限，無法驗證）
+  # ——語法照 oasdiff 官方文件寫，但請在第一次真的開 PR 時確認會不會噴。
+  contract-gate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+      - run: git fetch --depth=1 origin ${{ github.base_ref }}
+      - uses: oasdiff/oasdiff-action/breaking@v0
+        with:
+          base: 'origin/${{ github.base_ref }}:contracts/openapi.json'
+          revision: 'HEAD:contracts/openapi.json'
+          fail-on: ERR
+          github-token: ${{ github.token }}
