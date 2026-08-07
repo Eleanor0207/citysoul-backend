@@ -1,5 +1,6 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -157,3 +158,18 @@ class SpiritResponse(BaseModel):
     # 就得同時改後端與發版客戶端。
     sense_radius_m: int = Field(validation_alias="sense_radius_meters")
     is_active: bool
+
+
+class DailyEventResponse(BaseModel):
+    """
+    `GET /api/v1/spirits/{placeId}/daily-event` 的回應（S10，#26）。
+
+    `source` 區分內容從哪一層保底鏈路來的（今天的快取／前一天的快取／
+    人工預寫），純粹方便觀察，客戶端不需要據此改變行為——三種情況對
+    玩家來說都是「看到一段當日情境文字」，沒有分支要處理。
+    """
+
+    place_id: str
+    event_date: date
+    narrative_text: str
+    source: Literal["cached_today", "cached_previous_day", "fallback"]
