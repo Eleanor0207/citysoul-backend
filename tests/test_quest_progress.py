@@ -8,9 +8,10 @@ Ticket #15．任務進度資料表與狀態機判定邏輯（S4）。
 真的過去。走 API 的測試負責確認「這台狀態機真的被 `/summon` 接上了」。
 """
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app.modules.body import models
 from app.modules.body.encounter_tokens import ENCOUNTER_TOKEN_EXPIRE_SECONDS
@@ -358,3 +359,58 @@ def test_summon_still_issues_token_when_daily_limit_reached(
     assert body["encounter_token"]
     assert body["quest"]["status"] == STATUS_DAILY_LIMIT_REACHED
     assert body["quest"]["attempts_today"] == MAX_DAILY_ATTEMPTS
+
+
+def test_onetime_uniqueness_survives_the_surrogate_key(db_session, player, spirit):
+    """
+    0003 把主鍵從 `(player_id, quest_id)` 換成代理鍵 `progress_id`。代理鍵
+    本身不擋任何重複，唯一性改由 partial unique index 負責——所以要驗的是
+    「換完之後保護還在」，不是「換完之後跑得動」。
+
+    `issued_date IS NULL`（目前所有列都是）落在 `uq_quest_progress_onetime`，
+    語意跟舊的複合主鍵完全等價。
+    """
+    player_id, _ = player
+    quest_id = f"test-quest-{uuid.uuid4()}"
+    for _ in range(2):
+        db_session.add(
+            models.QuestProgress(
+                player_id=player_id,
+                quest_id=quest_id,
+                status="in_progress",
+                progress_value=0,
+                attempts_today=0,
+                attempts_date=date(2026, 8, 7),
+            )
+        )
+
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+    db_session.rollback()
+
+
+def test_same_quest_on_different_days_is_allowed(db_session, player, spirit):
+    """
+    每日任務的整個重點：同一個玩家同一個任務，不同天各一列。舊的複合主鍵
+    表達不了這件事，這也是換代理鍵的原因。
+    """
+    player_id, _ = player
+    quest_id = f"test-quest-{uuid.uuid4()}"
+    for day in (date(2026, 8, 6), date(2026, 8, 7)):
+        db_session.add(
+            models.QuestProgress(
+                player_id=player_id,
+                quest_id=quest_id,
+                issued_date=day,
+                status="in_progress",
+                progress_value=0,
+                attempts_today=0,
+                attempts_date=day,
+            )
+        )
+
+    db_session.commit()
+
+    rows = db_session.query(models.QuestProgress).filter_by(quest_id=quest_id).all()
+    assert len(rows) == 2
+    assert len({r.progress_id for r in rows}) == 2

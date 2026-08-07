@@ -54,7 +54,7 @@ def create_or_get_player(payload: schemas.PlayerCreateRequest, db: Session = Dep
     return schemas.PlayerResponse(
         player_id=player.player_id,
         device_id=player.device_id,
-        account_id=player.account_id,
+        account_id=player.auth_provider_id,
         created_at=player.created_at,
         session_token=session_token,
     )

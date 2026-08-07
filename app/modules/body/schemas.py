@@ -21,11 +21,22 @@ class PlayerCreateRequest(BaseModel):
 
 
 class PlayerResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    """
+    `POST /api/v1/players` 的回應。
+
+    `account_id` 是對外契約，對應 DB 的 `auth_provider_id`（0003 改的名）。
+    client 的 `PlayerDto` 用 `[JsonProperty("account_id")]` 寫死了這個 key。
+
+    綁定流程做起來的時候，這裡應該一併把 `auth_provider` 也吐出去——
+    只有「provider 那邊的 id」而不知道是哪一家 provider，資訊是不完整的。
+    那一次改動要連 client 一起發版。
+    """
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     player_id: uuid.UUID
     device_id: str
-    account_id: str | None
+    account_id: str | None = Field(validation_alias="auth_provider_id")
     created_at: datetime
     session_token: str
 

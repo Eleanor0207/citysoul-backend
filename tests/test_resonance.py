@@ -95,7 +95,10 @@ def test_first_award_creates_row(db_session, player, spirit):
         player_id=player, spirit_id=spirit.spirit_id
     ).one()
     assert row.resonance_value == 20
-    assert row.stage == 1
+    # 階段不存在資料庫裡（0003 刪掉了 stage 欄位）。這一列只該有 value；
+    # 階段永遠是從 value 算出來的。
+    assert not hasattr(row, "stage")
+    assert stage_for_value(row.resonance_value) == 1
 
 
 def test_awards_accumulate(db_session, player, spirit):

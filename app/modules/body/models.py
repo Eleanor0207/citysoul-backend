@@ -11,15 +11,21 @@ daily_event_cache／push_subscriptions 排在後面的 Sprint（對應 S10/S11�
 import uuid
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     Date,
     DateTime,
     ForeignKey,
+    Identity,
+    Index,
     Integer,
     Numeric,
     String,
+    Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
@@ -28,15 +34,52 @@ from app.core.database import Base
 
 
 class Player(Base):
-    """S6．匿名玩家身分系統。"""
+    """
+    S6．匿名玩家身分系統。
+
+    **匿名是預設，登入是附加資訊。** `device_id` 是身分，一定有值；
+    `display_name` / `auth_provider` / `auth_provider_id` / `avatar_url`
+    只有綁定過帳號的玩家才有。綁定是對既有列做 UPDATE，`player_id` 不變，
+    共鳴值與任務進度原地保留，不是建一個新玩家再搬資料。
+
+    唯一性用 partial unique index（見 migration 0003）而不是表上的
+    `UniqueConstraint`：匿名玩家全都是 `(NULL, NULL)`，而 Postgres 的 UNIQUE
+    不擋重複 NULL，寫成表級約束不會報錯，但也保護不到任何東西。
+    """
 
     __tablename__ = "players"
 
     player_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     device_id = Column(String(128), nullable=False, unique=True)  # 裝置本地身分
-    account_id = Column(String(128), nullable=True)  # 升級綁定帳號後才有值
+    display_name = Column(String(64), nullable=True)
+    auth_provider = Column(String(32), nullable=True)  # 'google' / 'apple' / 'email'
+    auth_provider_id = Column(String(128), nullable=True)
+    avatar_url = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    last_active_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    total_summons = Column(Integer, nullable=False, server_default="0", default=0)
+    notification_opt_in = Column(
+        Boolean, nullable=False, server_default="true", default=True
+    )
+
+    __table_args__ = (
+        # 半綁定狀態（有 provider 沒有 id，或反過來）在應用層沒有意義，
+        # 讓資料庫直接擋掉。
+        CheckConstraint(
+            "(auth_provider IS NULL) = (auth_provider_id IS NULL)",
+            name="ck_players_auth_pair",
+        ),
+        Index(
+            "uq_players_auth",
+            "auth_provider",
+            "auth_provider_id",
+            unique=True,
+            postgresql_where=text("auth_provider IS NOT NULL"),
+        ),
+    )
 
 
 class Spirit(Base):
@@ -83,12 +126,22 @@ class QuestProgress(Base):
     `status` 只有 `in_progress` / `completed` 兩個值。回應中出現的
     `daily_limit_reached` **不是**資料庫狀態，是「今天嘗試次數已用完」這個
     查詢當下才算得出來的結果——它跟日期有關，存進資料庫隔天就是錯的。
+
+    主鍵是代理鍵 `progress_id`，唯一性靠兩個 partial unique index（0003）：
+    `issued_date IS NULL` 的一次性任務唯一於 `(player_id, quest_id)`；
+    每日任務唯一於 `(player_id, quest_id, issued_date)`，不同天各一列。
+
+    `issued_date`（哪一天發的）跟 `attempts_date`（哪一天試的）是兩件事，
+    兩個都要。前者決定唯一性與過期，後者決定 `daily_limit_reached`。
     """
 
     __tablename__ = "quest_progress"
 
-    player_id = Column(UUID(as_uuid=True), ForeignKey("players.player_id"), primary_key=True)
-    quest_id = Column(String(64), primary_key=True)
+    progress_id = Column(BigInteger, Identity(always=False), primary_key=True)
+    player_id = Column(UUID(as_uuid=True), ForeignKey("players.player_id"), nullable=False)
+    quest_id = Column(String(64), nullable=False)
+    # daily 任務才有值；story／resonance_gated 為 NULL。
+    issued_date = Column(Date, nullable=True)
     status = Column(String(16), nullable=False, default="in_progress")
     progress_value = Column(Integer, nullable=False, default=0)
     attempts_today = Column(Integer, nullable=False, default=0)
@@ -102,14 +155,36 @@ class QuestProgress(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
+    __table_args__ = (
+        Index(
+            "uq_quest_progress_onetime",
+            "player_id",
+            "quest_id",
+            unique=True,
+            postgresql_where=text("issued_date IS NULL"),
+        ),
+        Index(
+            "uq_quest_progress_daily",
+            "player_id",
+            "quest_id",
+            "issued_date",
+            unique=True,
+            postgresql_where=text("issued_date IS NOT NULL"),
+        ),
+    )
+
 
 class Resonance(Base):
     """
     S5．玩家與單一城市靈魂之間的關係進度（SDD 第3.1節）。
 
-    `stage` 是 `resonance_value` 跨過 10/40/100 之後的結果，存下來只是為了
-    查詢方便；真正的事實來源是 `resonance_value`。兩者若對不上，以 value 為準
-    （見 `resonance.stage_for_value`）。
+    **階段不存欄位**，由 `resonance.stage_for_value()` 從 `resonance_value`
+    運行時算出（門檻 10/40/100，AC5.3）。0003 之前有一個 `stage` 欄位，但
+    `stage_for_value()` 每次都重算、從不讀它——一個永遠不被信任的快取欄位，
+    存在的唯一效果是讓下一個人誤用它。
+
+    `resonance_value` 本身也是可重算的：事實是 `resonance_events` 那本流水帳，
+    這裡只是加總結果。
     """
 
     __tablename__ = "resonance"
@@ -117,7 +192,6 @@ class Resonance(Base):
     player_id = Column(UUID(as_uuid=True), ForeignKey("players.player_id"), primary_key=True)
     spirit_id = Column(String(64), ForeignKey("spirits.spirit_id"), primary_key=True)
     resonance_value = Column(Integer, nullable=False, default=0)
-    stage = Column(Integer, nullable=False, default=0)
     last_updated_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )

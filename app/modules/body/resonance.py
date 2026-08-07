@@ -39,8 +39,8 @@ def stage_for_value(value: int) -> int:
     """
     共鳴值對應的階段：0（未達 10）／1（>=10）／2（>=40）／3（>=100）。
 
-    每次都從 value 重算，不信任 `resonance.stage` 欄位——那個欄位是為了查詢
-    方便才存的快取，value 才是事實來源。
+    每次都從 value 重算。0003 之前 `resonance` 有一個 `stage` 欄位，但這個
+    函式從來沒讀過它；那個欄位已經刪掉了，階段一律是算出來的。
     """
     return sum(1 for threshold in RESONANCE_THRESHOLDS if value >= threshold)
 
@@ -114,13 +114,12 @@ def apply_resonance(
         .first()
     )
     if row is None:
-        row = Resonance(player_id=player_uuid, spirit_id=spirit_id, resonance_value=0, stage=0)
+        row = Resonance(player_id=player_uuid, spirit_id=spirit_id, resonance_value=0)
         db.add(row)
 
     stage_before = stage_for_value(row.resonance_value)
     row.resonance_value += amount
     stage_after = stage_for_value(row.resonance_value)
-    row.stage = stage_after
 
     db.commit()
 
