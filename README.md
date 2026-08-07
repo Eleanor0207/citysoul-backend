@@ -94,12 +94,61 @@ log。ADC 拿到的是短期 token，沒有東西需要輪替，也沒有東西�
 uv run python -m scripts.init_db
 ```
 
-這支腳本會：
+這支腳本只做兩件事：
 
-1. 建立 `brain` schema（放腦袋模組的表，跟身體的表隔開，對應 WBS-API 決策4）
-2. 啟用 `vector` extension（先備好給 Sprint2 的 pgvector 表用）
-3. 建立 `players`／`spirits`／`brain.persona_cards` 三張表
-4. 塞入龍山寺垂直切片的 seed data（`spirits` 一筆 + 一張**未審核**的人格卡草稿）
+1. `alembic upgrade head` —— 建 `brain` schema、`vector` extension、所有的表
+2. 塞入龍山寺垂直切片的 seed data（一座城市、一個地標、一個角色、一版**未審核**的人格草稿）
+
+### schema 的唯一真相是 `migrations/versions/`
+
+**不要用 `Base.metadata.create_all()`，也不要在別的地方寫 `ALTER TABLE`。**
+以前 `init_db.py` 有一份手寫的冪等 ALTER 清單，當時就註明「只會愈長愈醜」——
+它長了一行就被 Alembic 取代掉了。
+
+`tests/conftest.py` 也是跑 migration 而不是 `create_all`。這是刻意的：用
+`create_all` 的話，測試永遠在驗「models 說 schema 該長怎樣」，而正式環境拿到
+的是 migration 的產物，**migration 寫錯了測試照樣全綠**。
+
+### 已經有資料的舊資料庫怎麼接上
+
+不需要砍掉重建。先宣告目前狀態，再往前跑：
+
+```bash
+uv run python -m alembic stamp 0001   # 0001 等同舊的 create_all，不改變任何東西
+uv run python -m alembic upgrade head
+```
+
+### 新增一支 migration
+
+```bash
+# 1. 先改 app/**/models.py
+# 2. 產生草稿（revision id 自己指定，照順序編號，不要用隨機 hash）
+uv run python -m alembic revision --autogenerate --rev-id 0006 -m "說明"
+# 3. **打開產生的檔案改過再用**（見下）
+# 4. 套用並確認 models 與資料庫一致
+uv run python -m alembic upgrade head
+uv run python -m alembic check     # 要看到 "No new upgrade operations detected"
+```
+
+> ⚠️ **autogenerate 的產出一定要人看過。** 它有兩個已知的盲點：
+>
+> - **看不出改名。** 把 `place_id` 改成 `spirit_id`，它會產生「drop 舊欄位 +
+>   add 新欄位」——資料就沒了。改名要自己寫成 `op.alter_column(...,
+>   new_column_name=...)`。
+> - **不會搬資料。** 換型別、拆表、補預設值，都要自己寫。
+>
+> 另外 `alembic.ini` **必須維持純 ASCII**：configparser 用系統編碼讀它，在
+> zh-TW Windows 上是 cp950，寫中文註解會在 alembic 啟動前就 `UnicodeDecodeError`。
+> 要寫說明就寫在 `migrations/env.py`（那個檔案是 UTF-8 讀的）。
+
+### 退回上一版
+
+```bash
+uv run python -m alembic downgrade -1
+```
+
+每一支 migration 都驗過可以來回。但 `0005` 的 downgrade 會把 `persona_cards`
+的**表**建回來、**資料不會**回來——人格內容的搬移是單向的。
 
 ## 5. 啟動服務
 
@@ -182,7 +231,7 @@ uv run python -m scripts.init_db
 | 檔案                                                        | 對應工作包                          | 說明                                                                                                  |
 | ----------------------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | `app/modules/body/models.py` `router.py` `schemas.py` | S6                                  | 匿名玩家身分：以 device_id 為唯一鍵，重複呼叫不重建                                                   |
-| `app/modules/brain/models.py` `loader.py`               | B3                                  | 人格卡放獨立`brain` schema；`is_active` 只能由人工審核流程 flip，程式碼裡沒有寫任何自動通過的路徑 |
+| `app/modules/brain/models.py` `loader.py`               | B3                                  | 人格三層（city／landmark／character）放獨立`brain` schema；`active` 只能由人工審核流程 flip，程式碼裡沒有寫任何自動通過的路徑 |
 | `app/core/redis_client.py`                                | B7                                  | 對話 session 的 key 命名慣例先定下來，Sprint3 的 Prompt 組裝引擎（B2）會直接呼叫這裡的`get_session` |
 | `app/db/seed.py`                                          | 對應 CONTEXT.md「封閉測試垂直切片」 | 刻意只 seed 龍山寺一筆，不要因為手滑就把十個首發靈魂建進來                                            |
 
@@ -191,4 +240,4 @@ uv run python -m scripts.init_db
 1. `spirits` 表已經有了，接著做 S2 在場驗證：收玩家 GPS，算跟 `summon_radius_m` 的距離
 2. B1 Vertex AI Gemini 串接：需要 GCP 專案 + 服務帳號金鑰，先去 GCP Console 開好專案
 3. B6：在 `brain` schema 底下加 `memory_embeddings` 表（`vector` extension 這次已經先啟用了，直接建表即可）
-4. 龍山寺的人格卡草稿目前 `is_active=False`，記得找人工審核流程之前先不要手動改成 True——這條是 CONTEXT.md「人格卡」定義的邊界，不是技術限制
+4. 龍山寺的人格草稿目前 `active=False`，記得找人工審核流程之前先不要手動改成 True——這條是 CONTEXT.md「人格卡」定義的邊界，不是技術限制。要在手機上 demo 請跑 `uv run python -m scripts.seed_spike`，那支腳本另建一版明確標記未審核的 version 2，主 seed 不動
