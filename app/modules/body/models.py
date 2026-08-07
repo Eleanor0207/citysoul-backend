@@ -305,3 +305,25 @@ class EncounterCollection(Base):
     __table_args__ = (
         UniqueConstraint("player_id", "place_id", name="uq_encounter_collections"),
     )
+
+
+class AvatarAsset(Base):
+    """
+    Unity Addressables remote catalog／bundle 的版本紀錄（issue #38，v2.1 §7.4）。
+
+    只存「目前指到哪個版本、URL 是什麼」，不存資產本身——資產打包（F6）跟
+    上傳都是客戶端／CI 的工作，這張表只是版本比對的單一真相來源，讓 F7
+    （下載與快取）能問「我快取的這版還是最新的嗎」而不用每次啟動都重抓整包。
+
+    `version` 是字串不是遞增整數：版本號的格式（時間戳、語意化版本、hash）
+    是資產產線的決定，不該被這張表的型別綁死。
+    """
+
+    __tablename__ = "avatar_assets"
+
+    avatar_id = Column(String(64), primary_key=True)
+    bundle_url = Column(Text, nullable=False)
+    version = Column(String(32), nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )

@@ -520,3 +520,22 @@ def get_spirit(place_id: str, db: Session = Depends(get_db)):
     if not spirit:
         raise HTTPException(status_code=404, detail="spirit not found")
     return spirit
+
+
+@router.get("/assets/{avatar_id}", response_model=schemas.AvatarAssetResponse)
+def get_avatar_asset(avatar_id: str, db: Session = Depends(get_db)):
+    """
+    Unity Addressables catalog／bundle 版本查詢（issue #38，v2.1 §7.4）。
+
+    不需要任何憑證——這是靜態資產的版本資訊，不是玩家資料。`bundle_url` 指向
+    哪裡（本機路徑、測試 bucket、正式 CDN）完全由 `avatar_assets` 資料列本身
+    決定，這支端點不關心也不驗證那個 URL 是不是真的可用（issue #38 AC4：
+    開發期不該被基礎建設進度卡住）。
+    """
+    asset = db.query(models.AvatarAsset).filter_by(avatar_id=avatar_id).first()
+    if asset is None:
+        raise HTTPException(status_code=404, detail="avatar asset not found")
+
+    return schemas.AvatarAssetResponse(
+        avatar_id=asset.avatar_id, bundle_url=asset.bundle_url, version=asset.version
+    )
