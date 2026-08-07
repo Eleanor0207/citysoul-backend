@@ -18,6 +18,8 @@ dependencies = [
     # B1 Vertex AI（ADR-0001）。憑證走 ADC，不需要額外的金鑰套件（ADR-0003）。
     "google-genai>=1.60",
     "alembic>=1.19.0",
+    "google-cloud-texttospeech>=2.37.0",
+    "google-cloud-storage>=3.13.1",
 ]
 
 [dependency-groups]

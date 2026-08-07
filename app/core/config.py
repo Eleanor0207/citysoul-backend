@@ -53,6 +53,22 @@ class Settings(BaseSettings):
     gemini_max_output_tokens: int = 256
     gemini_timeout_seconds: float = 8.0
 
+    # B10 Google Cloud TTS（issue #21）。同樣走 ADC，沒有憑證欄位。
+    #
+    # MVP 語言固定台灣繁體中文（CONTEXT.md）——語言／語音代碼是設定值、不是
+    # 從文字內容自動偵測，這樣「角色說什麼腔調」是一個看得見、可審核的決定，
+    # 不是模型猜出來的副作用。
+    tts_language_code: str = "cmn-TW"
+    tts_voice_name: str = "cmn-TW-Wavenet-A"
+    tts_timeout_seconds: float = 8.0
+
+    # 合成出來的音檔要有地方放才能回傳 URL（SDD：TTS 的媒體層是
+    #「Google Cloud TTS + Cloud Storage」）。跟 `app/config.py`（Secret
+    # Manager 版本，尚未接上任何程式碼）的 `citysoul-images` 是不同的桶——
+    # 那個放的是玩家拍照收藏，這個放的是系統合成的語音檔，權限與生命週期
+    # 沒有理由綁在一起管理。
+    gcs_tts_bucket: str = "citysoul-tts-audio"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 
