@@ -14,6 +14,7 @@ from app.modules.body.encounter_tokens import (
 )
 from app.modules.body.geo import haversine_distance_m
 from app.modules.body.quests import evaluate_on_summon
+from app.modules.body.quota import default_tier_id
 from app.modules.body.sense_tokens import issue_sense_token
 from app.modules.body.tokens import issue_session_token
 from app.modules.brain.greetings import match_canned_greeting
@@ -44,7 +45,11 @@ def create_or_get_player(payload: schemas.PlayerCreateRequest, db: Session = Dep
     player = existing
 
     if player is None:
-        player = models.Player(device_id=payload.device_id)
+        player = models.Player(
+            device_id=payload.device_id,
+            # 預設分級的真相是 usage_tiers.is_default，不是這裡寫死的字串。
+            usage_tier_id=default_tier_id(db),
+        )
         db.add(player)
         db.commit()
         db.refresh(player)

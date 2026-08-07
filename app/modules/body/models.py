@@ -61,6 +61,9 @@ class Player(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     total_summons = Column(Integer, nullable=False, server_default="0", default=0)
+    # 刻意沒有 server_default：「新玩家用哪個 tier」的答案是
+    # `usage_tiers.is_default`，在欄位上再放一個預設值等於同一件事有兩個真相。
+    usage_tier_id = Column(String(32), ForeignKey("usage_tiers.tier_id"), nullable=False)
     notification_opt_in = Column(
         Boolean, nullable=False, server_default="true", default=True
     )
@@ -224,4 +227,72 @@ class ResonanceEvent(Base):
         UniqueConstraint(
             "player_id", "source_type", "source_id", name="uq_resonance_events_source"
         ),
+    )
+
+
+class UsageTier(Base):
+    """
+    配額分級（AC8／#32）。
+
+    `is_default` 的「只能有一筆 TRUE」由 partial unique index 保證，不是靠
+    寫入時自己記得檢查。`BOOLEAN default=False` 擋不住兩筆都是 TRUE。
+    """
+
+    __tablename__ = "usage_tiers"
+
+    tier_id = Column(String(32), primary_key=True)
+    display_name = Column(String(64), nullable=False)
+    is_default = Column(Boolean, nullable=False, server_default="false", default=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index(
+            "uq_usage_tiers_default",
+            "is_default",
+            unique=True,
+            postgresql_where=text("is_default"),
+        ),
+    )
+
+
+class UsageTierLimit(Base):
+    """
+    每個分級底下各種資源的上限。
+
+    **一個 tier 對多筆 limit 的正規化設計**，不是每種資源開一個欄位。加一種新
+    配額只是 INSERT 一筆，不用 ALTER TABLE、不用重新部署。
+
+    計數器本身在 Redis（key 含 Asia/Taipei 日期），不落地 Postgres，所以沒有
+    對應的 usage 表。
+    """
+
+    __tablename__ = "usage_tier_limits"
+
+    tier_id = Column(String(32), ForeignKey("usage_tiers.tier_id"), primary_key=True)
+    resource_type = Column(String(32), primary_key=True)
+    limit_value = Column(Integer, nullable=False)
+
+
+class EncounterCollection(Base):
+    """
+    地標相遇收藏（AC5.2）。
+
+    `UNIQUE(player_id, place_id)` 是「每個地標只加一次共鳴值」的依靠，跟
+    `ResonanceEvent` 同一個道理：先寫、撞到約束才知道重複，不是先查再寫。
+
+    ⚠️ **不存原始照片，也不存 GPS 座標。** CONTEXT.md 的定義是「玩家、地標、
+    收藏時間、本機辨識結果與共鳴貢獻」；`recognized_label` 是裝置端辨識出來的
+    標籤，不是位置。加座標欄位進來，這張表就變成移動軌跡了。
+    """
+
+    __tablename__ = "encounter_collections"
+
+    collection_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    player_id = Column(UUID(as_uuid=True), ForeignKey("players.player_id"), nullable=False)
+    place_id = Column(String(64), ForeignKey("spirits.spirit_id"), nullable=False)
+    recognized_label = Column(String(128), nullable=True)
+    collected_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("player_id", "place_id", name="uq_encounter_collections"),
     )
