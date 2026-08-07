@@ -50,11 +50,11 @@ def make_spirit(db_session):
 
     def _make(lat: float, lon: float, radius: int = 50) -> models.Spirit:
         row = models.Spirit(
-            place_id=f"test-spirit-{uuid.uuid4()}",
-            name="測試地標",
+            spirit_id=f"test-spirit-{uuid.uuid4()}",
+            display_name="測試地標",
             latitude=lat,
             longitude=lon,
-            summon_radius_m=radius,
+            summon_radius_meters=radius,
             is_active=True,
         )
         db_session.add(row)
@@ -83,7 +83,7 @@ def _summon(client, token, spirit, *, lat=None, lon=None, **extra):
     return client.post(
         "/api/v1/summon",
         json={
-            "spirit_id": spirit.place_id,
+            "spirit_id": spirit.spirit_id,
             "latitude": lat if lat is not None else spirit.latitude,
             "longitude": lon if lon is not None else spirit.longitude,
             **extra,
@@ -118,7 +118,7 @@ def test_mock_location_log_contains_required_fields(client, player, make_spirit,
 
     # 驗收標準指名的四個欄位：player_id、spirit_id、偵測時間、偵測依據
     assert record.player_id == player_id
-    assert record.spirit_id == spirit.place_id
+    assert record.spirit_id == spirit.spirit_id
     datetime.fromisoformat(record.detected_at)  # 可解析的時間戳
     assert "is_mock_location=true" in record.basis
     assert "8.5" in record.basis
@@ -175,7 +175,7 @@ def test_two_rapid_summons_at_distant_landmarks_are_flagged(
 
     records = _anticheat_records(caplog, EVENT_IMPLAUSIBLE_SPEED)
     assert len(records) == 1
-    assert records[0].spirit_id == spirit_b.place_id
+    assert records[0].spirit_id == spirit_b.spirit_id
 
 
 def test_speed_log_contains_required_fields(client, player, make_spirit, caplog):
@@ -189,11 +189,11 @@ def test_speed_log_contains_required_fields(client, player, make_spirit, caplog)
     record = _anticheat_records(caplog, EVENT_IMPLAUSIBLE_SPEED)[0]
 
     assert record.player_id == player_id
-    assert record.spirit_id == spirit_b.place_id
+    assert record.spirit_id == spirit_b.spirit_id
     datetime.fromisoformat(record.detected_at)
     # 偵測依據要能讓人看懂為什麼被標記：速度、來源地標、距離、時間、門檻
     assert "km/h" in record.basis
-    assert spirit_a.place_id in record.basis
+    assert spirit_a.spirit_id in record.basis
 
 
 def test_repeated_summon_at_same_landmark_is_not_flagged(client, player, make_spirit, caplog):

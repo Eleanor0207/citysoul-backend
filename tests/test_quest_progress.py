@@ -51,11 +51,11 @@ def _today_taipei_at(hour: int) -> datetime:
 @pytest.fixture
 def spirit(db_session):
     row = models.Spirit(
-        place_id=f"test-spirit-{uuid.uuid4()}",
-        name="測試地標",
+        spirit_id=f"test-spirit-{uuid.uuid4()}",
+        display_name="測試地標",
         latitude=_LAT,
         longitude=_LON,
-        summon_radius_m=50,
+        summon_radius_meters=50,
         is_active=True,
     )
     db_session.add(row)
@@ -90,7 +90,7 @@ def _summon(client, token, spirit):
     return client.post(
         "/api/v1/summon",
         json={
-            "spirit_id": spirit.place_id,
+            "spirit_id": spirit.spirit_id,
             "latitude": spirit.latitude,
             "longitude": spirit.longitude,
         },
@@ -105,13 +105,13 @@ def test_first_summon_creates_in_progress_quest(db_session, player, spirit):
     now = datetime.now(timezone.utc)
 
     state = evaluate_on_summon(
-        db_session, player_id=player_id, spirit_id=spirit.place_id, now=now
+        db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=now
     )
 
     assert state.status == STATUS_IN_PROGRESS
     assert state.attempts_today == 0
 
-    row = _progress(db_session, player_id, spirit.place_id)
+    row = _progress(db_session, player_id, spirit.spirit_id)
     assert row is not None
     assert row.status == STATUS_IN_PROGRESS
     assert row.attempts_date == taipei_today(now)
@@ -125,9 +125,9 @@ def test_expired_token_counts_as_failed_attempt(db_session, player, spirit):
     player_id, _ = player
     start = datetime.now(timezone.utc)
 
-    evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.place_id, now=start)
+    evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=start)
     state = evaluate_on_summon(
-        db_session, player_id=player_id, spirit_id=spirit.place_id, now=start + _EXPIRED
+        db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=start + _EXPIRED
     )
 
     assert state.attempts_today == 1
@@ -143,11 +143,11 @@ def test_unexpired_token_does_not_count_as_failure(db_session, player, spirit):
     player_id, _ = player
     start = datetime.now(timezone.utc)
 
-    evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.place_id, now=start)
+    evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=start)
     state = evaluate_on_summon(
         db_session,
         player_id=player_id,
-        spirit_id=spirit.place_id,
+        spirit_id=spirit.spirit_id,
         now=start + timedelta(seconds=ENCOUNTER_TOKEN_EXPIRE_SECONDS - 1),
     )
 
@@ -159,13 +159,13 @@ def test_completed_quest_does_not_accrue_failures(db_session, player, spirit):
     player_id, _ = player
     start = datetime.now(timezone.utc)
 
-    evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.place_id, now=start)
-    row = _progress(db_session, player_id, spirit.place_id)
+    evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=start)
+    row = _progress(db_session, player_id, spirit.spirit_id)
     row.status = STATUS_COMPLETED
     db_session.commit()
 
     state = evaluate_on_summon(
-        db_session, player_id=player_id, spirit_id=spirit.place_id, now=start + _EXPIRED
+        db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=start + _EXPIRED
     )
 
     assert state.attempts_today == 0
@@ -176,11 +176,11 @@ def test_attempts_accumulate_across_repeated_timeouts(db_session, player, spirit
     player_id, _ = player
     now = datetime.now(timezone.utc)
 
-    evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.place_id, now=now)
+    evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=now)
     for expected in (1, 2):
         now += _EXPIRED
         state = evaluate_on_summon(
-            db_session, player_id=player_id, spirit_id=spirit.place_id, now=now
+            db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=now
         )
         assert state.attempts_today == expected
         assert state.status == STATUS_IN_PROGRESS
@@ -202,9 +202,9 @@ def test_third_failure_locks_out_for_the_day(db_session, player, spirit):
     player_id, _ = player
     start = _today_taipei_at(1)  # 台北凌晨，確保加幾次逾時不會跨過台北午夜
 
-    now = _burn_attempts(db_session, player_id, spirit.place_id, start, MAX_DAILY_ATTEMPTS)
+    now = _burn_attempts(db_session, player_id, spirit.spirit_id, start, MAX_DAILY_ATTEMPTS)
     state = evaluate_on_summon(
-        db_session, player_id=player_id, spirit_id=spirit.place_id, now=now
+        db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=now
     )
 
     assert state.attempts_today == MAX_DAILY_ATTEMPTS
@@ -216,10 +216,10 @@ def test_locked_out_state_issues_no_new_attempt(db_session, player, spirit):
     player_id, _ = player
     start = _today_taipei_at(1)
 
-    now = _burn_attempts(db_session, player_id, spirit.place_id, start, MAX_DAILY_ATTEMPTS)
-    evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.place_id, now=now)
+    now = _burn_attempts(db_session, player_id, spirit.spirit_id, start, MAX_DAILY_ATTEMPTS)
+    evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=now)
 
-    row = _progress(db_session, player_id, spirit.place_id)
+    row = _progress(db_session, player_id, spirit.spirit_id)
     assert row.current_token_issued_at is None
 
 
@@ -230,10 +230,10 @@ def test_daily_limit_reached_is_never_written_to_the_database(db_session, player
     player_id, _ = player
     start = _today_taipei_at(1)
 
-    now = _burn_attempts(db_session, player_id, spirit.place_id, start, MAX_DAILY_ATTEMPTS)
-    evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.place_id, now=now)
+    now = _burn_attempts(db_session, player_id, spirit.spirit_id, start, MAX_DAILY_ATTEMPTS)
+    evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=now)
 
-    row = _progress(db_session, player_id, spirit.place_id)
+    row = _progress(db_session, player_id, spirit.spirit_id)
     assert row.status == STATUS_IN_PROGRESS
 
 
@@ -246,17 +246,17 @@ def test_attempts_reset_after_taipei_midnight(db_session, player, spirit):
     player_id, _ = player
     yesterday = _today_taipei_at(1) - timedelta(days=1)
 
-    _burn_attempts(db_session, player_id, spirit.place_id, yesterday, MAX_DAILY_ATTEMPTS)
-    assert _progress(db_session, player_id, spirit.place_id).attempts_today == MAX_DAILY_ATTEMPTS
+    _burn_attempts(db_session, player_id, spirit.spirit_id, yesterday, MAX_DAILY_ATTEMPTS)
+    assert _progress(db_session, player_id, spirit.spirit_id).attempts_today == MAX_DAILY_ATTEMPTS
 
     today = datetime.now(timezone.utc)
     state = evaluate_on_summon(
-        db_session, player_id=player_id, spirit_id=spirit.place_id, now=today
+        db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=today
     )
 
     assert state.attempts_today == 0
     assert state.status == STATUS_IN_PROGRESS
-    assert _progress(db_session, player_id, spirit.place_id).attempts_date == taipei_today(today)
+    assert _progress(db_session, player_id, spirit.spirit_id).attempts_date == taipei_today(today)
 
 
 def test_day_boundary_is_taipei_midnight_not_utc(db_session, player, spirit):
@@ -279,9 +279,9 @@ def test_day_boundary_is_taipei_midnight_not_utc(db_session, player, spirit):
     assert late_yesterday.astimezone(timezone.utc).date() == early_today.astimezone(timezone.utc).date()
     assert taipei_today(late_yesterday) != taipei_today(early_today)
 
-    _burn_attempts(db_session, player_id, spirit.place_id, late_yesterday, MAX_DAILY_ATTEMPTS)
+    _burn_attempts(db_session, player_id, spirit.spirit_id, late_yesterday, MAX_DAILY_ATTEMPTS)
     state = evaluate_on_summon(
-        db_session, player_id=player_id, spirit_id=spirit.place_id, now=early_today
+        db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=early_today
     )
 
     assert state.attempts_today == 0
@@ -293,11 +293,11 @@ def test_attempts_are_per_spirit(db_session, player, spirit, client):
     """對 A 靈魂失敗三次，不該影響 B 靈魂的挑戰次數。"""
     player_id, _ = player
     other = models.Spirit(
-        place_id=f"test-spirit-{uuid.uuid4()}",
-        name="另一個地標",
+        spirit_id=f"test-spirit-{uuid.uuid4()}",
+        display_name="另一個地標",
         latitude=_LAT,
         longitude=_LON,
-        summon_radius_m=50,
+        summon_radius_meters=50,
         is_active=True,
     )
     db_session.add(other)
@@ -305,16 +305,16 @@ def test_attempts_are_per_spirit(db_session, player, spirit, client):
 
     try:
         start = _today_taipei_at(1)
-        _burn_attempts(db_session, player_id, spirit.place_id, start, MAX_DAILY_ATTEMPTS)
+        _burn_attempts(db_session, player_id, spirit.spirit_id, start, MAX_DAILY_ATTEMPTS)
 
         state = evaluate_on_summon(
-            db_session, player_id=player_id, spirit_id=other.place_id, now=start
+            db_session, player_id=player_id, spirit_id=other.spirit_id, now=start
         )
         assert state.attempts_today == 0
         assert state.status == STATUS_IN_PROGRESS
     finally:
         db_session.query(models.QuestProgress).filter_by(
-            player_id=player_id, quest_id=quest_id_for_spirit(other.place_id)
+            player_id=player_id, quest_id=quest_id_for_spirit(other.spirit_id)
         ).delete()
         db_session.delete(other)
         db_session.commit()
@@ -327,7 +327,7 @@ def test_summon_response_includes_quest_state(client, player, spirit):
 
     body = _summon(client, token, spirit).json()
 
-    assert body["quest"]["quest_id"] == quest_id_for_spirit(spirit.place_id)
+    assert body["quest"]["quest_id"] == quest_id_for_spirit(spirit.spirit_id)
     assert body["quest"]["status"] == STATUS_IN_PROGRESS
     assert body["quest"]["attempts_today"] == 0
 
@@ -337,7 +337,7 @@ def test_summon_persists_quest_progress(client, player, spirit, db_session):
 
     _summon(client, token, spirit)
 
-    assert _progress(db_session, player_id, spirit.place_id) is not None
+    assert _progress(db_session, player_id, spirit.spirit_id) is not None
 
 
 def test_summon_still_issues_token_when_daily_limit_reached(
@@ -349,7 +349,7 @@ def test_summon_still_issues_token_when_daily_limit_reached(
     """
     player_id, token = player
     start = _today_taipei_at(1)
-    _burn_attempts(db_session, player_id, spirit.place_id, start, MAX_DAILY_ATTEMPTS)
+    _burn_attempts(db_session, player_id, spirit.spirit_id, start, MAX_DAILY_ATTEMPTS)
 
     resp = _summon(client, token, spirit)
 

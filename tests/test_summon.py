@@ -27,11 +27,11 @@ def _offset_north(lat: float, meters: float) -> float:
 def spirit(db_session, unique_spirit_id):
     """建立一個測試專用的啟用中 spirit，測試結束後刪掉。"""
     row = models.Spirit(
-        place_id=unique_spirit_id,
-        name="測試地標",
+        spirit_id=unique_spirit_id,
+        display_name="測試地標",
         latitude=_SPIRIT_LAT,
         longitude=_SPIRIT_LON,
-        summon_radius_m=_RADIUS_M,
+        summon_radius_meters=_RADIUS_M,
         is_active=True,
     )
     db_session.add(row)
@@ -55,12 +55,12 @@ def _summon(client, token, spirit_id, lat, lon, **extra):
 # ── 401：Session Token 驗證 ────────────────────────────────────────────
 
 def test_missing_session_token_returns_401(client, spirit):
-    resp = _summon(client, None, spirit.place_id, _SPIRIT_LAT, _SPIRIT_LON)
+    resp = _summon(client, None, spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON)
     assert resp.status_code == 401
 
 
 def test_garbage_session_token_returns_401(client, spirit):
-    resp = _summon(client, "not-a-jwt", spirit.place_id, _SPIRIT_LAT, _SPIRIT_LON)
+    resp = _summon(client, "not-a-jwt", spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON)
     assert resp.status_code == 401
 
 
@@ -75,7 +75,7 @@ def test_token_signed_with_encounter_secret_is_rejected_as_session(client, spiri
         settings.encounter_token_secret,
         algorithm="HS256",
     )
-    resp = _summon(client, forged, spirit.place_id, _SPIRIT_LAT, _SPIRIT_LON)
+    resp = _summon(client, forged, spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON)
     assert resp.status_code == 401
 
 
@@ -86,18 +86,18 @@ def test_encounter_purpose_token_cannot_be_used_as_session(client, spirit):
         settings.session_token_secret,
         algorithm="HS256",
     )
-    resp = _summon(client, forged, spirit.place_id, _SPIRIT_LAT, _SPIRIT_LON)
+    resp = _summon(client, forged, spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON)
     assert resp.status_code == 401
 
 
 # ── 在場判定 ───────────────────────────────────────────────────────────
 
 def test_inside_radius_issues_encounter_token(client, session_token, spirit):
-    resp = _summon(client, session_token, spirit.place_id, _SPIRIT_LAT, _SPIRIT_LON)
+    resp = _summon(client, session_token, spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON)
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["spirit_id"] == spirit.place_id
+    assert body["spirit_id"] == spirit.spirit_id
     assert body["encounter_token"]
 
 
@@ -111,39 +111,39 @@ def test_just_inside_radius_boundary_passes(client, session_token, spirit):
     `<=` 由下面的 test_distance_exactly_equal_to_radius_passes 驗證。
     """
     lat = _offset_north(_SPIRIT_LAT, _RADIUS_M - 0.001)
-    resp = _summon(client, session_token, spirit.place_id, lat, _SPIRIT_LON)
+    resp = _summon(client, session_token, spirit.spirit_id, lat, _SPIRIT_LON)
     assert resp.status_code == 200
 
 
 def test_just_outside_radius_returns_403(client, session_token, spirit):
     lat = _offset_north(_SPIRIT_LAT, _RADIUS_M + 0.001)
-    resp = _summon(client, session_token, spirit.place_id, lat, _SPIRIT_LON)
+    resp = _summon(client, session_token, spirit.spirit_id, lat, _SPIRIT_LON)
     assert resp.status_code == 403
     assert "encounter_token" not in resp.json()
 
 
 def test_distance_exactly_equal_to_radius_passes(client, session_token, spirit, db_session):
     """
-    驗收標準的「含邊界值」：distance == summon_radius_m 要判定為在場成立。
+    驗收標準的「含邊界值」：distance == summon_radius_meters 要判定為在場成立。
 
     唯一能讓浮點距離精確等於半徑的情境，是把兩者都放在 0——半徑設 0、
     玩家站在地標正中心，haversine 回傳的是精確的 0.0。實作寫成 `<` 的話
     這個測試會回 403 而紅掉，寫成 `<=` 才會過。
     """
-    spirit.summon_radius_m = 0
+    spirit.summon_radius_meters = 0
     db_session.commit()
 
-    resp = _summon(client, session_token, spirit.place_id, _SPIRIT_LAT, _SPIRIT_LON)
+    resp = _summon(client, session_token, spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON)
     assert resp.status_code == 200
 
     # 同樣半徑 0，往外 1mm 就該被擋下（確認上面不是因為半徑 0 被特殊處理才過）
     lat = _offset_north(_SPIRIT_LAT, 0.001)
-    assert _summon(client, session_token, spirit.place_id, lat, _SPIRIT_LON).status_code == 403
+    assert _summon(client, session_token, spirit.spirit_id, lat, _SPIRIT_LON).status_code == 403
 
 
 def test_far_away_returns_403(client, session_token, spirit):
     """台北車站附近（離天文館約 5 公里）。"""
-    resp = _summon(client, session_token, spirit.place_id, 25.0478, 121.5170)
+    resp = _summon(client, session_token, spirit.spirit_id, 25.0478, 121.5170)
     assert resp.status_code == 403
 
 
@@ -159,28 +159,28 @@ def test_inactive_spirit_returns_404(client, session_token, spirit, db_session):
     db_session.commit()
 
     # 站在正中心也一樣 404——下架優先於在場判定。
-    resp = _summon(client, session_token, spirit.place_id, _SPIRIT_LAT, _SPIRIT_LON)
+    resp = _summon(client, session_token, spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON)
     assert resp.status_code == 404
 
 
 # ── Encounter Token 本身 ──────────────────────────────────────────────
 
 def test_encounter_token_claims_and_lifetime(client, session_token, spirit):
-    body = _summon(client, session_token, spirit.place_id, _SPIRIT_LAT, _SPIRIT_LON).json()
+    body = _summon(client, session_token, spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON).json()
 
     decoded = jwt.decode(
         body["encounter_token"], settings.encounter_token_secret, algorithms=["HS256"]
     )
 
     assert decoded["purpose"] == "encounter"
-    assert decoded["spirit_id"] == spirit.place_id
+    assert decoded["spirit_id"] == spirit.spirit_id
     assert decoded["exp"] - decoded["iat"] == 900
 
 
 def test_encounter_token_sub_is_the_calling_player(client, unique_device_id, spirit):
     player = client.post("/api/v1/players", json={"device_id": unique_device_id}).json()
     body = _summon(
-        client, player["session_token"], spirit.place_id, _SPIRIT_LAT, _SPIRIT_LON
+        client, player["session_token"], spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON
     ).json()
 
     decoded = jwt.decode(
@@ -191,7 +191,7 @@ def test_encounter_token_sub_is_the_calling_player(client, unique_device_id, spi
 
 def test_encounter_token_contains_no_gps_coordinates(client, session_token, spirit):
     """SDD 第6節表格：Encounter Token「內含GPS座標：否」。"""
-    body = _summon(client, session_token, spirit.place_id, _SPIRIT_LAT, _SPIRIT_LON).json()
+    body = _summon(client, session_token, spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON).json()
     decoded = jwt.decode(
         body["encounter_token"], settings.encounter_token_secret, algorithms=["HS256"]
     )
@@ -203,7 +203,7 @@ def test_encounter_token_not_verifiable_with_session_secret(client, session_toke
     """
     相遇憑證不能用 session 金鑰驗過——兩套簽章金鑰確實分開。
     """
-    body = _summon(client, session_token, spirit.place_id, _SPIRIT_LAT, _SPIRIT_LON).json()
+    body = _summon(client, session_token, spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON).json()
 
     with pytest.raises(jwt.InvalidSignatureError):
         jwt.decode(body["encounter_token"], settings.session_token_secret, algorithms=["HS256"])

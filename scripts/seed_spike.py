@@ -22,7 +22,7 @@ Spike 專用 seed：讓「走到地標→召喚→對話→看到回應」這條
 from datetime import datetime, timezone
 
 from app.core.database import SessionLocal
-from app.db.seed import LONGSHAN_PLACE_ID
+from app.db.seed import LONGSHAN_SPIRIT_ID
 from app.modules.brain.models import PersonaCard
 
 SPIKE_VERSION = 2
@@ -54,7 +54,7 @@ def seed_spike_persona_card() -> None:
     try:
         existing = (
             db.query(PersonaCard)
-            .filter_by(spirit_id=LONGSHAN_PLACE_ID, version=SPIKE_VERSION)
+            .filter_by(spirit_id=LONGSHAN_SPIRIT_ID, version=SPIKE_VERSION)
             .first()
         )
         if existing:
@@ -64,7 +64,7 @@ def seed_spike_persona_card() -> None:
         else:
             db.add(
                 PersonaCard(
-                    spirit_id=LONGSHAN_PLACE_ID,
+                    spirit_id=LONGSHAN_SPIRIT_ID,
                     version=SPIKE_VERSION,
                     content={
                         "schema_version": 1,

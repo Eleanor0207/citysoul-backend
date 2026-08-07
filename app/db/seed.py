@@ -18,29 +18,29 @@ from app.modules.brain.models import PersonaCard
 #
 # ⚠️ 這跟 SDD §7.3.1 的 Addressables key `spirit_longshan` 是**兩個不同的識別碼**：
 # 前者是後端的靈魂主鍵，後者是客戶端載入 3D 模型用的資源鍵。
-LONGSHAN_PLACE_ID = "longshan_temple"
+LONGSHAN_SPIRIT_ID = "longshan_temple"
 
 
 def seed_vertical_slice(db: Session) -> None:
-    if not db.query(Spirit).filter_by(place_id=LONGSHAN_PLACE_ID).first():
+    if not db.query(Spirit).filter_by(spirit_id=LONGSHAN_SPIRIT_ID).first():
         db.add(
             Spirit(
-                place_id=LONGSHAN_PLACE_ID,
-                name="艋舺龍山寺",
+                spirit_id=LONGSHAN_SPIRIT_ID,
+                display_name="艋舺龍山寺",
                 # 廟埕前廣場。CONTEXT.md「召喚點」要求安全、公開、不要求進入
                 # 受管制場館——所以定在廣場而不是殿內。
                 latitude=25.0373983,
                 longitude=121.4997318,
-                summon_radius_m=50,
-                sense_radius_m=150,
+                summon_radius_meters=50,
+                sense_radius_meters=150,
                 is_active=True,
             )
         )
 
-    if not db.query(PersonaCard).filter_by(spirit_id=LONGSHAN_PLACE_ID, version=1).first():
+    if not db.query(PersonaCard).filter_by(spirit_id=LONGSHAN_SPIRIT_ID, version=1).first():
         db.add(
             PersonaCard(
-                spirit_id=LONGSHAN_PLACE_ID,
+                spirit_id=LONGSHAN_SPIRIT_ID,
                 version=1,
                 # 對齊 SDD 第9節正式 schema。內容本身仍是工程佔位文字，
                 # 正式文字待敘事負責人審核撰寫後才會把 is_active 設 True。

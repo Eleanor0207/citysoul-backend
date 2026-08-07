@@ -15,9 +15,9 @@ from sqlalchemy import (
     Column,
     Date,
     DateTime,
-    Float,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     UniqueConstraint,
 )
@@ -47,20 +47,28 @@ class Spirit(Base):
     seed script 也只塞這一筆，不要一次把十個首發靈魂都建進來。
 
     兩個半徑是**兩段不同的體驗**，不是同一個值的寬鬆版本（SDD 第7.1／7.2節）：
-    `sense_radius_m`（150m）進入感應範圍，地標淡淡發光、可以隔空聊天；
-    `summon_radius_m`（50m）才算在場成立，可以召喚與挑戰任務。
+    `sense_radius_meters`（150m）進入感應範圍，地標淡淡發光、可以隔空聊天；
+    `summon_radius_meters`（50m）才算在場成立，可以召喚與挑戰任務。
+
+    欄位名跟對外 API 的欄位名**刻意不同**（DB 的 `spirit_id` 對上 JSON 的
+    `place_id`）。Unity client 的 DTO 寫死了那些 key，而資料庫欄位名沒有必須
+    跟 wire contract 一致的理由。對應寫在 `schemas.SpiritResponse`。
     """
 
     __tablename__ = "spirits"
 
-    place_id = Column(String(64), primary_key=True)
-    name = Column(String(128), nullable=False)
-    latitude = Column(Float, nullable=False)
-    longitude = Column(Float, nullable=False)
-    summon_radius_m = Column(Integer, nullable=False, default=50)
-    # server_default 而不是只有 default：既有資料列在 ALTER TABLE 時要拿到 150，
-    # 而 Python 端的 default 只在 ORM 建立新物件時生效，補不了舊資料。
-    sense_radius_m = Column(Integer, nullable=False, default=150, server_default="150")
+    spirit_id = Column(String(64), primary_key=True)
+    display_name = Column(String(128), nullable=False)
+    # NUMERIC(9,6) 而不是浮點數：距離判斷是遊戲規則的一部分（50m 內才在場），
+    # 規則的輸入值不該帶浮點誤差。6 位小數約 11 公分。
+    #
+    # `asdecimal=False` 讓 Python 端仍拿到 float。儲存是精確的十進位，但距離
+    # 計算（haversine）本來就是浮點數學，讀出來立刻轉 Decimal 只會逼得
+    # `geo.py` 到處做型別轉換，換不到任何精度。
+    latitude = Column(Numeric(9, 6, asdecimal=False), nullable=False)
+    longitude = Column(Numeric(9, 6, asdecimal=False), nullable=False)
+    summon_radius_meters = Column(Integer, nullable=False, default=50)
+    sense_radius_meters = Column(Integer, nullable=False, default=150, server_default="150")
     is_active = Column(Boolean, nullable=False, default=True)
 
 
@@ -107,7 +115,7 @@ class Resonance(Base):
     __tablename__ = "resonance"
 
     player_id = Column(UUID(as_uuid=True), ForeignKey("players.player_id"), primary_key=True)
-    spirit_id = Column(String(64), ForeignKey("spirits.place_id"), primary_key=True)
+    spirit_id = Column(String(64), ForeignKey("spirits.spirit_id"), primary_key=True)
     resonance_value = Column(Integer, nullable=False, default=0)
     stage = Column(Integer, nullable=False, default=0)
     last_updated_at = Column(
@@ -132,7 +140,7 @@ class ResonanceEvent(Base):
 
     resonance_event_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     player_id = Column(UUID(as_uuid=True), ForeignKey("players.player_id"), nullable=False)
-    spirit_id = Column(String(64), ForeignKey("spirits.place_id"), nullable=False)
+    spirit_id = Column(String(64), ForeignKey("spirits.spirit_id"), nullable=False)
     source_type = Column(String(32), nullable=False)  # 'encounter_collection' / 'quest'
     source_id = Column(String(128), nullable=False)
     amount = Column(Integer, nullable=False)  # encounter_collection=10；quest=20

@@ -121,7 +121,7 @@ def check_travel_speed(
     if previous is not None:
         _log_if_implausible(db, player_id=player_id, spirit=spirit, previous=previous, now=now)
 
-    _write_last_summon(player_id, spirit_id=spirit.place_id, now=now)
+    _write_last_summon(player_id, spirit_id=spirit.spirit_id, now=now)
 
 
 def _read_last_summon(player_id: uuid.UUID | str) -> dict | None:
@@ -145,11 +145,11 @@ def _log_if_implausible(
     previous: dict,
     now: datetime,
 ) -> None:
-    if previous.get("spirit_id") == spirit.place_id:
+    if previous.get("spirit_id") == spirit.spirit_id:
         return  # 同一個地標，沒有位移可言
 
     previous_spirit = (
-        db.query(models.Spirit).filter_by(place_id=previous.get("spirit_id")).first()
+        db.query(models.Spirit).filter_by(spirit_id=previous.get("spirit_id")).first()
     )
     if previous_spirit is None:
         return  # 上一個地標已被移除，無從比對
@@ -172,10 +172,10 @@ def _log_if_implausible(
     _emit(
         EVENT_IMPLAUSIBLE_SPEED,
         player_id=player_id,
-        spirit_id=spirit.place_id,
+        spirit_id=spirit.spirit_id,
         detected_at=now,
         basis=(
-            f"{speed_kmh:.0f} km/h from {previous_spirit.place_id} "
+            f"{speed_kmh:.0f} km/h from {previous_spirit.spirit_id} "
             f"({distance_km:.1f} km in {elapsed_seconds:.0f}s), "
             f"threshold {MAX_PLAUSIBLE_SPEED_KMH:.0f} km/h"
         ),
@@ -202,7 +202,7 @@ def run_observation_checks(
     try:
         check_mock_location(
             player_id=player_id,
-            spirit_id=spirit.place_id,
+            spirit_id=spirit.spirit_id,
             is_mock_location=is_mock_location,
             gps_accuracy_m=gps_accuracy_m,
             now=now,

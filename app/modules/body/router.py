@@ -80,7 +80,7 @@ def sense(
     共用的只有純函式（距離計算）與 session 驗證。token 的核發與驗證邏輯
     完全獨立，見 `sense_tokens.py` 的模組註解。
     """
-    spirit = db.query(models.Spirit).filter_by(place_id=payload.spirit_id).first()
+    spirit = db.query(models.Spirit).filter_by(spirit_id=payload.spirit_id).first()
 
     # 下架優先於距離判定：即使玩家就站在正中心，is_active=false 也是 404。
     # 對玩家來說，下架的靈魂跟不存在的靈魂沒有差別（對齊 /summon 的處理）。
@@ -91,14 +91,14 @@ def sense(
         payload.latitude, payload.longitude, spirit.latitude, spirit.longitude
     )
 
-    # distance <= sense_radius_m 才算進入感應範圍（含邊界值），比照第7.1節
+    # distance <= sense_radius_meters 才算進入感應範圍（含邊界值），比照第7.1節
     # 對召喚半徑的處理。
-    if distance_m > spirit.sense_radius_m:
+    if distance_m > spirit.sense_radius_meters:
         raise HTTPException(status_code=403, detail="not within sense radius")
 
     return schemas.SenseResponse(
-        sense_token=issue_sense_token(player_id, spirit.place_id),
-        spirit_id=spirit.place_id,
+        sense_token=issue_sense_token(player_id, spirit.spirit_id),
+        spirit_id=spirit.spirit_id,
     )
 
 
@@ -112,7 +112,7 @@ def summon(
     S2．在場驗證與召喚（SDD 第7.1／8.4節）。
 
     """
-    spirit = db.query(models.Spirit).filter_by(place_id=payload.spirit_id).first()
+    spirit = db.query(models.Spirit).filter_by(spirit_id=payload.spirit_id).first()
 
     # is_active=false 跟不存在一律回 404（對齊 SDD 第8.2節的 spirits 查詢）：
     # 下架的靈魂對玩家來說就是不存在，不需要區分成兩種錯誤讓人推敲。
@@ -123,9 +123,9 @@ def summon(
         payload.latitude, payload.longitude, spirit.latitude, spirit.longitude
     )
 
-    # SDD 第7.1節：distance <= summon_radius_m 才在場成立（含邊界值）。
+    # SDD 第7.1節：distance <= summon_radius_meters 才在場成立（含邊界值）。
     # 半徑固定不動態放寬（第7節決策1）。
-    if distance_m > spirit.summon_radius_m:
+    if distance_m > spirit.summon_radius_meters:
         raise HTTPException(status_code=403, detail="not within summon radius")
 
     # S3 觀察期（ticket #14）：只記 log，不阻擋，也不會讓例外往外拋。
@@ -142,11 +142,11 @@ def summon(
     # S4 任務狀態機（ticket #15）。即使今天的挑戰次數已用完，仍然照常核發
     # encounter_token——AC 明訂「在場驗證仍可通過（玩家可對話）」，被鎖住的
     # 只有任務挑戰，不是相遇本身。
-    quest_state = evaluate_on_summon(db, player_id=player_id, spirit_id=spirit.place_id)
+    quest_state = evaluate_on_summon(db, player_id=player_id, spirit_id=spirit.spirit_id)
 
     return schemas.SummonResponse(
-        encounter_token=issue_encounter_token(player_id, spirit.place_id),
-        spirit_id=spirit.place_id,
+        encounter_token=issue_encounter_token(player_id, spirit.spirit_id),
+        spirit_id=spirit.spirit_id,
         quest=schemas.QuestStateResponse(
             quest_id=quest_state.quest_id,
             status=quest_state.status,
@@ -187,7 +187,7 @@ def dialogue(
     if encounter_player_id != session_player_id:
         raise HTTPException(status_code=403, detail="token holder mismatch")
 
-    spirit = db.query(models.Spirit).filter_by(place_id=place_id).first()
+    spirit = db.query(models.Spirit).filter_by(spirit_id=place_id).first()
     if spirit is None or not spirit.is_active:
         raise HTTPException(status_code=404, detail="spirit not found")
 
@@ -201,7 +201,7 @@ def dialogue(
 @router.get("/spirits/{place_id}", response_model=schemas.SpiritResponse)
 def get_spirit(place_id: str, db: Session = Depends(get_db)):
     """對應對外 API 清單：GET /api/v1/spirits/{placeId}（Sprint1 先只回基本資料）。"""
-    spirit = db.query(models.Spirit).filter_by(place_id=place_id).first()
+    spirit = db.query(models.Spirit).filter_by(spirit_id=place_id).first()
     if not spirit:
         raise HTTPException(status_code=404, detail="spirit not found")
     return spirit

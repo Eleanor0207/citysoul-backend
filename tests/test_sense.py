@@ -27,14 +27,14 @@ def _offset_north(lat: float, meters: float) -> float:
     return lat + math.degrees(meters / EARTH_RADIUS_M)
 
 
-def _make_spirit(db_session, spirit_id, *, sense_radius_m=_SENSE_RADIUS_M, is_active=True):
+def _make_spirit(db_session, spirit_id, *, sense_radius_meters=_SENSE_RADIUS_M, is_active=True):
     row = models.Spirit(
-        place_id=spirit_id,
-        name="測試地標",
+        spirit_id=spirit_id,
+        display_name="測試地標",
         latitude=_SPIRIT_LAT,
         longitude=_SPIRIT_LON,
-        summon_radius_m=_SUMMON_RADIUS_M,
-        sense_radius_m=sense_radius_m,
+        summon_radius_meters=_SUMMON_RADIUS_M,
+        sense_radius_meters=sense_radius_meters,
         is_active=is_active,
     )
     db_session.add(row)
@@ -70,18 +70,18 @@ def _decode(token):
     return jwt.decode(token, settings.sense_token_secret, algorithms=["HS256"])
 
 
-# ── sense_radius_m 欄位 ────────────────────────────────────────────────
+# ── sense_radius_meters 欄位 ────────────────────────────────────────────────
 
 def test_spirit_has_sense_radius_defaulting_to_150(db_session, unique_spirit_id):
     """
-    沒有明講 sense_radius_m 時要是 150，不是 NULL 也不是 0。
+    沒有明講 sense_radius_meters 時要是 150，不是 NULL 也不是 0。
 
     0 特別危險：那會讓「玩家沒站在正中心就感應不到」變成靜默的行為，
     而不是一個看得出來的錯誤。
     """
     row = models.Spirit(
-        place_id=unique_spirit_id,
-        name="測試地標",
+        spirit_id=unique_spirit_id,
+        display_name="測試地標",
         latitude=_SPIRIT_LAT,
         longitude=_SPIRIT_LON,
         is_active=True,
@@ -91,7 +91,7 @@ def test_spirit_has_sense_radius_defaulting_to_150(db_session, unique_spirit_id)
     db_session.refresh(row)
 
     try:
-        assert row.sense_radius_m == 150
+        assert row.sense_radius_meters == 150
     finally:
         db_session.delete(row)
         db_session.commit()
@@ -102,10 +102,37 @@ def test_get_spirit_exposes_sense_radius(client, spirit):
     客戶端要靠這個欄位畫三段式標記（S7）。沒有它，客戶端只能把 150 寫死，
     之後調整半徑就得同時改後端與發版客戶端。
     """
-    body = client.get(f"/api/v1/spirits/{spirit.place_id}").json()
+    body = client.get(f"/api/v1/spirits/{spirit.spirit_id}").json()
 
     assert body["sense_radius_m"] == _SENSE_RADIUS_M
     assert body["summon_radius_m"] == _SUMMON_RADIUS_M
+
+
+def test_get_spirit_wire_contract_is_independent_of_column_names(client, spirit):
+    """
+    對外的 JSON key 跟資料庫欄位名脫鉤，而且**必須維持舊名字**。
+
+    0002 把 DB 欄位改成 `spirit_id` / `display_name` / `*_radius_meters`，
+    但 Unity client 的 `SpiritDto` 用 `[JsonProperty("place_id")]` 這類屬性
+    寫死了 JSON key——後端單方面改名的話，client 拿到的會是 null，而且不會有
+    任何錯誤，只是地圖上的靈魂沒有名字。
+
+    這個測試存在的意義是：下次有人「順手」把 schemas 的欄位名也改成跟 DB 一致
+    的時候，它要變紅。要改的話，client 的 DTO 必須同一次一起改。
+    """
+    body = client.get(f"/api/v1/spirits/{spirit.spirit_id}").json()
+
+    assert set(body) == {
+        "place_id",
+        "name",
+        "latitude",
+        "longitude",
+        "summon_radius_m",
+        "sense_radius_m",
+        "is_active",
+    }
+    assert body["place_id"] == spirit.spirit_id
+    assert body["name"] == spirit.display_name
 
 
 def test_sense_radius_is_wider_than_summon_radius(spirit):
@@ -113,18 +140,18 @@ def test_sense_radius_is_wider_than_summon_radius(spirit):
     兩個半徑是兩段不同的體驗，不是同一個值。感應範圍必須比召喚範圍大——
     反過來的話「先看到發光、走近才能召喚」這個核心流程根本走不通。
     """
-    assert spirit.sense_radius_m > spirit.summon_radius_m
+    assert spirit.sense_radius_meters > spirit.summon_radius_meters
 
 
 # ── 401：Session Token 驗證 ────────────────────────────────────────────
 
 def test_missing_session_token_returns_401(client, spirit):
-    resp = _sense(client, None, spirit.place_id, _SPIRIT_LAT, _SPIRIT_LON)
+    resp = _sense(client, None, spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON)
     assert resp.status_code == 401
 
 
 def test_garbage_session_token_returns_401(client, spirit):
-    resp = _sense(client, "not-a-jwt", spirit.place_id, _SPIRIT_LAT, _SPIRIT_LON)
+    resp = _sense(client, "not-a-jwt", spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON)
     assert resp.status_code == 401
 
 
@@ -138,7 +165,7 @@ def test_token_signed_with_encounter_secret_is_rejected_as_session(client, spiri
         settings.encounter_token_secret,
         algorithm="HS256",
     )
-    resp = _sense(client, forged, spirit.place_id, _SPIRIT_LAT, _SPIRIT_LON)
+    resp = _sense(client, forged, spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON)
     assert resp.status_code == 401
 
 
@@ -149,7 +176,7 @@ def test_token_signed_with_sense_secret_cannot_pose_as_session(client, spirit):
         settings.sense_token_secret,
         algorithm="HS256",
     )
-    resp = _sense(client, forged, spirit.place_id, _SPIRIT_LAT, _SPIRIT_LON)
+    resp = _sense(client, forged, spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON)
     assert resp.status_code == 401
 
 
@@ -159,18 +186,18 @@ def test_within_sense_radius_issues_token(client, spirit, player):
     _, token = player
     lat = _offset_north(_SPIRIT_LAT, 149)
 
-    resp = _sense(client, token, spirit.place_id, lat, _SPIRIT_LON)
+    resp = _sense(client, token, spirit.spirit_id, lat, _SPIRIT_LON)
 
     assert resp.status_code == 200
     assert set(resp.json()) == {"sense_token", "spirit_id"}
-    assert resp.json()["spirit_id"] == spirit.place_id
+    assert resp.json()["spirit_id"] == spirit.spirit_id
 
 
 def test_beyond_sense_radius_returns_403_without_token(client, spirit, player):
     _, token = player
     lat = _offset_north(_SPIRIT_LAT, 151)
 
-    resp = _sense(client, token, spirit.place_id, lat, _SPIRIT_LON)
+    resp = _sense(client, token, spirit.spirit_id, lat, _SPIRIT_LON)
 
     assert resp.status_code == 403
     assert "sense_token" not in resp.json()
@@ -185,10 +212,10 @@ def test_boundary_is_inclusive(client, db_session, unique_spirit_id, player):
     正中心是唯一能讓距離**精確等於**半徑的方式（同 #7 的做法）。
     """
     _, token = player
-    row = _make_spirit(db_session, unique_spirit_id, sense_radius_m=0)
+    row = _make_spirit(db_session, unique_spirit_id, sense_radius_meters=0)
 
     try:
-        resp = _sense(client, token, row.place_id, _SPIRIT_LAT, _SPIRIT_LON)
+        resp = _sense(client, token, row.spirit_id, _SPIRIT_LAT, _SPIRIT_LON)
         assert resp.status_code == 200
     finally:
         db_session.delete(row)
@@ -211,7 +238,7 @@ def test_inactive_spirit_returns_404_even_at_dead_centre(
     row = _make_spirit(db_session, unique_spirit_id, is_active=False)
 
     try:
-        resp = _sense(client, token, row.place_id, _SPIRIT_LAT, _SPIRIT_LON)
+        resp = _sense(client, token, row.spirit_id, _SPIRIT_LAT, _SPIRIT_LON)
         assert resp.status_code == 404
     finally:
         db_session.delete(row)
@@ -222,7 +249,7 @@ def test_inactive_spirit_returns_404_even_at_dead_centre(
 
 def test_token_lifetime_is_exactly_1800_seconds(client, spirit, player):
     _, token = player
-    resp = _sense(client, token, spirit.place_id, _SPIRIT_LAT, _SPIRIT_LON)
+    resp = _sense(client, token, spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON)
 
     decoded = _decode(resp.json()["sense_token"])
 
@@ -232,12 +259,12 @@ def test_token_lifetime_is_exactly_1800_seconds(client, spirit, player):
 
 def test_token_carries_purpose_and_spirit(client, spirit, player):
     player_id, token = player
-    resp = _sense(client, token, spirit.place_id, _SPIRIT_LAT, _SPIRIT_LON)
+    resp = _sense(client, token, spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON)
 
     decoded = _decode(resp.json()["sense_token"])
 
     assert decoded["purpose"] == "sense"
-    assert decoded["spirit_id"] == spirit.place_id
+    assert decoded["spirit_id"] == spirit.spirit_id
     assert decoded["sub"] == str(player_id)
 
 
@@ -249,7 +276,7 @@ def test_token_payload_contains_no_gps_coordinates(client, spirit, player):
     座標只在驗證期間使用，token 是驗證的結果，不該夾帶輸入。
     """
     _, token = player
-    resp = _sense(client, token, spirit.place_id, _SPIRIT_LAT, _SPIRIT_LON)
+    resp = _sense(client, token, spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON)
 
     decoded = _decode(resp.json()["sense_token"])
 
@@ -273,7 +300,7 @@ def test_three_secrets_are_all_distinct():
 
 def test_sense_token_cannot_be_decoded_with_session_secret(client, spirit, player):
     _, token = player
-    resp = _sense(client, token, spirit.place_id, _SPIRIT_LAT, _SPIRIT_LON)
+    resp = _sense(client, token, spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON)
     sense_token = resp.json()["sense_token"]
 
     with pytest.raises(jwt.InvalidSignatureError):
@@ -290,13 +317,13 @@ def test_require_sense_token_rejects_encounter_purpose(spirit):
     from app.modules.body.sense_tokens import require_sense_token
 
     forged = jwt.encode(
-        {"sub": str(uuid.uuid4()), "spirit_id": spirit.place_id, "purpose": "encounter"},
+        {"sub": str(uuid.uuid4()), "spirit_id": spirit.spirit_id, "purpose": "encounter"},
         settings.sense_token_secret,
         algorithm="HS256",
     )
 
     with pytest.raises(HTTPException) as exc:
-        require_sense_token(spirit.place_id, forged)
+        require_sense_token(spirit.spirit_id, forged)
 
     assert exc.value.status_code == 401
 
@@ -310,7 +337,7 @@ def test_require_sense_token_rejects_other_spirit(spirit):
     token = issue_sense_token(uuid.uuid4(), "some-other-spirit")
 
     with pytest.raises(HTTPException) as exc:
-        require_sense_token(spirit.place_id, token)
+        require_sense_token(spirit.spirit_id, token)
 
     assert exc.value.status_code == 403
 
@@ -335,7 +362,7 @@ def test_sense_does_not_touch_quest_progress(client, db_session, spirit, player)
     player_id, token = player
     assert _quest_row_count(db_session, player_id) == 0
 
-    resp = _sense(client, token, spirit.place_id, _SPIRIT_LAT, _SPIRIT_LON)
+    resp = _sense(client, token, spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON)
     assert resp.status_code == 200
 
     db_session.expire_all()
@@ -356,7 +383,7 @@ def test_summon_does_create_quest_progress_as_the_contrast(
     resp = client.post(
         "/api/v1/summon",
         json={
-            "spirit_id": spirit.place_id,
+            "spirit_id": spirit.spirit_id,
             "latitude": _SPIRIT_LAT,
             "longitude": _SPIRIT_LON,
         },
@@ -375,6 +402,6 @@ def test_summon_does_create_quest_progress_as_the_contrast(
 def test_sense_does_not_issue_an_encounter_token(client, spirit, player):
     """感應憑證換不到在場證明。回應裡不該出現 encounter_token。"""
     _, token = player
-    resp = _sense(client, token, spirit.place_id, _SPIRIT_LAT, _SPIRIT_LON)
+    resp = _sense(client, token, spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON)
 
     assert "encounter_token" not in resp.json()

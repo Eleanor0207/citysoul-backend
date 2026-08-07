@@ -23,13 +23,13 @@ _GREETING = "你來了。今晚雲不多。"
 @pytest.fixture
 def spirit(db_session, unique_spirit_id):
     row = models.Spirit(
-        place_id=unique_spirit_id, name="測試地標", latitude=_LAT, longitude=_LON,
-        summon_radius_m=50, is_active=True,
+        spirit_id=unique_spirit_id, display_name="測試地標", latitude=_LAT, longitude=_LON,
+        summon_radius_meters=50, is_active=True,
     )
     db_session.add(row)
     db_session.commit()
     yield row
-    db_session.query(PersonaCard).filter_by(spirit_id=row.place_id).delete()
+    db_session.query(PersonaCard).filter_by(spirit_id=row.spirit_id).delete()
     db_session.commit()
     db_session.delete(row)
     db_session.commit()
@@ -39,7 +39,7 @@ def spirit(db_session, unique_spirit_id):
 def active_card(db_session, spirit):
     db_session.add(
         PersonaCard(
-            spirit_id=spirit.place_id, version=1,
+            spirit_id=spirit.spirit_id, version=1,
             content={
                 "schema_version": 1,
                 "canned_greetings": [
@@ -67,7 +67,7 @@ def _say(client, spirit, session_token, encounter_token, text):
     if encounter_token:
         headers[ENCOUNTER_TOKEN_HEADER] = encounter_token
     return client.post(
-        f"/api/v1/spirits/{spirit.place_id}/dialogue",
+        f"/api/v1/spirits/{spirit.spirit_id}/dialogue",
         json={"user_input": text}, headers=headers,
     )
 
@@ -76,7 +76,7 @@ def _say(client, spirit, session_token, encounter_token, text):
 
 def test_missing_session_token_returns_401(client, spirit, player):
     pid, _ = player
-    enc = issue_encounter_token(pid, spirit.place_id)
+    enc = issue_encounter_token(pid, spirit.spirit_id)
     assert _say(client, spirit, None, enc, "你好").status_code == 401
 
 
@@ -110,14 +110,14 @@ def test_tokens_from_different_players_are_rejected(client, spirit, player):
     """
     _, sess_a = player
     stranger = uuid.uuid4()
-    enc_b = issue_encounter_token(stranger, spirit.place_id)
+    enc_b = issue_encounter_token(stranger, spirit.spirit_id)
     assert _say(client, spirit, sess_a, enc_b, "你好").status_code == 403
 
 
 def test_forged_encounter_token_with_session_secret_is_rejected(client, spirit, player):
     pid, sess = player
     forged = jwt.encode(
-        {"sub": str(pid), "spirit_id": spirit.place_id, "purpose": "encounter"},
+        {"sub": str(pid), "spirit_id": spirit.spirit_id, "purpose": "encounter"},
         settings.session_token_secret, algorithm="HS256",
     )
     assert _say(client, spirit, sess, forged, "你好").status_code == 401
@@ -127,14 +127,14 @@ def test_forged_encounter_token_with_session_secret_is_rejected(client, spirit, 
 
 def test_canned_greeting_hit(client, spirit, player, active_card):
     pid, sess = player
-    enc = issue_encounter_token(pid, spirit.place_id)
+    enc = issue_encounter_token(pid, spirit.spirit_id)
     body = _say(client, spirit, sess, enc, "你好").json()
     assert body == {"reply_text": _GREETING, "source": "canned"}
 
 
 def test_miss_returns_fallback(client, spirit, player, active_card):
     pid, sess = player
-    enc = issue_encounter_token(pid, spirit.place_id)
+    enc = issue_encounter_token(pid, spirit.spirit_id)
     body = _say(client, spirit, sess, enc, "圓頂是什麼時候蓋的？").json()
     assert body == {"reply_text": FALLBACK_REPLY, "source": "fallback"}
 
@@ -142,7 +142,7 @@ def test_miss_returns_fallback(client, spirit, player, active_card):
 def test_no_active_persona_card_falls_back(client, spirit, player):
     """人格卡是 is_active=False 的草稿時，一律 fallback，不拋例外。"""
     pid, sess = player
-    enc = issue_encounter_token(pid, spirit.place_id)
+    enc = issue_encounter_token(pid, spirit.spirit_id)
     body = _say(client, spirit, sess, enc, "你好").json()
     assert body["source"] == "fallback"
 
@@ -150,13 +150,13 @@ def test_no_active_persona_card_falls_back(client, spirit, player):
 @pytest.mark.parametrize("bad_input", ["", "   "])
 def test_blank_input_returns_422(client, spirit, player, bad_input):
     pid, sess = player
-    enc = issue_encounter_token(pid, spirit.place_id)
+    enc = issue_encounter_token(pid, spirit.spirit_id)
     assert _say(client, spirit, sess, enc, bad_input).status_code == 422
 
 
 def test_inactive_spirit_returns_404(client, spirit, player, db_session):
     pid, sess = player
-    enc = issue_encounter_token(pid, spirit.place_id)
+    enc = issue_encounter_token(pid, spirit.spirit_id)
     spirit.is_active = False
     db_session.commit()
     assert _say(client, spirit, sess, enc, "你好").status_code == 404
@@ -168,6 +168,6 @@ def test_response_has_no_tts_field(client, spirit, player, active_card):
     寫出無用的處理分支（SDD v2.1 §10.1 定義 tts 只含 audio_url）。
     """
     pid, sess = player
-    enc = issue_encounter_token(pid, spirit.place_id)
+    enc = issue_encounter_token(pid, spirit.spirit_id)
     body = _say(client, spirit, sess, enc, "你好").json()
     assert set(body) == {"reply_text", "source"}

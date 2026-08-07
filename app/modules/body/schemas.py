@@ -121,15 +121,28 @@ class DialogueResponse(BaseModel):
 
 
 class SpiritResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    """
+    `GET /api/v1/spirits/{placeId}` 的回應。
 
-    place_id: str
-    name: str
+    **欄位名是對外契約，跟資料庫欄位名脫鉤。** 0002 把 DB 欄位改成
+    `spirit_id` / `display_name` / `*_radius_meters` 之後，這裡靠
+    `validation_alias` 從 ORM 物件讀新名字，但輸出仍是舊的 JSON key——
+    Unity client 的 `SpiritDto` 用 `[JsonProperty("place_id")]` 寫死了那些
+    名字，改動等於要發一版客戶端。
+
+    改 DB 欄位名不需要動客戶端，這正是兩者脫鉤的用途；反過來說，**要改這裡的
+    欄位名時，必須連同 client 一起改**。
+    """
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    place_id: str = Field(validation_alias="spirit_id")
+    name: str = Field(validation_alias="display_name")
     latitude: float
     longitude: float
-    summon_radius_m: int
+    summon_radius_m: int = Field(validation_alias="summon_radius_meters")
     # 客戶端要靠這個畫出「150m 內淡淡發光、50m 內完全點亮」的三段式標記（S7）。
     # 少了它，客戶端只能把 150 寫死在自己這邊——那條路一旦走了，之後調整半徑
     # 就得同時改後端與發版客戶端。
-    sense_radius_m: int
+    sense_radius_m: int = Field(validation_alias="sense_radius_meters")
     is_active: bool

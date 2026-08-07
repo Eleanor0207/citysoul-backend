@@ -14,7 +14,7 @@ def haversine_distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> 
 
     對應 SDD 第7.1節：`distance = haversine(玩家GPS, spirit.latitude, spirit.longitude)`。
     這裡用球面近似（非橢球體），在召喚半徑 50m 這個尺度上誤差遠小於 GPS
-    本身的定位誤差，而 `summon_radius_m` 本來就是「已把 GPS 常見誤差考慮進去
+    本身的定位誤差，而 `summon_radius_meters` 本來就是「已把 GPS 常見誤差考慮進去
     的有效半徑」（SDD 第7節決策1），所以不需要更精確的 Vincenty 公式。
     """
     phi1 = math.radians(lat1)
