@@ -41,7 +41,7 @@ _STAGE_DESCRIPTIONS: dict[int, str] = {
 # 生成失敗、或 Gemini 回傳它自己的對話語境回退句時，換成的解鎖敘事專用回退
 # 文字（issue #25 AC3）。理由同 daily_event.py：對話用的回退句套進「解鎖了
 # 一段新故事」這個語境會文不對題。
-_FALLBACK_STORY_TEXT = "這段緣分還在繼續累積……這次沒能捕捉到完整的故事，但下次見面，它還在那裡。"
+FALLBACK_STORY_TEXT = "這段緣分還在繼續累積……這次沒能捕捉到完整的故事，但下次見面，它還在那裡。"
 
 
 class UnlockStory(BaseModel):
@@ -72,7 +72,7 @@ def generate_unlock_story(
     text = client.generate(prompt)
 
     if text == _GEMINI_CLIENT_FALLBACK:
-        text = _FALLBACK_STORY_TEXT
+        text = FALLBACK_STORY_TEXT
 
     return UnlockStory(stage=stage, story_text=text)
 

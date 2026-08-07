@@ -162,7 +162,7 @@ def test_completion_awards_twenty_resonance_from_zero_crosses_stage_one(
     body = _complete(client, quest_id, session_token=sess, encounter_token=enc).json()
 
     assert body["resonance_value"] == 20
-    assert body["newly_unlocked_stages"] == [1]
+    assert [s["stage"] for s in body["unlock_stories"]] == [1]
 
 
 def test_completion_from_thirty_crosses_stage_two(client, db_session, spirit, player):
@@ -180,7 +180,7 @@ def test_completion_from_thirty_crosses_stage_two(client, db_session, spirit, pl
     body = _complete(client, quest_id, session_token=sess, encounter_token=enc).json()
 
     assert body["resonance_value"] == 50
-    assert body["newly_unlocked_stages"] == [2]
+    assert [s["stage"] for s in body["unlock_stories"]] == [2]
 
 
 # ── 重複提交不重複加值（issue #34 AC6）───────────────────────────────────
@@ -206,9 +206,16 @@ def test_duplicate_submission_does_not_double_award(client, db_session, spirit, 
     assert count == 1
 
 
-# ── 回應形狀（issue #34 AC7）─────────────────────────────────────────────
+# ── 回應形狀（issue #34 AC7，issue #43 接上敘事後更新）───────────────────
+#
+# #34 原本的 AC7 是「quest_wrapper_text／unlock_story 回 null，敘事生成屬
+# #43」。#43 已經接上真正的生成（conftest 的 autouse fixture 預設用
+# `FakeGeminiClient` 頂著），這條測試的前提因此不再成立，改成驗證新的
+# 回應形狀——`quest_wrapper_text` 非空、`unlock_stories` 是 list。
+# `unlock_story`（單數、字串）這個舊欄位已經不存在，見
+# `schemas.QuestCompleteResponse` 的說明。
 
-def test_unlock_story_and_wrapper_text_are_null(client, db_session, spirit, player):
+def test_quest_wrapper_text_is_present(client, db_session, spirit, player):
     pid, sess = player
     _summon(client, sess, spirit)
     quest_id = quest_id_for_spirit(spirit.spirit_id)
@@ -216,5 +223,5 @@ def test_unlock_story_and_wrapper_text_are_null(client, db_session, spirit, play
 
     body = _complete(client, quest_id, session_token=sess, encounter_token=enc).json()
 
-    assert body["quest_wrapper_text"] is None
-    assert body["unlock_story"] is None
+    assert body["quest_wrapper_text"]
+    assert "unlock_story" not in body

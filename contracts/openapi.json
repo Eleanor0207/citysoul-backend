@@ -274,15 +274,8 @@
         "type": "object"
       },
       "QuestCompleteResponse": {
-        "description": "issue #34：本票刻意讓 `quest_wrapper_text`／`unlock_story` 回 `null`——\n那兩個需要腦袋生成（B11／B2），屬於 #43。SDD §7.5 本來就允許它們是\n`null`，這是合法的完整回應，不是半成品。",
+        "description": "issue #34（前半：確定性規則判定完成 ＋ 共鳴入帳）／#43（後半：接上敘事\n包裝與解鎖故事）。\n\n`unlock_stories` 是 **list**，不是單一 `unlock_story | null`——issue #34\n的原始回應範例只想到「跨一個門檻」的情況，但 #43 AC3 明訂一次入帳跨過\n多個門檻時每個 stage 都要各有一段故事（`resonance.ResonanceResult\n.newly_unlocked_stages` 本身也是 list，同一個理由：只取最後一個會讓\n中間那段靜默消失）。空 list 就是「沒跨門檻」，不需要另外一個\n`newly_unlocked_stages` 欄位重複同一件事——每個 `UnlockStory.stage`\n已經帶著這個資訊。",
         "properties": {
-          "newly_unlocked_stages": {
-            "items": {
-              "type": "integer"
-            },
-            "title": "Newly Unlocked Stages",
-            "type": "array"
-          },
           "quest_wrapper_text": {
             "anyOf": [
               {
@@ -298,16 +291,12 @@
             "title": "Resonance Value",
             "type": "integer"
           },
-          "unlock_story": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Unlock Story"
+          "unlock_stories": {
+            "items": {
+              "$ref": "#/components/schemas/UnlockStory"
+            },
+            "title": "Unlock Stories",
+            "type": "array"
           }
         },
         "required": [
@@ -615,6 +604,24 @@
         "title": "TTSResult",
         "type": "object"
       },
+      "UnlockStory": {
+        "properties": {
+          "stage": {
+            "title": "Stage",
+            "type": "integer"
+          },
+          "story_text": {
+            "title": "Story Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage",
+          "story_text"
+        ],
+        "title": "UnlockStory",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "loc": {
@@ -870,7 +877,7 @@
     },
     "/api/v1/quests/{quest_id}/complete": {
       "post": {
-        "description": "S4／S5．任務完成前半：狀態機寫入 ＋ 共鳴入帳（issue #34，SDD §7.5 前半）。\n\n只接受 Encounter Token（**不接受 Sense**，SDD 第6節）：完成任務需要「真的\n在場」，感應範圍不夠格。刻意不比照 dialogue 端點呼叫\n`_require_presence_token`——那支函式會接受 Sense 當替代，這裡不行，用\n共用邏輯反而會不小心放寬這條規則。\n\n`payload.completion_evidence` 不驗證內容：完成條件由前端的可驗證微任務\n邏輯保證，這支端點只負責記帳，不重新判定任務有沒有完成。\n\n刻意**不呼叫任何腦袋模組**（issue #34 AC3）：`quest_wrapper_text`／\n`unlock_story` 這裡固定回 `None`，敘事生成是 #43 的範圍。",
+        "description": "S4／S5／B11／B2．任務完成，含敘事包裝（issue #34 前半 ＋ #43 後半，\nSDD §7.5）。\n\n```\n驗完成（後端確定性規則，不是 LLM）→ 寫 quest_progress → 共鳴入帳\n  → 若跨過門檻：B11 generate_unlock_story（可能多次，見下方）\n  → B2 generate_quest_wrapper\n```\n\n只接受 Encounter Token（**不接受 Sense**，SDD 第6節）：完成任務需要「真的\n在場」，感應範圍不夠格。刻意不比照 dialogue 端點呼叫\n`_require_presence_token`——那支函式會接受 Sense 當替代，這裡不行，用\n共用邏輯反而會不小心放寬這條規則。\n\n`payload.completion_evidence` 不驗證內容：完成條件由前端的可驗證微任務\n邏輯保證，這支端點只負責記帳，不重新判定任務有沒有完成。\n\n**v2.1 §6.4 硬規則**：身體先寫完自己的表、再呼叫腦袋——`quest_progress`\n與 `resonance` 的寫入（含 commit）全部發生在下面任何一次 `gemini_client`\n呼叫之前。順序顛倒的話，腦袋看到的 stage 可能跟資料庫最終落地的值不\n一致（issue #43 AC：資料庫寫入一定發生在腦袋呼叫之前）。\n\n敘事生成（`generate_unlock_story`／`generate_quest_wrapper`）包在\n`try/except` 裡：任務已經完成、共鳴已經入帳，這兩個呼叫只是「把結果講\n成故事」，講失敗了不能讓玩家的進度消失（issue #43）。`GeminiClient`\n本身的契約是「呼叫失敗也不拋例外」，但這裡仍然多包一層——敘事生成的\n測試需要能注入「真的會拋例外」的 fake 來驗證這個防線本身有效，不能\n只靠信任下游永遠遵守契約。",
         "operationId": "complete_quest_api_v1_quests__quest_id__complete_post",
         "parameters": [
           {

@@ -35,8 +35,12 @@ from app.modules.brain.gemini import GeminiClient, VertexAIGeminiClient
 from app.modules.brain.greetings import match_canned_greeting
 from app.modules.brain.models import MemoryEmbedding
 from app.modules.brain.prompt_builder import assemble_dialogue_prompt
+from app.modules.brain.quest_wrapper import FALLBACK_WRAPPER_TEXT as _QUEST_WRAPPER_FALLBACK
+from app.modules.brain.quest_wrapper import generate_quest_wrapper
 from app.modules.brain.safety import GeminiSafetyChecker, SafetyChecker, enforce_safety_boundary
 from app.modules.brain.tts import GoogleCloudTTSClient, TTSClient
+from app.modules.brain.unlock_story import FALLBACK_STORY_TEXT as _UNLOCK_STORY_FALLBACK
+from app.modules.brain.unlock_story import UnlockStory, generate_unlock_story
 
 # usage_tier_limits 已種好的 resource_type（migration 0004）。只在這裡出現
 # 一次——呼叫端不重複寫這個字串，改資源名稱只需要改這裡。
@@ -283,10 +287,18 @@ def complete_quest(
     payload: schemas.QuestCompleteRequest,
     session_player_id: uuid.UUID = Depends(require_session_token),
     encounter_token: str | None = Header(default=None, alias=ENCOUNTER_TOKEN_HEADER),
+    gemini_client: GeminiClient = Depends(get_gemini_client),
     db: Session = Depends(get_db),
 ):
     """
-    S4／S5．任務完成前半：狀態機寫入 ＋ 共鳴入帳（issue #34，SDD §7.5 前半）。
+    S4／S5／B11／B2．任務完成，含敘事包裝（issue #34 前半 ＋ #43 後半，
+    SDD §7.5）。
+
+    ```
+    驗完成（後端確定性規則，不是 LLM）→ 寫 quest_progress → 共鳴入帳
+      → 若跨過門檻：B11 generate_unlock_story（可能多次，見下方）
+      → B2 generate_quest_wrapper
+    ```
 
     只接受 Encounter Token（**不接受 Sense**，SDD 第6節）：完成任務需要「真的
     在場」，感應範圍不夠格。刻意不比照 dialogue 端點呼叫
@@ -296,8 +308,17 @@ def complete_quest(
     `payload.completion_evidence` 不驗證內容：完成條件由前端的可驗證微任務
     邏輯保證，這支端點只負責記帳，不重新判定任務有沒有完成。
 
-    刻意**不呼叫任何腦袋模組**（issue #34 AC3）：`quest_wrapper_text`／
-    `unlock_story` 這裡固定回 `None`，敘事生成是 #43 的範圍。
+    **v2.1 §6.4 硬規則**：身體先寫完自己的表、再呼叫腦袋——`quest_progress`
+    與 `resonance` 的寫入（含 commit）全部發生在下面任何一次 `gemini_client`
+    呼叫之前。順序顛倒的話，腦袋看到的 stage 可能跟資料庫最終落地的值不
+    一致（issue #43 AC：資料庫寫入一定發生在腦袋呼叫之前）。
+
+    敘事生成（`generate_unlock_story`／`generate_quest_wrapper`）包在
+    `try/except` 裡：任務已經完成、共鳴已經入帳，這兩個呼叫只是「把結果講
+    成故事」，講失敗了不能讓玩家的進度消失（issue #43）。`GeminiClient`
+    本身的契約是「呼叫失敗也不拋例外」，但這裡仍然多包一層——敘事生成的
+    測試需要能注入「真的會拋例外」的 fake 來驗證這個防線本身有效，不能
+    只靠信任下游永遠遵守契約。
     """
     if encounter_token is None:
         raise HTTPException(status_code=401, detail="missing encounter token")
@@ -341,9 +362,26 @@ def complete_quest(
         amount=AMOUNT_QUEST,
     )
 
+    unlock_stories: list[UnlockStory] = []
+    for stage in result.newly_unlocked_stages:
+        try:
+            unlock_stories.append(
+                generate_unlock_story(str(session_player_id), spirit_id, stage, gemini_client)
+            )
+        except Exception:  # noqa: BLE001
+            # 敘事失敗不能讓已經跨過的門檻在回應裡消失——用回退文字頂替，
+            # 不是整段拿掉。玩家的共鳴值已經是真的跨過去了。
+            unlock_stories.append(UnlockStory(stage=stage, story_text=_UNLOCK_STORY_FALLBACK))
+
+    try:
+        wrapper_text = generate_quest_wrapper(str(session_player_id), quest_id, gemini_client)
+    except Exception:  # noqa: BLE001
+        wrapper_text = _QUEST_WRAPPER_FALLBACK
+
     return schemas.QuestCompleteResponse(
+        quest_wrapper_text=wrapper_text,
         resonance_value=result.resonance_value,
-        newly_unlocked_stages=result.newly_unlocked_stages,
+        unlock_stories=unlock_stories,
     )
 
 

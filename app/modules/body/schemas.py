@@ -5,6 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.modules.brain.tts import TTSResult
+from app.modules.brain.unlock_story import UnlockStory
 
 
 class ErrorResponse(BaseModel):
@@ -264,18 +265,21 @@ class QuestCompleteRequest(BaseModel):
 
 class QuestCompleteResponse(BaseModel):
     """
-    issue #34：本票刻意讓 `quest_wrapper_text`／`unlock_story` 回 `null`——
-    那兩個需要腦袋生成（B11／B2），屬於 #43。SDD §7.5 本來就允許它們是
-    `null`，這是合法的完整回應，不是半成品。
+    issue #34（前半：確定性規則判定完成 ＋ 共鳴入帳）／#43（後半：接上敘事
+    包裝與解鎖故事）。
+
+    `unlock_stories` 是 **list**，不是單一 `unlock_story | null`——issue #34
+    的原始回應範例只想到「跨一個門檻」的情況，但 #43 AC3 明訂一次入帳跨過
+    多個門檻時每個 stage 都要各有一段故事（`resonance.ResonanceResult
+    .newly_unlocked_stages` 本身也是 list，同一個理由：只取最後一個會讓
+    中間那段靜默消失）。空 list 就是「沒跨門檻」，不需要另外一個
+    `newly_unlocked_stages` 欄位重複同一件事——每個 `UnlockStory.stage`
+    已經帶著這個資訊。
     """
 
     quest_wrapper_text: str | None = None
     resonance_value: int
-    unlock_story: str | None = None
-    # 跨過的門檻階段清單（issue #34 AC5）。SDD 的回應範例沒列這個欄位名，
-    # 但 AC 明訂要「回報新達成 stage」——沿用 `resonance.ResonanceResult`
-    # 同樣的欄位名，維持服務層與 API 層對「跨門檻」這件事用同一種說法。
-    newly_unlocked_stages: list[int] = Field(default_factory=list)
+    unlock_stories: list[UnlockStory] = Field(default_factory=list)
 
 
 class ResonanceQueryResponse(BaseModel):
