@@ -105,6 +105,11 @@ class Spirit(Base):
 
     spirit_id = Column(String(64), primary_key=True)
     display_name = Column(String(128), nullable=False)
+    # 值關聯到 brain.characters / brain.landmark_souls，**刻意不建外鍵**
+    # （WBS-API 決策4：身體與腦袋的表不建跨 schema 外鍵）。
+    # UNIQUE 強制一個地標靈魂只有一種人格；要支援人格變體時移除它、改中介表。
+    character_id = Column(String(64), nullable=True)
+    landmark_id = Column(String(64), nullable=True)
     # NUMERIC(9,6) 而不是浮點數：距離判斷是遊戲規則的一部分（50m 內才在場），
     # 規則的輸入值不該帶浮點誤差。6 位小數約 11 公分。
     #
@@ -116,6 +121,10 @@ class Spirit(Base):
     summon_radius_meters = Column(Integer, nullable=False, default=50)
     sense_radius_meters = Column(Integer, nullable=False, default=150, server_default="150")
     is_active = Column(Boolean, nullable=False, default=True)
+
+    __table_args__ = (
+        UniqueConstraint("character_id", name="uq_spirits_character_id"),
+    )
 
 
 class QuestProgress(Base):

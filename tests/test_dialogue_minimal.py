@@ -14,7 +14,13 @@ from app.core.config import settings
 from app.modules.body import models
 from app.modules.body.encounter_tokens import ENCOUNTER_TOKEN_HEADER, issue_encounter_token
 from app.modules.body.router import FALLBACK_REPLY
-from app.modules.brain.models import PersonaCard
+from app.modules.brain.models import (
+    CannedGreeting,
+    Character,
+    CharacterPersona,
+    CitySoul,
+    LandmarkSoul,
+)
 
 _LAT, _LON = 25.0955, 121.5186
 _GREETING = "你來了。今晚雲不多。"
@@ -22,31 +28,56 @@ _GREETING = "你來了。今晚雲不多。"
 
 @pytest.fixture
 def spirit(db_session, unique_spirit_id):
+    """
+    一條完整的 city → landmark → character → spirit 鏈。
+
+    0005 之後靈魂要經由 `character_id` 才找得到人格，所以夾具比以前多三層。
+    """
+    city_id = f"city-{unique_spirit_id}"
+    landmark_id = f"lm-{unique_spirit_id}"
+    character_id = f"ch-{unique_spirit_id}"
+
+    db_session.add(CitySoul(city_id=city_id, name="測試城市", macro_history_summary="x"))
+    db_session.add(
+        LandmarkSoul(
+            landmark_id=landmark_id, city_id=city_id, name="測試地標", founding_facts=[]
+        )
+    )
+    db_session.flush()
+    db_session.add(Character(character_id=character_id, landmark_id=landmark_id))
     row = models.Spirit(
         spirit_id=unique_spirit_id, display_name="測試地標", latitude=_LAT, longitude=_LON,
+        character_id=character_id, landmark_id=landmark_id,
         summon_radius_meters=50, is_active=True,
     )
     db_session.add(row)
     db_session.commit()
+
     yield row
-    db_session.query(PersonaCard).filter_by(spirit_id=row.spirit_id).delete()
-    db_session.commit()
+
+    db_session.query(CannedGreeting).filter_by(character_id=character_id).delete()
+    db_session.query(CharacterPersona).filter_by(character_id=character_id).delete()
     db_session.delete(row)
+    db_session.query(Character).filter_by(character_id=character_id).delete()
+    db_session.query(LandmarkSoul).filter_by(landmark_id=landmark_id).delete()
+    db_session.query(CitySoul).filter_by(city_id=city_id).delete()
     db_session.commit()
 
 
 @pytest.fixture
 def active_card(db_session, spirit):
     db_session.add(
-        PersonaCard(
-            spirit_id=spirit.spirit_id, version=1,
-            content={
-                "schema_version": 1,
-                "canned_greetings": [
-                    {"trigger_phrases": ["你好", "hello"], "response_text": _GREETING}
-                ],
-            },
-            reviewed_by="test", reviewed_at=datetime.now(timezone.utc), is_active=True,
+        CharacterPersona(
+            character_id=spirit.character_id, version=1,
+            archetype="守望者", speech_style="溫和",
+            reviewed_by="test", reviewed_at=datetime.now(timezone.utc), active=True,
+        )
+    )
+    db_session.flush()
+    db_session.add(
+        CannedGreeting(
+            character_id=spirit.character_id, version=1,
+            trigger_phrases=["你好", "hello"], response_text=_GREETING,
         )
     )
     db_session.commit()
@@ -139,8 +170,8 @@ def test_miss_returns_fallback(client, spirit, player, active_card):
     assert body == {"reply_text": FALLBACK_REPLY, "source": "fallback"}
 
 
-def test_no_active_persona_card_falls_back(client, spirit, player):
-    """人格卡是 is_active=False 的草稿時，一律 fallback，不拋例外。"""
+def test_no_active_persona_falls_back(client, spirit, player):
+    """人格是 active=False 的草稿（或根本還沒建）時，一律 fallback，不拋例外。"""
     pid, sess = player
     enc = issue_encounter_token(pid, spirit.spirit_id)
     body = _say(client, spirit, sess, enc, "你好").json()

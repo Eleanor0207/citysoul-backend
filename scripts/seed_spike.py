@@ -3,11 +3,11 @@ Spike 專用 seed：讓「走到地標→召喚→對話→看到回應」這條
 
 ## 為什麼不直接改 app/db/seed.py
 
-主 seed 的人格卡是 `is_active=False` 的**待審核草稿**，而 `is_active` 依 CONTEXT.md
-只能由人工審核流程 flip——人格卡的定義就是「經人工審核的角色定義」。為了 demo
+主 seed 的人格是 `active=False` 的**待審核草稿**，而 `active` 依 CONTEXT.md
+只能由人工審核流程 flip——人格的定義就是「經人工審核的角色定義」。為了 demo
 方便去翻那個旗標，等於把內容治理的規則悄悄挖掉。
 
-所以這裡另建一張 **version 2** 的卡，內容明確標記為未審核佔位文字，並且只有
+所以這裡另建一版 **version 2** 的人格，內容明確標記為未審核佔位文字，並且只有
 跑這支腳本才會出現。主 seed 完全不動。
 
 ## 用法
@@ -16,14 +16,14 @@ Spike 專用 seed：讓「走到地標→召喚→對話→看到回應」這條
 
 ## ⚠️ 不要用在正式環境
 
-這張卡的 canned_greetings 是工程佔位文字，不是敘事負責人寫的。正式內容進來時，
+這一版的預寫台詞是工程佔位文字，不是敘事負責人寫的。正式內容進來時，
 應該新增 version 3 並由審核流程 flip，而不是改這裡。
 """
 from datetime import datetime, timezone
 
 from app.core.database import SessionLocal
-from app.db.seed import LONGSHAN_SPIRIT_ID
-from app.modules.brain.models import PersonaCard
+from app.db.seed import LONGSHAN_CHARACTER_ID, LONGSHAN_TABOOS
+from app.modules.brain.models import CannedGreeting, CharacterPersona
 
 SPIKE_VERSION = 2
 
@@ -36,7 +36,10 @@ SPIKE_CANNED_GREETINGS = [
     },
     {
         "trigger_phrases": ["你是誰", "你是什麼", "自我介紹"],
-        "response_text": "我是這座廟埕上，兩百多年來來往往的腳步聲凝成的意識。不是廟裡的人，也不是誰的化身——只是這裡的一部分。",
+        "response_text": (
+            "我是這座廟埕上，兩百多年來來往往的腳步聲凝成的意識。"
+            "不是廟裡的人，也不是誰的化身——只是這裡的一部分。"
+        ),
     },
     {
         "trigger_phrases": ["今天天氣如何", "今天天氣", "天氣"],
@@ -48,54 +51,64 @@ SPIKE_CANNED_GREETINGS = [
     },
 ]
 
+_PLACEHOLDER = "SPIKE_PLACEHOLDER_NOT_REVIEWED"
 
-def seed_spike_persona_card() -> None:
+
+def seed_spike_persona() -> None:
     db = SessionLocal()
     try:
         existing = (
-            db.query(PersonaCard)
-            .filter_by(spirit_id=LONGSHAN_SPIRIT_ID, version=SPIKE_VERSION)
+            db.query(CharacterPersona)
+            .filter_by(character_id=LONGSHAN_CHARACTER_ID, version=SPIKE_VERSION)
             .first()
         )
         if existing:
-            existing.content = {**existing.content, "canned_greetings": SPIKE_CANNED_GREETINGS}
-            existing.is_active = True
+            existing.active = True
+            db.query(CannedGreeting).filter_by(
+                character_id=LONGSHAN_CHARACTER_ID, version=SPIKE_VERSION
+            ).delete()
             action = "更新"
         else:
             db.add(
-                PersonaCard(
-                    spirit_id=LONGSHAN_SPIRIT_ID,
+                CharacterPersona(
+                    character_id=LONGSHAN_CHARACTER_ID,
                     version=SPIKE_VERSION,
-                    content={
-                        "schema_version": 1,
-                        "core_personality": "沉靜、耐心，對往來人群的祈願有長久記憶的守望者",
-                        "speaking_style": "溫和、不疾不徐，帶市井氣但不輕浮",
-                        "emotional_core": "艋舺的市井生活、世代更迭、人們帶來的心事",
-                        "factual_boundary": {
-                            "known_facts": "SPIKE_PLACEHOLDER_NOT_REVIEWED",
-                            "folklore": "SPIKE_PLACEHOLDER_NOT_REVIEWED",
-                            "imagination": "神祕感來自時間累積的記憶本身；不宣稱靈驗、不預言吉凶",
-                        },
-                        # 跟主 seed 的 version 1 一字不差。這幾條是宗教場域的安全
-                        # 下限，spike 卡雖然是佔位內容，也不能因為「只是測試」就放掉。
-                        "taboo_topics": [
-                            "代替神明給予指示或應許",
-                            "個人吉凶、姻緣、財運的預測",
-                            "宗教或信仰之間的優劣比較",
-                            "具體的醫療、法律、投資建議",
-                        ],
-                        "quest_themes": [],
-                        "not_this_character": "不是廟方人員，不是神明本身，也不是解籤者",
-                        "canned_greetings": SPIKE_CANNED_GREETINGS,
-                    },
-                    reviewed_by="SPIKE_PLACEHOLDER_NOT_REVIEWED",
+                    archetype="沉靜、耐心，對往來人群的祈願有長久記憶的守望者",
+                    speech_style="溫和、不疾不徐，帶市井氣但不輕浮",
+                    personality_traits=["沉靜", "耐心", "不評斷"],
+                    values=["艋舺的市井生活", "世代更迭", "人們帶來的心事"],
+                    # 跟主 seed 的 version 1 一字不差。這幾條是宗教場域的安全
+                    # 下限，spike 版雖然是佔位內容，也不能因為「只是測試」就放掉。
+                    taboos=list(LONGSHAN_TABOOS),
+                    not_this_character="不是廟方人員，不是神明本身，也不是解籤者",
+                    imagination_license="神祕感來自時間累積的記憶本身；不宣稱靈驗、不預言吉凶",
+                    quest_themes=[],
+                    reviewed_by=_PLACEHOLDER,
                     reviewed_at=datetime.now(timezone.utc),
-                    is_active=True,
+                    # ⚠️ 這是**唯一**會把 active 設成 True 的地方，而它是一支
+                    # 要手動執行的 spike 腳本，不在任何 API 路徑上。
+                    active=True,
                 )
             )
             action = "建立"
+
+        # 主 seed 的 version 1 草稿是 active=False，所以這裡不會撞到
+        # uq_character_personas_active。如果撞到了，代表有人手動 flip 過草稿，
+        # 那本身就是需要被發現的事，不要在這裡默默關掉別的版本。
+        db.flush()
+
+        for greeting in SPIKE_CANNED_GREETINGS:
+            db.add(
+                CannedGreeting(
+                    character_id=LONGSHAN_CHARACTER_ID,
+                    version=SPIKE_VERSION,
+                    trigger_phrases=greeting["trigger_phrases"],
+                    response_text=greeting["response_text"],
+                )
+            )
+
         db.commit()
-        print(f"{action} spike 人格卡（version {SPIKE_VERSION}, is_active=True）")
+        print(f"{action} spike 人格（version {SPIKE_VERSION}, active=True）")
         print(f"  觸發語共 {sum(len(g['trigger_phrases']) for g in SPIKE_CANNED_GREETINGS)} 個")
         print("  主 seed 的 version 1 草稿未受影響")
     finally:
@@ -103,4 +116,4 @@ def seed_spike_persona_card() -> None:
 
 
 if __name__ == "__main__":
-    seed_spike_persona_card()
+    seed_spike_persona()
