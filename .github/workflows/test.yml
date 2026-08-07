@@ -71,7 +71,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v9
+      # 沒有浮動的 v9 major tag（最新 release 是 v9.0.0，但 astral-sh 的
+      # 浮動 major tag 只出到 v7），所以這裡釘完整版號。
+      - uses: astral-sh/setup-uv@v9.0.0
         with:
           enable-cache: true
 
