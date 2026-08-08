@@ -28,6 +28,23 @@ FALLBACK_REPLY = "（城市靈魂安靜地看著你）……這件事我還沒�
 
 router = APIRouter(prefix="/api/v1", tags=["body"])
 
+# 錯誤回應的契約宣告。
+#
+# 每支路由用 `responses=` 宣告它**實際會回傳**的錯誤碼，讓客戶端不必回頭翻
+# SDD 散文就知道要處理哪些狀況。`tests/test_api_contract.py` 會強制宣告與實作
+# 一致——**不宣告理論上可能但實作不會產生的錯誤碼**。
+#
+# 422 不在這裡：FastAPI 對任何有 request body 或 path 參數的端點都會自動加上
+# 它，重複宣告只會覆蓋掉 FastAPI 自己那份更精確的 `HTTPValidationError`。
+_UNAUTHORIZED = {401: {"model": schemas.ErrorResponse, "description": "Session token 無效或未提供"}}
+_SPIRIT_NOT_FOUND = {
+    404: {"model": schemas.ErrorResponse, "description": "靈魂不存在，或已下架（is_active=false）"}
+}
+
+
+def _forbidden(description: str) -> dict:
+    return {403: {"model": schemas.ErrorResponse, "description": description}}
+
 
 @router.post("/players", response_model=schemas.PlayerResponse)
 def create_or_get_player(payload: schemas.PlayerCreateRequest, db: Session = Depends(get_db)):
@@ -65,7 +82,11 @@ def create_or_get_player(payload: schemas.PlayerCreateRequest, db: Session = Dep
     )
 
 
-@router.post("/sense", response_model=schemas.SenseResponse)
+@router.post(
+    "/sense",
+    response_model=schemas.SenseResponse,
+    responses={**_UNAUTHORIZED, **_forbidden("不在感應範圍內"), **_SPIRIT_NOT_FOUND},
+)
 def sense(
     payload: schemas.SenseRequest,
     player_id: uuid.UUID = Depends(require_session_token),
@@ -107,7 +128,11 @@ def sense(
     )
 
 
-@router.post("/summon", response_model=schemas.SummonResponse)
+@router.post(
+    "/summon",
+    response_model=schemas.SummonResponse,
+    responses={**_UNAUTHORIZED, **_forbidden("不在召喚半徑內"), **_SPIRIT_NOT_FOUND},
+)
 def summon(
     payload: schemas.SummonRequest,
     player_id: uuid.UUID = Depends(require_session_token),
@@ -160,7 +185,16 @@ def summon(
     )
 
 
-@router.post("/spirits/{place_id}/dialogue", response_model=schemas.DialogueResponse)
+@router.post(
+    "/spirits/{place_id}/dialogue",
+    response_model=schemas.DialogueResponse,
+    responses={
+        # 401 有兩個來源：session token 與 encounter token，兩者都會回 401。
+        **_UNAUTHORIZED,
+        **_forbidden("Encounter token 屬於別的靈魂，或兩張憑證不屬於同一個玩家"),
+        **_SPIRIT_NOT_FOUND,
+    },
+)
 def dialogue(
     place_id: str,
     payload: schemas.DialogueRequest,
@@ -203,10 +237,24 @@ def dialogue(
     return schemas.DialogueResponse(reply_text=FALLBACK_REPLY, source="fallback")
 
 
-@router.get("/spirits/{place_id}", response_model=schemas.SpiritResponse)
+@router.get(
+    "/spirits/{place_id}",
+    response_model=schemas.SpiritResponse,
+    responses={**_SPIRIT_NOT_FOUND},
+)
 def get_spirit(place_id: str, db: Session = Depends(get_db)):
-    """對應對外 API 清單：GET /api/v1/spirits/{placeId}（Sprint1 先只回基本資料）。"""
+    """
+    對應對外 API 清單：GET /api/v1/spirits/{placeId}。
+
+    回應含 `orientation`（SDD v2.1 §10.2）：客戶端 S14 的 3DoF 定向服務靠它
+    決定把角色固定在哪個方位，少了它城市靈魂只能永遠黏在螢幕正中央。
+    """
     spirit = db.query(models.Spirit).filter_by(spirit_id=place_id).first()
-    if not spirit:
+
+    # `is_active` 檢查跟 /sense、/summon、/dialogue 對齊：下架的靈魂對玩家來說
+    # 就是不存在。這支端點原本漏了這道檢查，是整個 repo 裡唯一一個會把下架靈魂
+    # 回給玩家的地方——寫這次的契約測試時才發現。
+    if spirit is None or not spirit.is_active:
         raise HTTPException(status_code=404, detail="spirit not found")
-    return spirit
+
+    return schemas.SpiritResponse.from_spirit(spirit)

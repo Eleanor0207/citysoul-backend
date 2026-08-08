@@ -1,0 +1,760 @@
+{
+  "components": {
+    "schemas": {
+      "DialogueRequest": {
+        "description": "對話請求（SDD 第8.5節）。\n\n`user_input` 的長度上限先用保守值。SDD 提到 `prompt_max_chars` 會依實測調整，\n但那要等真的接上 Gemini、看到成本數據之後才有依據。",
+        "properties": {
+          "user_input": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "User Input",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_input"
+        ],
+        "title": "DialogueRequest",
+        "type": "object"
+      },
+      "DialogueResponse": {
+        "description": "對話回應。\n\n⚠️ **這是走通端到端用的最小版本**，目前只做 B12 快速問候比對——命中回預寫\n台詞，未命中回人工預寫的 fallback。完整版（Gemini 生成、TTS 語音、安全邊界、\nPrompt 組裝）見 issue #42／#45。\n\n`tts` 欄位刻意還不存在：SDD v2.1 §10.1 定義它只含 `audio_url`，等 B10（#21）\n落地才會加上。現在放一個永遠是 null 的欄位只會讓客戶端寫出無用的處理分支。",
+        "properties": {
+          "reply_text": {
+            "title": "Reply Text",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reply_text",
+          "source"
+        ],
+        "title": "DialogueResponse",
+        "type": "object"
+      },
+      "ErrorResponse": {
+        "description": "所有錯誤回應的統一形狀（SDD v2.1 §11.2.1）。\n\n**這不是新的錯誤格式，是對既有格式的描述。** 形狀刻意對齊 FastAPI\n`HTTPException` 本來就會產出的 `{\"detail\": \"...\"}`，一個位元組都沒改。\n\n存在的理由是讓契約說得出錯誤長什麼樣。在這之前，錯誤回應完全不在 OpenAPI\n文件裡——SDD v2.1 §10.3 明訂「錯誤碼全數不變」代表錯誤碼是契約的一部分，\n但機器可讀的那份契約看不到它們，客戶端只能回頭讀規格散文，這正好違背\n「單一真相來源」的初衷。\n\n具名之後，客戶端 codegen 會產出**單一**錯誤 DTO，錯誤處理可以寫成一份共用\n程式碼，而不是每支端點各寫一次。",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "ErrorResponse",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "PlayerCreateRequest": {
+        "description": "App 首次啟動時呼叫。device_id 由 App 產生並存在裝置安全儲存區\n（對應 CONTEXT.md「匿名玩家」定義），這裡不接受任何硬體裝置 ID 當替代。",
+        "properties": {
+          "device_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Device Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_id"
+        ],
+        "title": "PlayerCreateRequest",
+        "type": "object"
+      },
+      "PlayerResponse": {
+        "description": "`POST /api/v1/players` 的回應。\n\n`account_id` 是對外契約，對應 DB 的 `auth_provider_id`（0003 改的名）。\nclient 的 `PlayerDto` 用 `[JsonProperty(\"account_id\")]` 寫死了這個 key。\n\n綁定流程做起來的時候，這裡應該一併把 `auth_provider` 也吐出去——\n只有「provider 那邊的 id」而不知道是哪一家 provider，資訊是不完整的。\n那一次改動要連 client 一起發版。",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "device_id": {
+            "title": "Device Id",
+            "type": "string"
+          },
+          "player_id": {
+            "format": "uuid",
+            "title": "Player Id",
+            "type": "string"
+          },
+          "session_token": {
+            "title": "Session Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "player_id",
+          "device_id",
+          "account_id",
+          "created_at",
+          "session_token"
+        ],
+        "title": "PlayerResponse",
+        "type": "object"
+      },
+      "QuestStateResponse": {
+        "description": "SDD 第8.4節的 `quest` 欄位。\n\n`status` 是 `QuestStatus` 而非裸 `str`，讓客戶端能生出真正的 C# enum，\n任務狀態比對由編譯器把關，不用比對魔術字串。",
+        "properties": {
+          "attempts_today": {
+            "title": "Attempts Today",
+            "type": "integer"
+          },
+          "quest_id": {
+            "title": "Quest Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "in_progress",
+              "completed",
+              "daily_limit_reached"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "quest_id",
+          "status",
+          "attempts_today"
+        ],
+        "title": "QuestStateResponse",
+        "type": "object"
+      },
+      "SenseRequest": {
+        "description": "S2-new．感應範圍驗證請求（SDD 第8.3節）。\n\n刻意**不**收 `gps_accuracy_m` 與 `is_mock_location`：那兩個欄位是給 S3 防作弊\n觀察期用的，而觀察期記錄的是「在場」——CONTEXT.md 對在場紀錄的定義是完成\n在場驗證所需的地標與時間，感應範圍不構成在場。150 公尺外的一次感應不該產生\n任何可用來推測玩家位置的紀錄。",
+        "properties": {
+          "latitude": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Longitude",
+            "type": "number"
+          },
+          "spirit_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Spirit Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "spirit_id",
+          "latitude",
+          "longitude"
+        ],
+        "title": "SenseRequest",
+        "type": "object"
+      },
+      "SenseResponse": {
+        "properties": {
+          "sense_token": {
+            "title": "Sense Token",
+            "type": "string"
+          },
+          "spirit_id": {
+            "title": "Spirit Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sense_token",
+          "spirit_id"
+        ],
+        "title": "SenseResponse",
+        "type": "object"
+      },
+      "SpiritOrientation": {
+        "description": "靈魂方位設定（SDD v2.1 §10.2），供客戶端 S14 的 3DoF 定向服務使用。\n\n做成巢狀物件而不是兩個平鋪欄位，是為了對齊 SDD v2.1 §10.2 的回應範例，\n也讓客戶端能把「方位設定」當成一個可整包傳給 `OrientationService` 的值，\n而不是每次都得手動把兩個散落的欄位湊起來。",
+        "properties": {
+          "bearing_deg": {
+            "title": "Bearing Deg",
+            "type": "number"
+          },
+          "height_offset_m": {
+            "title": "Height Offset M",
+            "type": "number"
+          }
+        },
+        "required": [
+          "bearing_deg",
+          "height_offset_m"
+        ],
+        "title": "SpiritOrientation",
+        "type": "object"
+      },
+      "SpiritResponse": {
+        "description": "`GET /api/v1/spirits/{placeId}` 的回應。\n\n**欄位名是對外契約，跟資料庫欄位名脫鉤。** 0002 把 DB 欄位改成\n`spirit_id` / `display_name` / `*_radius_meters` 之後，這裡靠\n`validation_alias` 從 ORM 物件讀新名字，但輸出仍是舊的 JSON key——\nUnity client 的 `SpiritDto` 用 `[JsonProperty(\"place_id\")]` 寫死了那些\n名字，改動等於要發一版客戶端。\n\n改 DB 欄位名不需要動客戶端，這正是兩者脫鉤的用途；反過來說，**要改這裡的\n欄位名時，必須連同 client 一起改**。",
+        "properties": {
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "latitude": {
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "title": "Longitude",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "orientation": {
+            "$ref": "#/components/schemas/SpiritOrientation"
+          },
+          "place_id": {
+            "title": "Place Id",
+            "type": "string"
+          },
+          "sense_radius_m": {
+            "title": "Sense Radius M",
+            "type": "integer"
+          },
+          "summon_radius_m": {
+            "title": "Summon Radius M",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "place_id",
+          "name",
+          "latitude",
+          "longitude",
+          "summon_radius_m",
+          "sense_radius_m",
+          "is_active",
+          "orientation"
+        ],
+        "title": "SpiritResponse",
+        "type": "object"
+      },
+      "SummonRequest": {
+        "description": "S2．在場驗證請求（SDD 第8.4節）。\n\n`gps_accuracy_m` 與 `is_mock_location` 供 S3 防作弊觀察期使用\n（見 `anticheat.py`）：偵測到只記 log，不影響這次召喚的結果。",
+        "properties": {
+          "gps_accuracy_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gps Accuracy M"
+          },
+          "is_mock_location": {
+            "default": false,
+            "title": "Is Mock Location",
+            "type": "boolean"
+          },
+          "latitude": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Longitude",
+            "type": "number"
+          },
+          "spirit_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Spirit Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "spirit_id",
+          "latitude",
+          "longitude"
+        ],
+        "title": "SummonRequest",
+        "type": "object"
+      },
+      "SummonResponse": {
+        "properties": {
+          "encounter_token": {
+            "title": "Encounter Token",
+            "type": "string"
+          },
+          "quest": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuestStateResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "spirit_id": {
+            "title": "Spirit Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "encounter_token",
+          "spirit_id"
+        ],
+        "title": "SummonResponse",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "title": "城市靈魂 AR — Backend",
+    "version": "0.1.0-sprint1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/players": {
+      "post": {
+        "description": "S6．匿名玩家身分系統。\n\n同一個 device_id 重複呼叫要回傳同一個 player（不能每次開 App 都產生新玩家），\n這是「App 首次啟動產生、保存於裝置安全儲存區」這條定義的自然結果——\n裝置端只要遺失 install_id 才會走到「升級綁定帳號」的路徑，不在這支 API 範圍內。\n\n每次呼叫（不論新建或既有玩家）都重新核發一張 session token（SDD第6節：\n重複呼叫「重新核發」，順便延長效期，玩家不會感覺到任何登入過期）。",
+        "operationId": "create_or_get_player_api_v1_players_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlayerCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlayerResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Or Get Player",
+        "tags": [
+          "body"
+        ]
+      }
+    },
+    "/api/v1/sense": {
+      "post": {
+        "description": "S2-new．感應範圍驗證（SDD 第8.3節）。\n\n跟 `/summon` 長得很像，但**行為上少了三件事**，而那三件事正是它存在的理由：\n\n1. **不跑 S3 防作弊觀察期。** 觀察期記的是「在場」，而 CONTEXT.md 對在場\n   紀錄的定義是完成在場驗證所需的地標與時間——150 公尺外不構成在場。\n2. **不做任何任務判定、不核發任務**（SDD 第7.2節）。這是與 `/summon`\n   最關鍵的行為差異：呼叫這支不會建立或修改任何 `quest_progress` 列。\n3. **不核發 encounter token。** 感應憑證換不到在場證明，玩家還是得走過去。\n\n共用的只有純函式（距離計算）與 session 驗證。token 的核發與驗證邏輯\n完全獨立，見 `sense_tokens.py` 的模組註解。",
+        "operationId": "sense_api_v1_sense_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SenseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SenseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Session token 無效或未提供"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "不在感應範圍內"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "靈魂不存在，或已下架（is_active=false）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Sense",
+        "tags": [
+          "body"
+        ]
+      }
+    },
+    "/api/v1/spirits/{place_id}": {
+      "get": {
+        "description": "對應對外 API 清單：GET /api/v1/spirits/{placeId}。\n\n回應含 `orientation`（SDD v2.1 §10.2）：客戶端 S14 的 3DoF 定向服務靠它\n決定把角色固定在哪個方位，少了它城市靈魂只能永遠黏在螢幕正中央。",
+        "operationId": "get_spirit_api_v1_spirits__place_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "place_id",
+            "required": true,
+            "schema": {
+              "title": "Place Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpiritResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "靈魂不存在，或已下架（is_active=false）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Spirit",
+        "tags": [
+          "body"
+        ]
+      }
+    },
+    "/api/v1/spirits/{place_id}/dialogue": {
+      "post": {
+        "description": "對話端點（**最小可用版**）。\n\n目前只走 B12 快速問候比對：命中回預寫台詞，未命中回人工預寫的 fallback。\n這讓「走到地標→召喚→對話→看到回應」這條路**在沒有 GCP 憑證的情況下就能\n完整跑通**——本機 Avast 的 TLS 攔截目前擋著 Vertex AI，不該連帶讓整條核心\n迴圈無法驗證。\n\n尚未接上、各有獨立 ticket 的部分：\n- 配額檢查（#32）\n- B4 安全邊界（#11）、B2 Prompt 組裝（#12）、B1 Gemini（#8）→ 見 #42／#45\n- B10 TTS 語音（#21）\n- B7 短期記憶寫入\n\n驗證沿用 SDD 第6節：Session Token（Authorization header）＋ Encounter Token\n（X-Encounter-Token header）。兩者用**不同的驗證邏輯**，不共用函式。",
+        "operationId": "dialogue_api_v1_spirits__place_id__dialogue_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "place_id",
+            "required": true,
+            "schema": {
+              "title": "Place Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Encounter-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Encounter-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DialogueRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DialogueResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Session token 無效或未提供"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Encounter token 屬於別的靈魂，或兩張憑證不屬於同一個玩家"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "靈魂不存在，或已下架（is_active=false）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Dialogue",
+        "tags": [
+          "body"
+        ]
+      }
+    },
+    "/api/v1/summon": {
+      "post": {
+        "description": "S2．在場驗證與召喚（SDD 第7.1／8.4節）。",
+        "operationId": "summon_api_v1_summon_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SummonRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SummonResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Session token 無效或未提供"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "不在召喚半徑內"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "靈魂不存在，或已下架（is_active=false）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Summon",
+        "tags": [
+          "body"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health"
+      }
+    }
+  }
+}

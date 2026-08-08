@@ -20,26 +20,6 @@ jobs:
     runs-on: ubuntu-latest
 
     services:
-      # 跟 docker-compose.yml 同一個映像檔。用官方 postgres 映像檔的話
-      # `CREATE EXTENSION vector` 會失敗，而那是 brain.memory_embeddings 的前提。
-      #
-      # ⚠️ 這個映像檔沒有 PostGIS（見 issue #46）。等 districts 要做的時候，
-      # 這裡跟 docker-compose.yml 要一起換成自建映像檔。
-      db:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_USER: city_soul
-          POSTGRES_PASSWORD: city_soul_dev
-          POSTGRES_DB: city_soul
-        ports: ['5432:5432']
-        # 少了這個，後面的步驟會在 Postgres 還沒接受連線時就開始跑，
-        # 而失敗訊息會是「connection refused」，看起來像設定錯誤。
-        options: >-
-          --health-cmd "pg_isready -U city_soul"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
       redis:
         image: redis:7-alpine
         ports: ['6379:6379']
@@ -71,6 +51,33 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # db 不能寫成 `services:`，因為 services 只接受現成映像檔、不能 build。
+      # 我們同時需要 `vector`（B6 記憶檢索）與 `postgis`（區域圍欄），而沒有
+      # 官方映像檔兩個都有（見 issue #46），所以這裡跟 docker-compose.yml 一樣
+      # 走自建映像檔——用同一份 Dockerfile.postgres，CI 與本機不會分岔。
+      - name: start postgres (pgvector + postgis)
+        run: |
+          docker build -f Dockerfile.postgres -t citysoul-db .
+          docker run -d --name citysoul-db \
+            -e POSTGRES_USER=city_soul \
+            -e POSTGRES_PASSWORD=city_soul_dev \
+            -e POSTGRES_DB=city_soul \
+            -p 5432:5432 \
+            citysoul-db
+
+      # `services:` 本來用 health-check 幫我們等，手動起容器就得自己等。
+      # 少了這步，後面會在 Postgres 還沒接受連線時就開始跑，而失敗訊息是
+      # 「connection refused」，看起來像設定錯誤而不是時序問題。
+      - name: wait for postgres
+        run: |
+          for i in $(seq 1 30); do
+            if docker exec citysoul-db pg_isready -U city_soul; then exit 0; fi
+            sleep 2
+          done
+          echo "postgres 沒有在 60 秒內就緒"
+          docker logs citysoul-db
+          exit 1
+
       # 沒有浮動的 v9 major tag（最新 release 是 v9.0.0，但 astral-sh 的
       # 浮動 major tag 只出到 v7），所以這裡釘完整版號。
       - uses: astral-sh/setup-uv@v9.0.0
@@ -101,3 +108,69 @@ jobs:
         run: uv run python -m alembic check
 
       - run: uv run python -m pytest -q
+
+  # 契約閘門（issue #30）。
+  #
+  # 擋的是「後端無聲地改壞 API、客戶端 runtime 才炸」。以 3 天一個 Sprint 的
+  # 節奏，加上後端與客戶端分屬兩個 repo，這件事會頻繁發生。
+  #
+  # 跟 test job 分開是刻意的：這個 job 不需要資料庫，也不需要跑 migration，
+  # 而且它失敗時的訊息應該是「你改壞了契約」，不該混在測試輸出裡。
+  contract-gate:
+    runs-on: ubuntu-latest
+
+    # 只有 PR 才有「舊版契約」可以比對。push 到 main 時 base 就是自己，比了
+    # 沒有意義——那時候守著契約的是 pytest 的「快照未過期」那條。
+    #
+    # `breaking-change` 標籤可以跳過閘門，但**必須同時提交 v2 路由**
+    # （SDD v2.1 §11.2.1）。那是流程規範，由 review 把關，不由工具強制——
+    # 貼標籤是一個顯式的意圖表態，讓破壞性變更不會在趕 Sprint 時被順手放行。
+    if: >-
+      github.event_name == 'pull_request'
+      && !contains(github.event.pull_request.labels.*.name, 'breaking-change')
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+
+      - run: uv sync --frozen
+
+      # 先確認 PR 裡的快照本身是新的。少了這步，下面比對的可能是一份過期的
+      # 快照——那等於在比一個不存在的 API，閘門會靜默失效。
+      #
+      # 這條在本機 `pytest` 也會跑到（tests/test_api_contract.py），這裡重跑
+      # 一次是為了讓「快照過期」的失敗訊息出現在契約閘門這個 job，而不是被埋
+      # 在 200 多條測試的輸出裡。
+      - name: contract snapshot is up to date
+        env:
+          SESSION_TOKEN_SECRET: ci-session-secret
+          ENCOUNTER_TOKEN_SECRET: ci-encounter-secret
+          SENSE_TOKEN_SECRET: ci-sense-secret
+        run: |
+          uv run python -m scripts.generate_openapi_contract
+          git diff --exit-code contracts/openapi.json || {
+            echo "::error::contracts/openapi.json 過期了。跑 uv run python -m scripts.generate_openapi_contract 並一起 commit。"
+            exit 1
+          }
+
+      # base 分支的契約，當作比對基準。
+      - name: fetch base contract
+        run: |
+          git fetch origin ${{ github.base_ref }} --depth=1
+          git show origin/${{ github.base_ref }}:contracts/openapi.json > /tmp/base-openapi.json \
+            || echo '{}' > /tmp/base-openapi.json
+
+      # 破壞性變更（刪欄位／改型別／改必填）讓 build 失敗；純新增欄位放行。
+      # 「只加不減」是 SDD v2.1 §11.2.1 定的相容原則。
+      #
+      # ⚠️ 這個 job 還沒有在真實 PR 上跑過（本機 session 沒有 push 權限），
+      # 語法是照 oasdiff 官方文件寫的。第一次開 PR 時請確認它不會噴。
+      - name: breaking change check
+        uses: oasdiff/oasdiff-action/breaking@main
+        with:
+          base: /tmp/base-openapi.json
+          revision: contracts/openapi.json
+          fail-on: ERR

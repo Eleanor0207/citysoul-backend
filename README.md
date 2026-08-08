@@ -214,6 +214,53 @@ uv run python -m pytest
 CI **不需要任何 GCP 憑證**（ADR-0003）。Gemini 的真實呼叫測試在沒有憑證時
 自動 skip。三把 token 金鑰在 CI 用假值，但**必須兩兩不同**，有測試在守。
 
+另外有一個獨立的 `contract-gate` job，只在 PR 上跑，見下一節。
+
+---
+
+## API 契約：`contracts/openapi.json`
+
+**這份檔案是後端與 `citysoul-client` 之間的唯一真相。** `citysoul-client` 不放
+副本，只放一個記錄來源版本的 lock 檔。
+
+改過任何 Pydantic 模型或路由的 `responses=` 之後，重新產生並一起 commit：
+
+```bash
+uv run python -m scripts.generate_openapi_contract
+```
+
+忘記重跑的話，本機 `pytest` 就會紅（`tests/test_api_contract.py` 的「快照未過期」
+那條），不必推上去等 CI。
+
+### 為什麼契約要進 git
+
+後端與客戶端分屬兩個 repo 之後多了一個失敗模式：**後端改了 API、客戶端不知道。**
+以 3 天一個 Sprint 的節奏，這會頻繁發生。快照進 git 之後，任何一次契約變動都會
+出現在 code review 的 diff 裡，而不是隱形發生。
+
+`contract-gate` job 再往前一步：PR 上用 `oasdiff` 比對新舊契約，破壞性變更
+（刪欄位／改型別／改必填）直接讓 build 失敗。
+
+### 版本相容原則：只加不減
+
+- 後端**可以**新增欄位；**不得**刪除或改名既有欄位。
+- 客戶端忽略自己讀不懂的欄位。
+
+真的需要破壞性變更時，貼 PR 標籤 `breaking-change` 可以跳過閘門，但**必須同時
+提交 v2 路由**（SDD v2.1 §11.2.1）。那是流程規範，由 review 把關，不由工具強制——
+貼標籤是一個顯式的意圖表態，讓它不會在趕 Sprint 時被順手放行。
+
+### OpenAPI 3.1.0，不要降級到 3.0
+
+已評估過，結論是不可行且有害：FastAPI 的版本字串只是原封不動塞進輸出，**改它不會
+改 schema 內容**。Pydantic v2 產出的 nullable 是 `anyOf: [{$ref}, {type: null}]`，
+而 `type: null` 在 3.0 不合法。宣告 3.0 只會產出一份自稱 3.0、內容卻是 3.1 的無效
+文件，工具照 3.0 規則解析可能**靜默產出錯誤的 DTO**——比誠實的 3.1 更糟，因為 3.1
+至少是有效文件，工具不支援時會明確報錯。
+
+若日後 codegen 真的需要 3.0，正解是後處理走真正的 3.1→3.0 轉換器，不是改宣告字串，
+更不是為了工具去扭曲 Pydantic 模型。
+
 ---
 
 ## 遇到 `password authentication failed` 怎麼辦

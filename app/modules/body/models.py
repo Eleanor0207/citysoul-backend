@@ -17,6 +17,7 @@ from sqlalchemy import (
     Column,
     Date,
     DateTime,
+    Float,
     ForeignKey,
     Identity,
     Index,
@@ -121,6 +122,16 @@ class Spirit(Base):
     summon_radius_meters = Column(Integer, nullable=False, default=50)
     sense_radius_meters = Column(Integer, nullable=False, default=150, server_default="150")
     is_active = Column(Boolean, nullable=False, default=True)
+
+    # 靈魂方位（SDD v2.1 §10.2），供客戶端 S14 的 3DoF 定向使用。
+    # `bearing_deg` 是相對召喚點的方位角（真北 0°、順時針），
+    # `height_offset_m` 是相對玩家視線高度的垂直偏移。
+    #
+    # 用浮點數而非隔壁經緯度的 NUMERIC 是刻意的：經緯度是遊戲規則的輸入
+    # （50m 內才算在場），不該帶浮點誤差；方位只是渲染參數，差 0.0001 度
+    # 沒有玩家察覺得到，也不改變任何判定結果。
+    bearing_deg = Column(Float, nullable=False, default=0.0, server_default="0")
+    height_offset_m = Column(Float, nullable=False, default=0.0, server_default="0")
 
     __table_args__ = (
         UniqueConstraint("character_id", name="uq_spirits_character_id"),

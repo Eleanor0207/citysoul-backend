@@ -1,7 +1,27 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+class ErrorResponse(BaseModel):
+    """
+    所有錯誤回應的統一形狀（SDD v2.1 §11.2.1）。
+
+    **這不是新的錯誤格式，是對既有格式的描述。** 形狀刻意對齊 FastAPI
+    `HTTPException` 本來就會產出的 `{"detail": "..."}`，一個位元組都沒改。
+
+    存在的理由是讓契約說得出錯誤長什麼樣。在這之前，錯誤回應完全不在 OpenAPI
+    文件裡——SDD v2.1 §10.3 明訂「錯誤碼全數不變」代表錯誤碼是契約的一部分，
+    但機器可讀的那份契約看不到它們，客戶端只能回頭讀規格散文，這正好違背
+    「單一真相來源」的初衷。
+
+    具名之後，客戶端 codegen 會產出**單一**錯誤 DTO，錯誤處理可以寫成一份共用
+    程式碼，而不是每支端點各寫一次。
+    """
+
+    detail: str
 
 
 class PlayerCreateRequest(BaseModel):
@@ -76,16 +96,28 @@ class SenseResponse(BaseModel):
     spirit_id: str
 
 
+# 任務狀態的合法值，會在 OpenAPI 產出真正的 `enum`。
+#
+# 以前這三個值只活在中文註解裡，`status` 產出的是裸 `type: string`——客戶端在
+# 整個 API 最狀態密集的欄位上拿不到任何型別安全，SDD v2.1 §11.2.1 的 Unity
+# 硬規則 5「Enum 採寬鬆解析」也因此無 enum 可解析。
+#
+# 三個值的語意分界不變：`in_progress` / `completed` 是資料庫狀態；
+# `daily_limit_reached` **只存在於 API 回應**，是查詢當下依 `attempts_date`
+# 算出來的結果，不落地（存進資料庫隔天就是錯的）。
+QuestStatus = Literal["in_progress", "completed", "daily_limit_reached"]
+
+
 class QuestStateResponse(BaseModel):
     """
     SDD 第8.4節的 `quest` 欄位。
 
-    `status` 可能是 `in_progress` / `completed` / `daily_limit_reached`，
-    最後一個只存在於回應中，不是資料庫狀態（見 models.QuestProgress）。
+    `status` 是 `QuestStatus` 而非裸 `str`，讓客戶端能生出真正的 C# enum，
+    任務狀態比對由編譯器把關，不用比對魔術字串。
     """
 
     quest_id: str
-    status: str
+    status: QuestStatus
     attempts_today: int
 
 
@@ -131,6 +163,21 @@ class DialogueResponse(BaseModel):
     source: str
 
 
+class SpiritOrientation(BaseModel):
+    """
+    靈魂方位設定（SDD v2.1 §10.2），供客戶端 S14 的 3DoF 定向服務使用。
+
+    做成巢狀物件而不是兩個平鋪欄位，是為了對齊 SDD v2.1 §10.2 的回應範例，
+    也讓客戶端能把「方位設定」當成一個可整包傳給 `OrientationService` 的值，
+    而不是每次都得手動把兩個散落的欄位湊起來。
+    """
+
+    # 相對召喚點的方位角：真北 0°、順時針。
+    bearing_deg: float
+    # 相對玩家視線高度的垂直偏移（公尺）。
+    height_offset_m: float
+
+
 class SpiritResponse(BaseModel):
     """
     `GET /api/v1/spirits/{placeId}` 的回應。
@@ -157,3 +204,24 @@ class SpiritResponse(BaseModel):
     # 就得同時改後端與發版客戶端。
     sense_radius_m: int = Field(validation_alias="sense_radius_meters")
     is_active: bool
+    # 巢狀物件，資料庫是兩個平鋪欄位（`bearing_deg` / `height_offset_m`）。
+    # 這層轉換由 `from_spirit()` 做，不靠 `from_attributes` 自動推——
+    # ORM 物件上沒有 `orientation` 這個屬性可讀。
+    orientation: SpiritOrientation
+
+    @classmethod
+    def from_spirit(cls, spirit) -> "SpiritResponse":
+        """把 ORM 的 `Spirit` 轉成對外回應，含平鋪欄位 → `orientation` 的收攏。"""
+        return cls(
+            place_id=spirit.spirit_id,
+            name=spirit.display_name,
+            latitude=spirit.latitude,
+            longitude=spirit.longitude,
+            summon_radius_m=spirit.summon_radius_meters,
+            sense_radius_m=spirit.sense_radius_meters,
+            is_active=spirit.is_active,
+            orientation=SpiritOrientation(
+                bearing_deg=spirit.bearing_deg,
+                height_offset_m=spirit.height_offset_m,
+            ),
+        )

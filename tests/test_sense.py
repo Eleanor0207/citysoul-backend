@@ -119,6 +119,11 @@ def test_get_spirit_wire_contract_is_independent_of_column_names(client, spirit)
 
     這個測試存在的意義是：下次有人「順手」把 schemas 的欄位名也改成跟 DB 一致
     的時候，它要變紅。要改的話，client 的 DTO 必須同一次一起改。
+
+    ⚠️ **新增欄位時更新這份清單是預期行為，改名或刪除則不是。** SDD v2.1
+    §11.2.1 的相容原則是「只加不減」——`orientation` 是 issue #30 加進來的
+    （相容），而把 `place_id` 改成 `spirit_id` 是破壞性的，那種改動要走
+    `breaking-change` 流程，不是把這個測試改綠就算了。
     """
     body = client.get(f"/api/v1/spirits/{spirit.spirit_id}").json()
 
@@ -130,6 +135,7 @@ def test_get_spirit_wire_contract_is_independent_of_column_names(client, spirit)
         "summon_radius_m",
         "sense_radius_m",
         "is_active",
+        "orientation",
     }
     assert body["place_id"] == spirit.spirit_id
     assert body["name"] == spirit.display_name
