@@ -36,7 +36,29 @@ _EXPECTED_DECLARED_ERROR_CODES = {
     ("post", "/api/v1/summon"): {"401", "403", "404"},
     ("post", "/api/v1/spirits/{place_id}/dialogue"): {"401", "403", "404"},
     ("get", "/api/v1/spirits/{place_id}"): {"404"},
+    ("post", "/api/v1/quests/{quest_id}/complete"): {"401", "403", "404"},
+    # 公開世界狀態，不需要 token——所以沒有 401／403。地標不存在才 404；
+    # 地標存在但沒有內容會走保底鏈路回 200，不是錯誤。
+    ("get", "/api/v1/spirits/{place_id}/daily-event"): {"404"},
 }
+
+
+def test_every_documented_route_is_covered_by_the_error_code_table():
+    """
+    守門測試：新增端點時如果忘記把它加進 `_EXPECTED_DECLARED_ERROR_CODES`，
+    上面那條逐支比對的測試會**靜默地跳過它**——它只走表裡有的項目。這條讓
+    「漏加」變成一個看得見的失敗。
+
+    `/health` 不在 `/api/v1` 底下，不是對客戶端的契約端點，排除。
+    """
+    documented = {
+        (method, path)
+        for path, operations in _openapi()["paths"].items()
+        for method in operations
+        if path.startswith("/api/v1")
+    }
+
+    assert documented == set(_EXPECTED_DECLARED_ERROR_CODES)
 
 
 def test_routes_declare_the_error_codes_they_actually_raise():

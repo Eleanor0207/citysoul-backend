@@ -1,6 +1,41 @@
 {
   "components": {
     "schemas": {
+      "DailyEventResponse": {
+        "description": "`GET /api/v1/spirits/{placeId}/daily-event` 的回應（S10，#26）。\n\n`source` 區分內容從哪一層保底鏈路來的（今天的快取／前一天的快取／\n人工預寫），純粹方便觀察，客戶端不需要據此改變行為——三種情況對\n玩家來說都是「看到一段當日情境文字」，沒有分支要處理。",
+        "properties": {
+          "event_date": {
+            "format": "date",
+            "title": "Event Date",
+            "type": "string"
+          },
+          "narrative_text": {
+            "title": "Narrative Text",
+            "type": "string"
+          },
+          "place_id": {
+            "title": "Place Id",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "cached_today",
+              "cached_previous_day",
+              "fallback"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "place_id",
+          "event_date",
+          "narrative_text",
+          "source"
+        ],
+        "title": "DailyEventResponse",
+        "type": "object"
+      },
       "DialogueRequest": {
         "description": "對話請求（SDD 第8.5節）。\n\n`user_input` 的長度上限先用保守值。SDD 提到 `prompt_max_chars` 會依實測調整，\n但那要等真的接上 Gemini、看到成本數據之後才有依據。",
         "properties": {
@@ -139,6 +174,53 @@
           "session_token"
         ],
         "title": "PlayerResponse",
+        "type": "object"
+      },
+      "QuestCompleteRequest": {
+        "description": "`POST /api/v1/quests/{questId}/complete` 的請求（SDD §7.5）。\n\n`completion_evidence` 目前不影響判定——完成條件是後端確定性規則\n（CONTEXT.md：不由 LLM 判定），而垂直切片階段的規則就是「帶著有效的\n相遇憑證送出」。欄位先收下來，等真的有需要驗證的證據型任務時再用；\n現在不收的話，客戶端之後要加回來又是一次破壞性變更。",
+        "properties": {
+          "completion_evidence": {
+            "title": "Completion Evidence",
+            "type": "object"
+          }
+        },
+        "title": "QuestCompleteRequest",
+        "type": "object"
+      },
+      "QuestCompleteResponse": {
+        "description": "SDD §7.5 的完成回應。\n\n`quest_wrapper_text` 與 `unlock_story` **在這張票（#34）永遠是 null**\n——它們需要腦袋生成（B11／B2），拆給 #43。§7.5 本來就允許\n`unlock_story` 為 null，所以這是合法的完整回應，不是半成品。",
+        "properties": {
+          "quest_wrapper_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quest Wrapper Text"
+          },
+          "resonance_value": {
+            "title": "Resonance Value",
+            "type": "integer"
+          },
+          "unlock_story": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unlock Story"
+          }
+        },
+        "required": [
+          "resonance_value"
+        ],
+        "title": "QuestCompleteResponse",
         "type": "object"
       },
       "QuestStateResponse": {
@@ -429,6 +511,110 @@
         ]
       }
     },
+    "/api/v1/quests/{quest_id}/complete": {
+      "post": {
+        "description": "S4／S5．任務完成與共鳴入帳（SDD §7.5 前半，#34）。\n\n需要 Session Token ＋ **Encounter Token**。持 Sense Token 者不可呼叫這支\n（SDD 第6節）——那張憑證只證明「在 150m 感應範圍內」，而挑戰任務要求\n真的到現場（50m）。這裡不接受 `X-Sense-Token`，沒有另外寫檢查：\n`require_encounter_token` 用的是 encounter 的金鑰與 `purpose` claim，\nsense token 本來就過不了。\n\n`unlock_story` 與 `quest_wrapper_text` 一律回 `null`——敘事生成屬 #43。",
+        "operationId": "complete_quest_endpoint_api_v1_quests__quest_id__complete_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quest_id",
+            "required": true,
+            "schema": {
+              "title": "Quest Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Encounter-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Encounter-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuestCompleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuestCompleteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not within required radius or token mismatch"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Spirit not found or inactive"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Complete Quest Endpoint",
+        "tags": [
+          "body"
+        ]
+      }
+    },
     "/api/v1/sense": {
       "post": {
         "description": "S2-new．感應範圍驗證（SDD 第8.3節）。\n\n跟 `/summon` 長得很像，但**行為上少了三件事**，而那三件事正是它存在的理由：\n\n1. **不跑 S3 防作弊觀察期。** 觀察期記的是「在場」，而 CONTEXT.md 對在場\n   紀錄的定義是完成在場驗證所需的地標與時間——150 公尺外不構成在場。\n2. **不做任何任務判定、不核發任務**（SDD 第7.2節）。這是與 `/summon`\n   最關鍵的行為差異：呼叫這支不會建立或修改任何 `quest_progress` 列。\n3. **不核發 encounter token。** 感應憑證換不到在場證明，玩家還是得走過去。\n\n共用的只有純函式（距離計算）與 session 驗證。token 的核發與驗證邏輯\n完全獨立，見 `sense_tokens.py` 的模組註解。",
@@ -554,6 +740,59 @@
           }
         },
         "summary": "Get Spirit",
+        "tags": [
+          "body"
+        ]
+      }
+    },
+    "/api/v1/spirits/{place_id}/daily-event": {
+      "get": {
+        "description": "S10．當日情境查詢（#26）。**不需要任何 token**——公開世界狀態，跟\n`/summon`／`/sense` 不同，不是「這個玩家跟這個靈魂的關係」。\n\n地標不存在 → 404；地標存在但沒有今天的內容 → 仍是 200（保底鏈路見\n`daily_event.get_daily_event_for_spirit`），玩家不該因為排程延遲或\n失敗看到空畫面。",
+        "operationId": "get_daily_event_api_v1_spirits__place_id__daily_event_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "place_id",
+            "required": true,
+            "schema": {
+              "title": "Place Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DailyEventResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Spirit not found or inactive"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Daily Event",
         "tags": [
           "body"
         ]
