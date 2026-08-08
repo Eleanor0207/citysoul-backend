@@ -9,10 +9,9 @@ SDD §3.1。跟 B9（#20，內容生成）刻意拆開：這張表只管「存�
 由主鍵本身保證，不是應用層檢查（排程重複觸發時，撞到主鍵衝突就當作
 已經有了，見 `app.modules.body.daily_event.trigger_daily_event_generation`）。
 
-⚠️ **編號衝突提醒**：`issue-30-api-contract` 分支上也有一支 `0006`
-（spirits 方位設定）。兩支都是從 main 的 0005 分出來的，兩邊合併時勢必
-要有一支改編號成 0007——這是本機分支比較週期（4人各自獨立開發）刻意允許
-發生的情況，不是這裡的錯，見 `docs/dev-notes/branch-tracker.md`。
+（歷史註記：`issue-30-api-contract` 分支上原本也有一支編號 0006 的
+migration——兩張票都從當時的 head 0005 分出去，各自取了下一個編號。合併時
+把那支改成 0007 接在這支後面，衝突已解決。）
 """
 from alembic import op
 import sqlalchemy as sa

@@ -1,0 +1,99 @@
+name: contract
+
+# 只在 PR 時跑：契約閘門的意義是「在 merge 前擋下破壞性變更」，跟 main 自己
+# 比對自己沒有意義。
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore: ['**.md']
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  breaking-changes:
+    runs-on: ubuntu-latest
+    # PR 標籤 breaking-change 可以跳過這道閘門（規範要求同時提交 v2 路由，
+    # 但那是 review 把關的流程規範，不是這裡能強制的事）。
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'breaking-change') }}
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # 需要 base branch 的歷史才能拿到 PR 之前那版 contracts/openapi.json。
+          fetch-depth: 0
+
+      - run: git fetch --depth=1 origin ${{ github.base_ref }}
+
+      # 這個 repo 第一次加入 contracts/openapi.json 的那次 PR，base 分支上
+      # 還沒有這個檔案——git show 找不到路徑會失敗，這裡當作「沒有舊契約可比」
+      # 直接放行，而不是讓 job 紅在一個跟破壞性變更無關的原因上。
+      - name: resolve previous contract snapshot
+        id: base_contract
+        run: |
+          if git show "origin/${{ github.base_ref }}:contracts/openapi.json" > /tmp/base-openapi.json 2>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # fail-on: ERR（不是 WARN）——只擋真正的破壞性變更（刪欄位／改型別／
+      # 改必填），純新增欄位放行（SDD v2.1 §11.2.1）。
+      #
+      # review: false——這是 private repo 的內部契約，不上傳到 oasdiff.com
+      # 做側欄比較連結，即使內容是加密的。
+      - name: check for breaking changes
+        if: steps.base_contract.outputs.exists == 'true'
+        uses: oasdiff/oasdiff-action/breaking@v0.1.12
+        with:
+          base: /tmp/base-openapi.json
+          revision: contracts/openapi.json
+          fail-on: ERR
+          review: false
+
+  # #30 user story 21（Lead）：閘門的判定邏輯本身要有測試守著，不然「閘門
+  # 其實沒在擋」這種靜默失效不會被發現。跟上面那個 job 用同一個 action 版本、
+  # 同一組設定（fail-on: ERR），對著兩組固定的 fixture 跑，跟這次 PR 的
+  # 實際契約無關——所以不受 breaking-change 標籤影響，永遠都跑。
+  gate-self-test:
+    name: verify the gate actually catches breaking changes
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # 正控制組：純新增欄位不該被擋（user story 11）。這步驟失敗代表閘門
+      # 誤殺了合法的相容演進。
+      - name: additive-only change must pass
+        uses: oasdiff/oasdiff-action/breaking@v0.1.12
+        with:
+          base: tests/fixtures/contract_gate/safe_base.json
+          revision: tests/fixtures/contract_gate/safe_revision.json
+          fail-on: ERR
+          review: false
+
+      # 負控制組：刪掉必填欄位是教科書等級的破壞性變更，一定要被擋。用
+      # continue-on-error 把「這步驟失敗」轉成一個可以斷言的訊號——這裡
+      # job 該紅的情境是「它沒擋下來」，不是「它擋下來了」。
+      - name: known-breaking change must be caught
+        id: breaking_check
+        continue-on-error: true
+        uses: oasdiff/oasdiff-action/breaking@v0.1.12
+        with:
+          base: tests/fixtures/contract_gate/breaking_base.json
+          revision: tests/fixtures/contract_gate/breaking_revision.json
+          fail-on: ERR
+          review: false
+
+      - name: fail if the gate missed a known breaking change
+        if: steps.breaking_check.outcome != 'failure'
+        run: |
+          echo "::error::閘門對已知的破壞性變更 fixture 沒有擋下來——閘門本身可能靜默失效了。"
+          exit 1

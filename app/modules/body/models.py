@@ -17,6 +17,7 @@ from sqlalchemy import (
     Column,
     Date,
     DateTime,
+    Float,
     ForeignKey,
     Identity,
     Index,
@@ -121,6 +122,10 @@ class Spirit(Base):
     summon_radius_meters = Column(Integer, nullable=False, default=50)
     sense_radius_meters = Column(Integer, nullable=False, default=150, server_default="150")
     is_active = Column(Boolean, nullable=False, default=True)
+    # SDD v2.1 §10.2：3DoF 定向用的方位設定。真北 0°、順時針；預設值代表
+    # 「沒有特別設定方位」，不是佔位假資料（見 migration 0006）。
+    bearing_deg = Column(Float, nullable=False, default=0, server_default="0")
+    height_offset_m = Column(Float, nullable=False, default=0, server_default="0")
 
     __table_args__ = (
         UniqueConstraint("character_id", name="uq_spirits_character_id"),

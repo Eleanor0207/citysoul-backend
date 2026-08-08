@@ -27,6 +27,15 @@ from app.modules.brain.greetings import match_canned_greeting
 # 情況下也能完整跑通。接上 B1 之後，這句話會退回它原本的角色：只在模型失敗時出現。
 FALLBACK_REPLY = "（城市靈魂安靜地看著你）……這件事我還沒想清楚。要不要先跟我說說你眼前看到的？"
 
+# #30：每支路由宣告它「實際會回傳」的錯誤碼，逐支對齊現況，不宣告理論上
+# 可能但實作不會產生的碼。422（request 驗證失敗）不在這裡宣告——FastAPI
+# 對每支有 body/path 參數的路由本來就會自動加上，形狀是它自己的
+# `HTTPValidationError`（`detail` 是陣列），跟 `ErrorResponse`（`detail`
+# 是字串）不是同一個模型，硬塞進來反而講錯契約。
+_AUTH_401 = {401: {"model": schemas.ErrorResponse, "description": "Missing or invalid token"}}
+_FORBIDDEN_403 = {403: {"model": schemas.ErrorResponse, "description": "Not within required radius or token mismatch"}}
+_NOT_FOUND_404 = {404: {"model": schemas.ErrorResponse, "description": "Spirit not found or inactive"}}
+
 router = APIRouter(prefix="/api/v1", tags=["body"])
 
 
@@ -66,7 +75,11 @@ def create_or_get_player(payload: schemas.PlayerCreateRequest, db: Session = Dep
     )
 
 
-@router.post("/sense", response_model=schemas.SenseResponse)
+@router.post(
+    "/sense",
+    response_model=schemas.SenseResponse,
+    responses={**_AUTH_401, **_FORBIDDEN_403, **_NOT_FOUND_404},
+)
 def sense(
     payload: schemas.SenseRequest,
     player_id: uuid.UUID = Depends(require_session_token),
@@ -108,7 +121,11 @@ def sense(
     )
 
 
-@router.post("/summon", response_model=schemas.SummonResponse)
+@router.post(
+    "/summon",
+    response_model=schemas.SummonResponse,
+    responses={**_AUTH_401, **_FORBIDDEN_403, **_NOT_FOUND_404},
+)
 def summon(
     payload: schemas.SummonRequest,
     player_id: uuid.UUID = Depends(require_session_token),
@@ -161,7 +178,11 @@ def summon(
     )
 
 
-@router.post("/spirits/{place_id}/dialogue", response_model=schemas.DialogueResponse)
+@router.post(
+    "/spirits/{place_id}/dialogue",
+    response_model=schemas.DialogueResponse,
+    responses={**_AUTH_401, **_FORBIDDEN_403, **_NOT_FOUND_404},
+)
 def dialogue(
     place_id: str,
     payload: schemas.DialogueRequest,
@@ -204,16 +225,40 @@ def dialogue(
     return schemas.DialogueResponse(reply_text=FALLBACK_REPLY, source="fallback")
 
 
-@router.get("/spirits/{place_id}", response_model=schemas.SpiritResponse)
+@router.get(
+    "/spirits/{place_id}",
+    response_model=schemas.SpiritResponse,
+    responses={**_NOT_FOUND_404},
+)
 def get_spirit(place_id: str, db: Session = Depends(get_db)):
-    """對應對外 API 清單：GET /api/v1/spirits/{placeId}（Sprint1 先只回基本資料）。"""
+    """對應對外 API 清單：GET /api/v1/spirits/{placeId}。"""
     spirit = db.query(models.Spirit).filter_by(spirit_id=place_id).first()
     if not spirit:
         raise HTTPException(status_code=404, detail="spirit not found")
-    return spirit
+
+    # `orientation` 是巢狀物件，`from_attributes` 沒辦法從 ORM 的平面欄位
+    # 自動長出來——改成明確建構，跟其他回應（PlayerResponse／SummonResponse）
+    # 的寫法一致。
+    return schemas.SpiritResponse(
+        place_id=spirit.spirit_id,
+        name=spirit.display_name,
+        latitude=spirit.latitude,
+        longitude=spirit.longitude,
+        summon_radius_m=spirit.summon_radius_meters,
+        sense_radius_m=spirit.sense_radius_meters,
+        is_active=spirit.is_active,
+        orientation=schemas.OrientationResponse(
+            bearing_deg=spirit.bearing_deg,
+            height_offset_m=spirit.height_offset_m,
+        ),
+    )
 
 
-@router.post("/quests/{quest_id}/complete", response_model=schemas.QuestCompleteResponse)
+@router.post(
+    "/quests/{quest_id}/complete",
+    response_model=schemas.QuestCompleteResponse,
+    responses={**_AUTH_401, **_FORBIDDEN_403, **_NOT_FOUND_404},
+)
 def complete_quest_endpoint(
     quest_id: str,
     payload: schemas.QuestCompleteRequest,
@@ -257,7 +302,11 @@ def complete_quest_endpoint(
     )
 
 
-@router.get("/spirits/{place_id}/daily-event", response_model=schemas.DailyEventResponse)
+@router.get(
+    "/spirits/{place_id}/daily-event",
+    response_model=schemas.DailyEventResponse,
+    responses={**_NOT_FOUND_404},
+)
 def get_daily_event(place_id: str, db: Session = Depends(get_db)):
     """
     S10．當日情境查詢（#26）。**不需要任何 token**——公開世界狀態，跟

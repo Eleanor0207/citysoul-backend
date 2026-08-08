@@ -200,6 +200,44 @@ uv run python -m pytest
 CI **不需要任何 GCP 憑證**（ADR-0003）。Gemini 的真實呼叫測試在沒有憑證時
 自動 skip。三把 token 金鑰在 CI 用假值，但**必須兩兩不同**，有測試在守。
 
+## 8. API 契約（#30）
+
+`contracts/openapi.json` 是後端與 `citysoul-client` 之間**受保護的正式契約**
+（SDD v2.1 §11.2.1：code-first ＋ CI 契約閘門），進 git，不是 FastAPI 順手
+產生的副產品。Unity 端對這份檔案跑 NSwag 生出帶 enum 的 C# DTO。
+
+### 改了 API 之後要重新產生
+
+```bash
+uv run python -m scripts.export_openapi
+```
+
+輸出**穩定排序、格式固定**的 JSON，重新產生兩次應該完全一樣，不會出現跟內容
+無關的 diff。`tests/test_api_contract.py` 會在本機 `pytest` 就抓到「改了
+Pydantic model 卻忘記重新產生」——不用等 CI 才被打回。
+
+### CI 契約閘門
+
+`.github/workflows/contract.yml` 只在對 `main` 開 PR 時跑（跟自己比對自己
+沒有意義）：把 PR 分支的 `contracts/openapi.json` 跟 base 分支上的舊版本
+用 [`oasdiff`](https://github.com/oasdiff/oasdiff-action) 比對。
+
+- 破壞性變更（刪欄位／改型別／改必填）→ build 失敗
+- 純新增欄位 → 放行
+
+閘門可以用 PR 標籤 `breaking-change` 跳過，但規範要求跳過的同時必須提交
+v2 路由（SDD v2.1 §11.2.1）——這是 review 把關的流程規範，CI 不會替你檢查
+v2 路由真的存在。
+
+版本相容原則：**只加不減**。後端可以新增欄位，不能刪除或改名既有欄位；
+`citysoul-client` 忽略任何自己不認識的欄位。
+
+`contract.yml` 還有第二個 job `gate-self-test`：跟這次 PR 的實際契約無關
+（所以不受 `breaking-change` 標籤影響，永遠都跑），對著 `tests/fixtures/
+contract_gate/` 底下兩組固定的 fixture 跑同一套 `oasdiff` 設定——一組純
+加欄位（該放行）、一組刪必填欄位（該擋下）。守的是「閘門本身有沒有靜默失效」
+（例如哪天改壞了 `fail-on` 設定），不是這次 PR 改了什麼。
+
 ---
 
 ## 遇到 `password authentication failed` 怎麼辦
@@ -253,6 +291,8 @@ uv run python -m scripts.init_db
 | `app/modules/brain/models.py` `loader.py`               | B3                                  | 人格三層（city／landmark／character）放獨立`brain` schema；`active` 只能由人工審核流程 flip，程式碼裡沒有寫任何自動通過的路徑 |
 | `app/core/redis_client.py`                                | B7                                  | 對話 session 的 key 命名慣例先定下來，Sprint3 的 Prompt 組裝引擎（B2）會直接呼叫這裡的`get_session` |
 | `app/db/seed.py`                                          | 對應 CONTEXT.md「封閉測試垂直切片」 | 刻意只 seed 龍山寺一筆，不要因為手滑就把十個首發靈魂建進來                                            |
+| `contracts/openapi.json` `scripts/export_openapi.py`      | #30                                  | 後端／client 之間受保護的正式契約快照；改 API 後要重新產生並一起 commit           |
+| `.github/workflows/contract.yml`                          | #30                                  | PR 契約閘門：`oasdiff` 比對 base／revision 兩版契約，破壞性變更擋 build            |
 
 ## 下一步（Sprint 2）
 
