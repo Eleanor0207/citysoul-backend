@@ -1,8 +1,8 @@
 """
-身體模組資料表：players、spirits。
+身體模組資料表：players、spirits、daily_event_cache。
 
-daily_event_cache／push_subscriptions 排在後面的 Sprint（對應 S10/S11），
-現在先不建，避免一次生太多還沒用到的表。
+push_subscriptions 排在後面的 Sprint（對應 S11），現在先不建，避免一次生
+太多還沒用到的表。
 
 刻意不存在的表：任何形式的「玩家移動軌跡 / 位置歷史」表。
 這是 CONTEXT.md「在場紀錄」與「前景即時情境反應」兩條定義疊加後的硬限制，
@@ -27,7 +27,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.sql import func
 
 from app.core.database import Base
@@ -305,3 +305,23 @@ class EncounterCollection(Base):
     __table_args__ = (
         UniqueConstraint("player_id", "place_id", name="uq_encounter_collections"),
     )
+
+
+class DailyEventCache(Base):
+    """
+    S10．當日情境快取（#26，SDD §3.1）。
+
+    跟 B9（#20，內容生成）刻意拆開：這張表只管「存」與「怎麼給前一天／
+    保底」，不管「怎麼生成」。PK 是 `(place_id, event_date)` 而不是代理鍵
+    ——同一天同一地標只該有一列，這條由主鍵本身保證，不是應用層檢查。
+    排程重複觸發時，撞到主鍵衝突就當作已經有了，直接回讀現有那一列
+    （同 `ResonanceEvent` 的做法：先寫、撞到約束才知道重複）。
+    """
+
+    __tablename__ = "daily_event_cache"
+
+    place_id = Column(String(64), ForeignKey("spirits.spirit_id"), primary_key=True)
+    event_date = Column(Date, primary_key=True)
+    content = Column(JSONB, nullable=False)
+    generated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=True)

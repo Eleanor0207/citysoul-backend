@@ -7,6 +7,7 @@ from app.core.database import get_db
 from app.modules.body import models, schemas
 from app.modules.body.anticheat import run_observation_checks
 from app.modules.body.auth import require_session_token
+from app.modules.body.daily_event import get_daily_event_for_spirit
 from app.modules.body.encounter_tokens import (
     ENCOUNTER_TOKEN_HEADER,
     issue_encounter_token,
@@ -253,4 +254,26 @@ def complete_quest_endpoint(
         quest_wrapper_text=None,
         resonance_value=result.resonance_value,
         unlock_story=None,
+    )
+
+
+@router.get("/spirits/{place_id}/daily-event", response_model=schemas.DailyEventResponse)
+def get_daily_event(place_id: str, db: Session = Depends(get_db)):
+    """
+    S10．當日情境查詢（#26）。**不需要任何 token**——公開世界狀態，跟
+    `/summon`／`/sense` 不同，不是「這個玩家跟這個靈魂的關係」。
+
+    地標不存在 → 404；地標存在但沒有今天的內容 → 仍是 200（保底鏈路見
+    `daily_event.get_daily_event_for_spirit`），玩家不該因為排程延遲或
+    失敗看到空畫面。
+    """
+    result = get_daily_event_for_spirit(db, place_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="spirit not found")
+
+    return schemas.DailyEventResponse(
+        place_id=result.place_id,
+        event_date=result.event_date,
+        narrative_text=result.narrative_text,
+        source=result.source,
     )
