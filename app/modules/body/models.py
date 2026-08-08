@@ -349,3 +349,29 @@ class DailyEventCache(Base):
     # 給清理工作用的訊號，**不是讀取時的過濾條件**：保底策略是「今天沒有就回
     # 昨天」，所以過期的內容仍然有用——它比空畫面好。
     expires_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class AvatarAsset(Base):
+    """
+    Unity Addressables 的 remote catalog／bundle 位置與版本（#38）。
+
+    ## 版本是這張表存在的理由
+
+    客戶端要能問「我快取的這版還是最新的嗎」，而不是每次啟動都重抓整包。
+    所以 `version` 必須**改了要變、沒改要穩定不變**——它是一個明確寫入的欄位，
+    刻意**不從** `updated_at` 或內容 hash 算出來：那樣的話一次無關的資料列更新
+    就會讓所有客戶端重抓。
+
+    catalog 與 bundle 分成兩個欄位，因為 Addressables 的索引與實際內容可能放在
+    不同路徑甚至不同 bucket。合成一個欄位的話，之後要分開就是破壞性變更。
+    """
+
+    __tablename__ = "avatar_assets"
+
+    avatar_id = Column(String(64), primary_key=True)
+    catalog_url = Column(Text, nullable=False)
+    bundle_url = Column(Text, nullable=False)
+    version = Column(String(64), nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )

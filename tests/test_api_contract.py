@@ -84,6 +84,14 @@ EXPECTED_RESPONSE_CODES = {
     ("post", "/api/v1/quests/{quest_id}/complete"): {"200", "401", "403", "404", "422"},
     # #44：配額擋在辨識之前，所以有 429。同樣只收 encounter token。
     ("post", "/api/v1/quests/{quest_id}/landmark-photo"): {"200", "401", "403", "404", "422", "429"},
+    # ── S8 查詢端點（#33／#35／#36／#37）──
+    # 都只需要 session token，所以沒有 403。
+    ("get", "/api/v1/quests/daily"): {"200", "401"},
+    ("get", "/api/v1/resonance/{spirit_id}"): {"200", "401", "404", "422"},
+    ("get", "/api/v1/profile"): {"200", "401"},
+    ("get", "/api/v1/players/me/memory-summary"): {"200", "401"},
+    # #38：資產位置不是玩家資料，無需驗證。
+    ("get", "/api/v1/assets/{avatar_id}"): {"200", "404", "422"},
     ("get", "/health"): {"200"},
 }
 

@@ -314,3 +314,115 @@ class LandmarkPhotoResponse(BaseModel):
     landmark_recognized: bool
     resonance_awarded: bool
     resonance_value: int
+
+
+class QuestListItem(BaseModel):
+    """
+    `GET /api/v1/quests/daily` 的單一任務（SDD v1 §8.7）。
+
+    `spirit_id` **不在 `quest_progress` 表裡**，是從 `quest_id` 的命名慣例
+    反推的（見 `queries.quest_view`）。客戶端仍然需要它才知道這個任務屬於哪個
+    地標，所以它是對外契約的一部分。
+    """
+
+    quest_id: str
+    spirit_id: str
+    status: QuestStatus
+    attempts_today: int
+
+
+class QuestsDailyResponse(BaseModel):
+    """沒有任何任務時 `quests` 是空陣列，不是 404——冷啟動是正常狀態。"""
+
+    quests: list[QuestListItem] = Field(default_factory=list)
+
+
+class ResonanceProgressResponse(BaseModel):
+    """
+    `GET /api/v1/resonance/{spiritId}` 的回應（SDD v1 §8.9）。
+
+    `stage` 與 `next_threshold` 一律由 `resonance_value` 重算。
+    已滿階時 `next_threshold` 為 null。
+    """
+
+    spirit_id: str
+    resonance_value: int
+    stage: int
+    next_threshold: int | None = None
+
+
+class ProfileResonanceItem(BaseModel):
+    """
+    Profile 裡的單一靈魂共鳴。
+
+    刻意**沒有** `next_threshold`：Profile 是總覽，要看下一個門檻就去
+    `GET /resonance/{spiritId}`。多回一個欄位不痛，但它會變成第二個必須跟
+    單一查詢保持一致的地方。
+    """
+
+    spirit_id: str
+    resonance_value: int
+    stage: int
+
+
+class ProfileResponse(BaseModel):
+    """
+    `GET /api/v1/profile`（SDD v1 §8.10）。
+
+    ⚠️ v2.1 §10.3 的端點清單**漏列了這支**，已確認為漏列而非移除。
+
+    兩個陣列的長度**不必相同**：一個靈魂可以有共鳴值但沒有任務進度（例如只
+    收藏過紀念照片）。
+    """
+
+    quests: list[QuestListItem] = Field(default_factory=list)
+    resonance: list[ProfileResonanceItem] = Field(default_factory=list)
+
+
+class MemoryItem(BaseModel):
+    """
+    單筆記憶摘要。
+
+    🔒 **沒有 embedding 欄位。** 向量是內部實作，對玩家沒有意義，而且 768 維
+    浮點數會讓回應暴增數十 KB。
+    """
+
+    summary_text: str
+    created_at: datetime
+
+
+class MemoryGroup(BaseModel):
+    """依靈魂分組的記憶。"""
+
+    spirit_id: str
+    memories: list[MemoryItem] = Field(default_factory=list)
+
+
+class MemorySummaryResponse(BaseModel):
+    """
+    `GET /api/v1/players/me/memory-summary`（#37）。
+
+    🔒 只含該玩家自己的記憶（CONTEXT.md「玩家記憶僅屬單一玩家」）。
+    世界記憶不含任何玩家輸入，兩者不得混用。
+
+    B8 nightly batch（#40）未上線前，這裡回的是既有的 `dialogue_summary`
+    來源記錄——那是**預期行為，不是缺陷**。
+    """
+
+    groups: list[MemoryGroup] = Field(default_factory=list)
+
+
+class AvatarAssetResponse(BaseModel):
+    """
+    `GET /api/v1/assets/{avatarId}`（v2.1 §7.4／#38）。
+
+    `version` 讓客戶端判斷快取是否過期：**改了要變，沒改要穩定不變**。
+    後者一樣重要——每次回傳新值的話，客戶端每次啟動都會重抓整包。
+
+    **無需驗證**：資產位置不是玩家資料。
+    """
+
+    avatar_id: str
+    catalog_url: str
+    bundle_url: str
+    version: str

@@ -17,7 +17,7 @@ from app.modules.body.encounter_tokens import (
 )
 from app.core.redis_client import append_session_turn
 from app.modules.body.geo import haversine_distance_m
-from app.modules.body import daily_event_service, quests
+from app.modules.body import daily_event_service, queries, quests
 from app.modules.body.quests import evaluate_on_summon
 from app.modules.body.quota import (
     RESOURCE_DIALOGUE,
@@ -667,4 +667,136 @@ def _record_landmark_collection(
         landmark_recognized=recognized,
         resonance_awarded=awarded,
         resonance_value=resonance_value,
+    )
+
+
+@router.get(
+    "/quests/daily",
+    response_model=schemas.QuestsDailyResponse,
+    responses={**_UNAUTHORIZED},
+)
+def get_daily_quests(
+    player_id: uuid.UUID = Depends(require_session_token),
+    db: Session = Depends(get_db),
+):
+    """
+    S8．任務列表查詢（#33）。
+
+    ⚠️ **唯讀，不推進狀態機。** 跨日的 `attempts_today` 歸零是**算出來的**，
+    不寫回資料庫——查詢端點如果順手做了狀態轉移，玩家只要打開任務列表就等於
+    推進了一次任務，那是很難追查的副作用。真正的歸零由下一次 `/summon` 寫入。
+
+    `daily_limit_reached` 同理：它取決於「今天」是哪一天，存進資料庫隔天就是
+    錯的，所以只存在於回應。
+    """
+    return schemas.QuestsDailyResponse(
+        quests=[schemas.QuestListItem(**q) for q in queries.daily_quests(db, player_id=player_id)]
+    )
+
+
+@router.get(
+    "/resonance/{spirit_id}",
+    response_model=schemas.ResonanceProgressResponse,
+    responses={**_UNAUTHORIZED, **_SPIRIT_NOT_FOUND},
+)
+def get_resonance(
+    spirit_id: str,
+    player_id: uuid.UUID = Depends(require_session_token),
+    db: Session = Depends(get_db),
+):
+    """
+    S8．共鳴進度查詢（#35）。
+
+    「還沒開始」回 0 而不是 404——前端要能直接畫一條 0/10 的進度條。
+    地標不存在或已下架才是 404。
+    """
+    try:
+        progress = queries.resonance_progress(db, player_id=player_id, spirit_id=spirit_id)
+    except queries.SpiritNotFoundError:
+        raise HTTPException(status_code=404, detail="spirit not found")
+
+    return schemas.ResonanceProgressResponse(**progress)
+
+
+@router.get(
+    "/profile",
+    response_model=schemas.ProfileResponse,
+    responses={**_UNAUTHORIZED},
+)
+def get_profile(
+    player_id: uuid.UUID = Depends(require_session_token),
+    db: Session = Depends(get_db),
+):
+    """
+    S8．玩家彙總查詢（#36）。
+
+    Profile 畫面一次拿齊資料，避免前端發多次請求。**純身體自己的表直查，
+    不呼叫腦袋。**
+
+    🔒 `stage` 與 `GET /resonance/{spiritId}` 走**同一支** `stage_for_value()`
+    （見 `queries.py` 的模組註解）。各自重算的話，哪天有人改了門檻規則卻只改到
+    一邊，玩家會在兩個畫面看到不同的階段，而且不會有任何錯誤。
+    """
+    return schemas.ProfileResponse(
+        quests=[schemas.QuestListItem(**q) for q in queries.daily_quests(db, player_id=player_id)],
+        resonance=[
+            schemas.ProfileResonanceItem(**r) for r in queries.all_resonance(db, player_id=player_id)
+        ],
+    )
+
+
+@router.get(
+    "/players/me/memory-summary",
+    response_model=schemas.MemorySummaryResponse,
+    responses={**_UNAUTHORIZED},
+)
+def get_memory_summary(
+    player_id: uuid.UUID = Depends(require_session_token),
+    db: Session = Depends(get_db),
+):
+    """
+    記憶摘要查詢（#37）。
+
+    🔒 **只回傳該玩家自己的記憶**（CONTEXT.md「玩家記憶僅屬單一玩家」）。
+    過濾條件是 `player_id` 而不是 `spirit_id`——同一個靈魂底下有很多玩家的記憶。
+
+    回應**不含 embedding 向量**：那是內部實作，對玩家沒有意義，而且 768 維
+    浮點數會讓回應暴增數十 KB。
+
+    B8 nightly batch（#40）未上線前，這裡回的是既有的 `dialogue_summary`
+    來源記錄——**預期行為，不是缺陷**。
+    """
+    return schemas.MemorySummaryResponse(
+        groups=[
+            schemas.MemoryGroup(**g) for g in queries.memory_summaries(db, player_id=player_id)
+        ]
+    )
+
+
+@router.get(
+    "/assets/{avatar_id}",
+    response_model=schemas.AvatarAssetResponse,
+    responses={404: {"model": schemas.ErrorResponse, "description": "avatar 不存在"}},
+)
+def get_avatar_asset(avatar_id: str, db: Session = Depends(get_db)):
+    """
+    F7．Addressables catalog 與版本查詢（#38）。
+
+    **無需驗證**——資產位置不是玩家資料。
+
+    `version` 直接回傳資料表裡明確寫入的值，**不從 `updated_at` 或內容 hash
+    算**：那樣的話一次無關的資料列更新就會讓所有客戶端重抓整包。
+
+    開發期指向本機或測試 bucket 只需要改資料，不用改程式碼也不用等 CDN 佈建好
+    ——那正是把它放進資料表的理由。
+    """
+    row = db.query(models.AvatarAsset).filter_by(avatar_id=avatar_id).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="avatar not found")
+
+    return schemas.AvatarAssetResponse(
+        avatar_id=row.avatar_id,
+        catalog_url=row.catalog_url,
+        bundle_url=row.bundle_url,
+        version=row.version,
     )
