@@ -232,3 +232,35 @@ class SpiritResponse(BaseModel):
                 height_offset_m=spirit.height_offset_m,
             ),
         )
+
+
+class QuestCompleteRequest(BaseModel):
+    """
+    `POST /api/v1/quests/{questId}/complete` 的請求。
+
+    `completion_evidence` 目前**不參與判定**——SDD 尚未定義它的結構。仍然收下來，
+    是因為之後加規則時 API 形狀不該跟著變（那會是破壞性變更，見 §11.2.1）。
+    """
+
+    completion_evidence: dict = Field(default_factory=dict)
+
+
+class QuestCompleteResponse(BaseModel):
+    """
+    SDD §7.5 的完成回應。
+
+    ⚠️ `quest_wrapper_text` 與 `unlock_story` 在 #34 **永遠是 null**，即使跨了
+    門檻也一樣——它們需要腦袋生成（B11／B2），屬 #43。§7.5 本來就允許
+    `unlock_story` 為 null，所以這是合法的完整回應，不是半成品。
+
+    `stage` 與 `newly_unlocked_stages` 不在 §7.5 的範例 body 裡，但 AC 要求
+    「跨門檻時回應標示新達成 stage」，所以補上。`newly_unlocked_stages` 是
+    陣列而不是單一值：一次入帳理論上可能跨過多個門檻，而每個新解鎖的 stage
+    都該有自己的一段敘事（見 `resonance.ResonanceResult` 的註解）。
+    """
+
+    quest_wrapper_text: str | None = None
+    resonance_value: int
+    unlock_story: str | None = None
+    stage: int
+    newly_unlocked_stages: list[int] = Field(default_factory=list)

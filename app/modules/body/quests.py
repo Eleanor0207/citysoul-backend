@@ -160,3 +160,76 @@ def _count_failed_attempt_if_token_expired(progress: QuestProgress, *, now: date
     if now - issued_at > timedelta(seconds=ENCOUNTER_TOKEN_EXPIRE_SECONDS):
         progress.attempts_today += 1
         progress.current_token_issued_at = None
+
+
+class QuestNotFoundError(LookupError):
+    """quest_id 對不到任何任務（格式不符，或該玩家沒有這筆進度）。"""
+
+
+class QuestNotCompletableError(RuntimeError):
+    """任務目前的狀態不允許完成。"""
+
+
+def spirit_id_for_quest(quest_id: str) -> str:
+    """
+    任務 id → 地標 id，`quest_id_for_spirit()` 的反向。
+
+    格式不符時拋 `QuestNotFoundError` 而不是讓 `ValueError`／`IndexError` 往外
+    竄——呼叫端拿到的該是「查無此任務」（404），不是 500。玩家送一個亂打的
+    quest_id 是可預期的輸入，不是伺服器故障。
+    """
+    if not quest_id or ":" not in quest_id:
+        raise QuestNotFoundError(f"無法解析的 quest_id：{quest_id!r}")
+
+    spirit_id, _, suffix = quest_id.rpartition(":")
+    if not spirit_id or suffix != "daily":
+        raise QuestNotFoundError(f"無法解析的 quest_id：{quest_id!r}")
+
+    return spirit_id
+
+
+def complete_quest(
+    db: Session,
+    *,
+    player_id: uuid.UUID | str,
+    quest_id: str,
+    now: datetime | None = None,
+) -> QuestProgress:
+    """
+    把任務標記為完成（SDD §7.5 前半）。
+
+    ## 判定是確定性規則，不是 LLM
+
+    CONTEXT.md 明訂「可驗證微任務由後端確定性規則判定，不由 LLM 判定」。
+    這支函式因此**完全不碰腦袋模組**——判定只看資料庫裡的狀態。
+
+    MVP 的規則很小：任務進度必須存在且不是已完成。`completion_evidence` 目前
+    不參與判定（SDD 尚未定義它的結構），但仍然收下來，因為之後加規則時
+    API 形狀不該跟著變。
+
+    ## 已完成的任務再次呼叫不是錯誤
+
+    直接回傳現況。重複提交是正常的使用者行為（網路重試、連點兩下），共鳴值的
+    去重由 `resonance_events` 的 UNIQUE 約束保證，不需要在這裡擋。
+    """
+    moment = now or datetime.now(timezone.utc)
+
+    progress = (
+        db.query(QuestProgress)
+        .filter_by(player_id=uuid.UUID(str(player_id)), quest_id=quest_id)
+        .first()
+    )
+
+    if progress is None:
+        # 沒有進度列代表玩家還沒召喚過這個靈魂——任務是在 /summon 時建立的。
+        raise QuestNotFoundError(f"玩家沒有 {quest_id} 的任務進度")
+
+    if progress.status == STATUS_COMPLETED:
+        return progress
+
+    progress.status = STATUS_COMPLETED
+    progress.completed_at = moment
+    db.commit()
+    db.refresh(progress)
+
+    return progress

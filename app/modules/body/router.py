@@ -15,8 +15,10 @@ from app.modules.body.encounter_tokens import (
 )
 from app.core.redis_client import append_session_turn
 from app.modules.body.geo import haversine_distance_m
+from app.modules.body import quests
 from app.modules.body.quests import evaluate_on_summon
 from app.modules.body.quota import RESOURCE_DIALOGUE, consume, default_tier_id
+from app.modules.body.resonance import AMOUNT_QUEST, SOURCE_QUEST, apply_resonance
 from app.modules.body.sense_tokens import SENSE_TOKEN_HEADER, require_sense_token
 from app.modules.body.sense_tokens import issue_sense_token
 from app.modules.body.tokens import issue_session_token
@@ -357,3 +359,80 @@ def get_spirit(place_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="spirit not found")
 
     return schemas.SpiritResponse.from_spirit(spirit)
+
+
+@router.post(
+    "/quests/{quest_id}/complete",
+    response_model=schemas.QuestCompleteResponse,
+    responses={
+        **_UNAUTHORIZED,
+        **_forbidden("Encounter token 屬於別的靈魂，或兩張憑證不屬於同一個玩家"),
+        404: {"model": schemas.ErrorResponse, "description": "任務不存在，或玩家還沒有這筆進度"},
+    },
+)
+def complete_quest_endpoint(
+    quest_id: str,
+    payload: schemas.QuestCompleteRequest,
+    session_player_id: uuid.UUID = Depends(require_session_token),
+    encounter_token: str | None = Header(default=None, alias=ENCOUNTER_TOKEN_HEADER),
+    db: Session = Depends(get_db),
+):
+    """
+    S4＋S5．任務完成與共鳴入帳（SDD §7.5 前半，#34）。
+
+        確定性規則判定 → quest_progress.status = 'completed'
+          → resonance += 20 → 門檻判定
+          → 回傳（unlock_story 與 quest_wrapper_text 皆為 null）
+
+    ## 不呼叫腦袋，一次都不
+
+    CONTEXT.md 明訂「可驗證微任務由**後端確定性規則**判定，不由 LLM 判定」。
+    這支端點因此完全不 import 任何腦袋模組——判定只看資料庫裡的狀態。
+
+    ## 呼叫順序硬規則（v2.1 §6.4）
+
+    身體必須「先寫完自己的表、再呼叫腦袋」，不可顛倒。本票只做前半，正好
+    符合此順序；#43 接上敘事生成時，那一段要加在所有寫入**之後**。
+
+    ## 只收 Encounter Token
+
+    SDD §6：持 Sense Token 者**不可**呼叫這支端點。感應憑證代表「你在 150m
+    內」，而任務完成需要「你真的到了現場」。兩者用不同金鑰簽章，所以把
+    sense token 塞進 `X-Encounter-Token` 會在驗章就失敗——這不是靠我們記得
+    檢查 purpose，是兩套憑證本來就換不過來。
+    """
+    try:
+        spirit_id = quests.spirit_id_for_quest(quest_id)
+    except quests.QuestNotFoundError:
+        # 亂打的 quest_id 是可預期的輸入，不是伺服器故障。
+        raise HTTPException(status_code=404, detail="quest not found")
+
+    holder_id = require_encounter_token(spirit_id, encounter_token)
+    if holder_id != session_player_id:
+        raise HTTPException(status_code=403, detail="token holder mismatch")
+
+    try:
+        quests.complete_quest(db, player_id=session_player_id, quest_id=quest_id)
+    except quests.QuestNotFoundError:
+        raise HTTPException(status_code=404, detail="quest not found")
+
+    # 共鳴入帳。去重靠 resonance_events 的 UNIQUE(player_id, source_type,
+    # source_id)——**不是先查再寫**。重複提交（網路重試、連點兩下）是正常的
+    # 使用者行為，S5 會回 awarded=False 而不是拋例外。
+    result = apply_resonance(
+        db,
+        player_id=session_player_id,
+        spirit_id=spirit_id,
+        source_type=SOURCE_QUEST,
+        source_id=quest_id,
+        amount=AMOUNT_QUEST,
+    )
+
+    return schemas.QuestCompleteResponse(
+        # 兩者屬 #43（B11 解鎖敘事生成），本票一律 null——**即使跨了門檻**。
+        quest_wrapper_text=None,
+        unlock_story=None,
+        resonance_value=result.resonance_value,
+        stage=result.stage,
+        newly_unlocked_stages=result.newly_unlocked_stages,
+    )

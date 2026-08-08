@@ -132,6 +132,65 @@
         "title": "PlayerResponse",
         "type": "object"
       },
+      "QuestCompleteRequest": {
+        "description": "`POST /api/v1/quests/{questId}/complete` 的請求。\n\n`completion_evidence` 目前**不參與判定**——SDD 尚未定義它的結構。仍然收下來，\n是因為之後加規則時 API 形狀不該跟著變（那會是破壞性變更，見 §11.2.1）。",
+        "properties": {
+          "completion_evidence": {
+            "title": "Completion Evidence",
+            "type": "object"
+          }
+        },
+        "title": "QuestCompleteRequest",
+        "type": "object"
+      },
+      "QuestCompleteResponse": {
+        "description": "SDD §7.5 的完成回應。\n\n⚠️ `quest_wrapper_text` 與 `unlock_story` 在 #34 **永遠是 null**，即使跨了\n門檻也一樣——它們需要腦袋生成（B11／B2），屬 #43。§7.5 本來就允許\n`unlock_story` 為 null，所以這是合法的完整回應，不是半成品。\n\n`stage` 與 `newly_unlocked_stages` 不在 §7.5 的範例 body 裡，但 AC 要求\n「跨門檻時回應標示新達成 stage」，所以補上。`newly_unlocked_stages` 是\n陣列而不是單一值：一次入帳理論上可能跨過多個門檻，而每個新解鎖的 stage\n都該有自己的一段敘事（見 `resonance.ResonanceResult` 的註解）。",
+        "properties": {
+          "newly_unlocked_stages": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Newly Unlocked Stages",
+            "type": "array"
+          },
+          "quest_wrapper_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quest Wrapper Text"
+          },
+          "resonance_value": {
+            "title": "Resonance Value",
+            "type": "integer"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "integer"
+          },
+          "unlock_story": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unlock Story"
+          }
+        },
+        "required": [
+          "resonance_value",
+          "stage"
+        ],
+        "title": "QuestCompleteResponse",
+        "type": "object"
+      },
       "QuestStateResponse": {
         "description": "SDD 第8.4節的 `quest` 欄位。\n\n`status` 是 `QuestStatus` 而非裸 `str`，讓客戶端能生出真正的 C# enum，\n任務狀態比對由編譯器把關，不用比對魔術字串。",
         "properties": {
@@ -448,6 +507,110 @@
           }
         },
         "summary": "Create Or Get Player",
+        "tags": [
+          "body"
+        ]
+      }
+    },
+    "/api/v1/quests/{quest_id}/complete": {
+      "post": {
+        "description": "S4＋S5．任務完成與共鳴入帳（SDD §7.5 前半，#34）。\n\n    確定性規則判定 → quest_progress.status = 'completed'\n      → resonance += 20 → 門檻判定\n      → 回傳（unlock_story 與 quest_wrapper_text 皆為 null）\n\n## 不呼叫腦袋，一次都不\n\nCONTEXT.md 明訂「可驗證微任務由**後端確定性規則**判定，不由 LLM 判定」。\n這支端點因此完全不 import 任何腦袋模組——判定只看資料庫裡的狀態。\n\n## 呼叫順序硬規則（v2.1 §6.4）\n\n身體必須「先寫完自己的表、再呼叫腦袋」，不可顛倒。本票只做前半，正好\n符合此順序；#43 接上敘事生成時，那一段要加在所有寫入**之後**。\n\n## 只收 Encounter Token\n\nSDD §6：持 Sense Token 者**不可**呼叫這支端點。感應憑證代表「你在 150m\n內」，而任務完成需要「你真的到了現場」。兩者用不同金鑰簽章，所以把\nsense token 塞進 `X-Encounter-Token` 會在驗章就失敗——這不是靠我們記得\n檢查 purpose，是兩套憑證本來就換不過來。",
+        "operationId": "complete_quest_endpoint_api_v1_quests__quest_id__complete_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quest_id",
+            "required": true,
+            "schema": {
+              "title": "Quest Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Encounter-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Encounter-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuestCompleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuestCompleteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Session token 無效或未提供"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Encounter token 屬於別的靈魂，或兩張憑證不屬於同一個玩家"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "任務不存在，或玩家還沒有這筆進度"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Complete Quest Endpoint",
         "tags": [
           "body"
         ]

@@ -78,6 +78,8 @@ EXPECTED_RESPONSE_CODES = {
     # （SDD v1 §3），所以它是唯一會回 429 的路由。
     ("post", "/api/v1/spirits/{place_id}/dialogue"): {"200", "401", "403", "404", "422", "429"},
     ("get", "/api/v1/spirits/{place_id}"): {"200", "404", "422"},
+    # #34：只收 encounter token，所以沒有獨立的 sense 錯誤碼。
+    ("post", "/api/v1/quests/{quest_id}/complete"): {"200", "401", "403", "404", "422"},
     ("get", "/health"): {"200"},
 }
 
