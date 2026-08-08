@@ -53,6 +53,28 @@ class Settings(BaseSettings):
     gemini_max_output_tokens: int = 256
     gemini_timeout_seconds: float = 8.0
 
+    # B10 TTS（#21）。MVP 語言固定台灣繁體中文。
+    #
+    # ⚠️ **語言是設定，不是從文字自動偵測。** 自動偵測會讓一句混了英文地名的
+    # 台詞被判成英文，然後用英文腔唸出整句中文。玩家聽到的是角色破音，而我們
+    # 在 log 上看不到任何錯誤。
+    tts_language_code: str = "zh-TW"
+
+    # 留空表示讓 Google 依語言挑預設嗓音。要指定的話用完整名稱
+    # （例如 cmn-TW-Wavenet-A）——嗓音是角色的一部分，換嗓音等於換角色，
+    # 應該是一次明確的決定而不是預設值漂移的結果。
+    tts_voice_name: str | None = None
+    tts_timeout_seconds: float = 8.0
+
+    # 音檔存放的 GCS bucket。留空時真實實作會直接降級成「沒有語音」——
+    # 本機開發不該為了跑起來而被迫先開一個 bucket。
+    tts_audio_bucket: str | None = None
+
+    # 音檔的存活時間。對話語音是一次性的，沒有理由永久保存——那只會累積成本，
+    # 而且錄下了玩家聽過什麼。實際的清除靠 bucket 的 lifecycle rule，這個值
+    # 是簽章 URL 的有效期。
+    tts_audio_url_ttl_seconds: int = 3600
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 

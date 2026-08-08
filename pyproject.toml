@@ -17,6 +17,10 @@ dependencies = [
     "tzdata>=2026.3",
     # B1 Vertex AI（ADR-0001）。憑證走 ADC，不需要額外的金鑰套件（ADR-0003）。
     "google-genai>=1.60",
+    # B10 TTS（#21）。憑證同樣走 ADC，不需要金鑰套件（ADR-0003）。
+    # texttospeech 做合成，storage 放音檔——客戶端要的是 URL，中間一定有存放。
+    "google-cloud-texttospeech>=2.16",
+    "google-cloud-storage>=2.18",
     "alembic>=1.19.0",
 ]
 
