@@ -19,9 +19,16 @@ unity-flutter-bridge-demo/
 # Exception: docs/agents/ holds the mattpocock-skills config that CLAUDE.md
 # references (issue-tracker.md/triage-labels.md/domain.md) — needs to survive
 # a fresh clone for the skills to keep working.
+#
+# Exception: docs/dev-notes/ records decisions and known spec/schema gaps that
+# exist nowhere else (e.g. #19's ACs referencing a column migration 0005
+# deleted). It started as a local scratch file, which meant a single
+# uncommitted copy — one `git clean` from being lost.
 docs/*
 !docs/agents/
 !docs/agents/**
+!docs/dev-notes/
+!docs/dev-notes/**
 
 # Flutter 客戶端已於 SDD v2.1 汰換為 Unity（見 citysoul-client repo）。
 # 原始碼保留在 git 歷史中，需要時 git show 4e19f0a:mobile_app/... 取回。
