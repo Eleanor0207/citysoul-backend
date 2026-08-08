@@ -33,6 +33,67 @@ def test_the_floor_itself_has_not_been_edited():
     assert set(LONGSHAN_TABOOS) >= _REQUIRED_TABOOS
 
 
+# SDD v2.1 §12.2 要求禁忌清單涵蓋的五類，對應到可辨識的關鍵字。
+#
+# 用關鍵字而不是完整字串比對，是因為這四條（#41 疊加的那批）**還沒經過敘事審核**，
+# 文案措辭預期會被改寫。這裡要守住的是「這五類還在」，不是「字沒被動過」——
+# 拿完整字串去釘一份還沒定稿的文案，只會在審核那天變成一條擋路的紅燈。
+#
+# 若審核後的措辭讓某個關鍵字消失，那要**刻意**更新這裡，並確認新措辭真的還涵蓋
+# 那一類，而不是順手把測試改綠。
+_SECTION_12_2_CATEGORIES = {
+    "教義解釋": "教義",
+    "神祇位階": "位階",
+    "靈驗與否": "靈驗",
+    "占卜結果": "籤",
+    "宗教比較": "比較",
+}
+
+
+def test_taboos_cover_every_category_required_by_section_12_2():
+    """
+    §12.2 點名五類禁忌，而 CONTEXT.md 的四條下限只涵蓋其中兩類。
+
+    缺的三類（教義解釋、神祇位階、靈驗與否）正是宗教場域最容易出事的地方：
+    它們不是「玩家可能會問的邊緣狀況」，而是站在廟埕前最自然會脫口而出的問題。
+    #41 內容治理把它們補上，這條測試防止之後被合併回四條。
+
+    ⚠️ 比對的是模組常數而不是資料庫的那一列。既有的開發資料庫在 `seed` 之前
+    就已經有 version=1 那一列了，而 `seed` 是「不存在才插入」，不會回頭更新
+    既有列——查資料庫的話，這條會在所有舊資料庫上紅，而那是資料陳舊，不是
+    安全下限被削。
+    """
+    joined = " ".join(LONGSHAN_TABOOS)
+
+    missing = [
+        category
+        for category, keyword in _SECTION_12_2_CATEGORIES.items()
+        if keyword not in joined
+    ]
+
+    assert not missing, (
+        f"禁忌清單沒有涵蓋 §12.2 要求的類別：{missing}。"
+        "見 docs/content-governance/longshan-temple.md §3。"
+    )
+
+
+def test_not_this_character_excludes_the_religious_interpreter_role():
+    """
+    §12.2 要求 `not_this_character` 明確涵蓋「不是宗教解說員」。
+
+    這一項單獨釘住，是因為它跟另外兩項（廟方人員、神祇）不同：玩家不太會把
+    角色誤認成神明，但只要問一句「這個儀式是什麼意思」，LLM 就會非常自然地
+    滑進解說員的位置——那正是 §3 Avoid 條目「不作教義性陳述」要擋的東西。
+    """
+    from app.db import seed
+
+    # 從 seed 模組實際會寫入的值取，而不是在測試裡另抄一份。
+    persona_text = seed.LONGSHAN_NOT_THIS_CHARACTER
+
+    assert "宗教解說員" in persona_text
+    assert "廟方人員" in persona_text
+
+
 @pytest.fixture
 def seeded(db_session):
     """seed 是冪等的，重跑不會產生第二份資料。"""

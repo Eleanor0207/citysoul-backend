@@ -23,6 +23,12 @@ docs/*
 !docs/agents/
 !docs/agents/**
 
+# 例外二：內容治理文件。理由與 docs/agents/ 相同——它必須撐得過一次全新 clone。
+# B4（#11）與 B5（#19）的實作直接引用它當輸入，而它同時是人格卡上線的稽核軌跡
+# （含審核者與審核日期）。一份簽核記錄如果只活在某個人的硬碟上，那就不是記錄。
+!docs/content-governance/
+!docs/content-governance/**
+
 # Flutter 客戶端已於 SDD v2.1 汰換為 Unity（見 citysoul-client repo）。
 # 原始碼保留在 git 歷史中，需要時 git show 4e19f0a:mobile_app/... 取回。
 mobile_app/
