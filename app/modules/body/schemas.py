@@ -193,18 +193,30 @@ class QuestCompleteRequest(BaseModel):
     completion_evidence: dict = Field(default_factory=dict)
 
 
+class UnlockStoryResponse(BaseModel):
+    """SDD §7.5 的 `unlock_story` 物件（#43）。"""
+
+    stage: int
+    story_text: str
+
+
 class QuestCompleteResponse(BaseModel):
     """
     SDD §7.5 的完成回應。
 
-    `quest_wrapper_text` 與 `unlock_story` **在這張票（#34）永遠是 null**
-    ——它們需要腦袋生成（B11／B2），拆給 #43。§7.5 本來就允許
-    `unlock_story` 為 null，所以這是合法的完整回應，不是半成品。
+    `unlock_story` 只在這次入帳**跨過門檻**時才有值，沒跨過就是 null
+    ——§7.5 本來就允許 null。
+
+    ⚠️ 一次跨過多個門檻時（例如 5 → 55 同時跨過 10 與 40），每個 stage 都
+    會各自生成一段故事（見 `unlock_story.generate_unlock_stories`），但
+    §7.5 的回應形狀只裝得下**一個** `unlock_story`，所以這裡放的是最高的
+    那一階。中間那幾段目前沒有欄位可以帶回客戶端——MVP 的 +10／+20 跨不過
+    兩個門檻，所以現階段碰不到，但契約要支援的話得先改 §7.5。
     """
 
     quest_wrapper_text: str | None = None
     resonance_value: int
-    unlock_story: str | None = None
+    unlock_story: UnlockStoryResponse | None = None
 
 
 class DailyEventResponse(BaseModel):

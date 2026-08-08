@@ -18,7 +18,10 @@ from app.modules.body.quests import complete_quest, evaluate_on_summon, spirit_i
 from app.modules.body.quota import default_tier_id
 from app.modules.body.sense_tokens import issue_sense_token
 from app.modules.body.tokens import issue_session_token
+from app.modules.brain.gemini import GeminiClient, get_gemini_client
 from app.modules.brain.greetings import match_canned_greeting
+from app.modules.brain.quest_wrapper import generate_quest_wrapper
+from app.modules.brain.unlock_story import generate_unlock_stories
 
 # 未命中快速問候時的人工預寫台詞。
 #
@@ -265,9 +268,10 @@ def complete_quest_endpoint(
     session_player_id: uuid.UUID = Depends(require_session_token),
     encounter_token: str | None = Header(default=None, alias=ENCOUNTER_TOKEN_HEADER),
     db: Session = Depends(get_db),
+    gemini_client: GeminiClient = Depends(get_gemini_client),
 ):
     """
-    S4／S5．任務完成與共鳴入帳（SDD §7.5 前半，#34）。
+    S4／S5．任務完成、共鳴入帳與敘事包裝（SDD §7.5，#34 前半＋#43 後半）。
 
     需要 Session Token ＋ **Encounter Token**。持 Sense Token 者不可呼叫這支
     （SDD 第6節）——那張憑證只證明「在 150m 感應範圍內」，而挑戰任務要求
@@ -275,7 +279,13 @@ def complete_quest_endpoint(
     `require_encounter_token` 用的是 encounter 的金鑰與 `purpose` claim，
     sense token 本來就過不了。
 
-    `unlock_story` 與 `quest_wrapper_text` 一律回 `null`——敘事生成屬 #43。
+    完成判定本身是**後端確定性規則，不由 LLM 判定**（CONTEXT.md）——那一段
+    全在 `complete_quest` 裡，它碰不到腦袋模組。腦袋只在判定與寫入都結束
+    之後才登場，負責把已經發生的事**包裝**成角色的話（#43，SDD §7.5 後半）。
+
+    **呼叫順序硬規則（v2.1 §6.4）**：身體先寫完自己的表、再呼叫腦袋，不可
+    顛倒——顛倒的話腦袋拿到的 stage 會跟資料庫不一致。`complete_quest` 回
+    傳時該 commit 的都 commit 完了，底下的生成才開始。
     """
     spirit_id = spirit_id_for_quest(quest_id)
     if spirit_id is None:
@@ -291,14 +301,36 @@ def complete_quest_endpoint(
     if spirit is None or not spirit.is_active:
         raise HTTPException(status_code=404, detail="spirit not found")
 
+    # ── 身體：判定 → 寫表 → 入帳。到這行結束為止，腦袋一次都沒被碰到。
     result = complete_quest(
         db, player_id=session_player_id, spirit_id=spirit_id, quest_id=quest_id
     )
 
+    # ── 腦袋：純包裝。任務已經完成、共鳴值已經入帳，這裡失敗都只會拿到
+    #    回退台詞，不會讓玩家的進度消失（兩支生成函式都保證不拋例外）。
+    #
+    # 每個新解鎖的 stage 都各自生成一段（`generate_unlock_stories` 而不是
+    # 只取最後一個）——#16 讓 `newly_unlocked_stages` 回 list 就是為了不讓
+    # 中間那段靜默消失。§7.5 的回應只裝得下一個，所以帶回最高的那階，
+    # 見 `schemas.QuestCompleteResponse` 的說明。
+    stories = generate_unlock_stories(
+        str(session_player_id),
+        spirit_id,
+        result.newly_unlocked_stages,
+        gemini_client=gemini_client,
+    )
+    unlock_story = (
+        schemas.UnlockStoryResponse(stage=stories[-1].stage, story_text=stories[-1].story_text)
+        if stories
+        else None
+    )
+
     return schemas.QuestCompleteResponse(
-        quest_wrapper_text=None,
+        quest_wrapper_text=generate_quest_wrapper(
+            str(session_player_id), quest_id, gemini_client=gemini_client
+        ),
         resonance_value=result.resonance_value,
-        unlock_story=None,
+        unlock_story=unlock_story,
     )
 
 

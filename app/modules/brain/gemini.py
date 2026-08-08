@@ -238,6 +238,19 @@ class VertexAIGeminiClient(GeminiClient):
         return FALLBACK_REPLY
 
 
+def get_gemini_client() -> GeminiClient:
+    """
+    FastAPI dependency：對話／敘事生成要用的 client。
+
+    存在的理由是**可注入**：端點測試用
+    `app.dependency_overrides[get_gemini_client] = lambda: FakeGeminiClient()`
+    換掉它，就能在完全沒有 GCP 憑證的情況下驗證整條 API 流程。少了這一層，
+    端點會直接 `VertexAIGeminiClient()`，測試只能拿到「ADC 找不到憑證」的
+    回退台詞——那驗證不到生成路徑，只驗證得到回退路徑。
+    """
+    return VertexAIGeminiClient()
+
+
 class FakeGeminiClient(GeminiClient):
     """
     測試用。放在正式程式碼而不是 tests/ 底下，是因為 B2、B9、對話端點的測試

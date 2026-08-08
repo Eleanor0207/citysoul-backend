@@ -14,7 +14,26 @@ from fastapi.testclient import TestClient
 
 from app.core.database import SessionLocal
 from app.main import app
+from app.modules.brain.gemini import FakeGeminiClient, get_gemini_client
 from scripts.init_db import upgrade_to_head
+
+
+@pytest.fixture(autouse=True)
+def _no_real_gemini_calls_from_endpoints():
+    """
+    端點預設拿到 `FakeGeminiClient`，不是真的 Vertex AI client。
+
+    ⚠️ 這條不只是「跑快一點」。少了它，任何打到會生成敘事的端點的測試都會
+    真的去嘗試 ADC 認證：沒有憑證的機器上那是**每次呼叫等一輪逾時**（實測
+    一個 20 個測試的檔案從 0.4 秒變成 42 秒），有憑證的機器上更糟——測試會
+    真的花錢呼叫模型。README 說得很清楚：CI 不需要任何 GCP 憑證。
+
+    需要特定行為（一叫就爆、記錄 DB 狀態）的測試自己再 override 一次，
+    後設定的會蓋過這裡。
+    """
+    app.dependency_overrides[get_gemini_client] = lambda: FakeGeminiClient()
+    yield
+    app.dependency_overrides.pop(get_gemini_client, None)
 
 
 @pytest.fixture(scope="session", autouse=True)

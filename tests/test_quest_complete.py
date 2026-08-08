@@ -10,7 +10,7 @@ import pytest
 
 from app.modules.body import models
 from app.modules.body.encounter_tokens import ENCOUNTER_TOKEN_HEADER, issue_encounter_token
-from app.modules.body.quests import quest_id_for_spirit, spirit_id_for_quest
+from app.modules.body.quests import complete_quest, quest_id_for_spirit, spirit_id_for_quest
 from app.modules.body.resonance import stage_for_value
 from app.modules.body.sense_tokens import SENSE_TOKEN_HEADER, issue_sense_token
 
@@ -312,70 +312,47 @@ def test_duplicate_submission_does_not_double_award(client, db_session, player, 
     assert ledger_count == 1
 
 
-# ── unlock_story／quest_wrapper_text 一律 null（AC8） ─────────────────────
-
-
-def test_narrative_fields_are_null_in_this_ticket(client, player, spirit):
-    resp = _complete(
-        client,
-        quest_id_for_spirit(spirit.spirit_id),
-        session_token=player["session_token"],
-        encounter_token=issue_encounter_token(player["player_id"], spirit.spirit_id),
-    )
-
-    body = resp.json()
-    assert body["quest_wrapper_text"] is None
-    assert body["unlock_story"] is None
-
-
-def test_narrative_fields_stay_null_even_when_crossing_a_threshold(
-    client, db_session, player, spirit
-):
-    """即使跨了門檻也是 null——敘事生成屬 #43，這張票不做。"""
-    db_session.add(
-        models.Resonance(
-            player_id=uuid.UUID(player["player_id"]),
-            spirit_id=spirit.spirit_id,
-            resonance_value=30,
-        )
-    )
-    db_session.commit()
-
-    resp = _complete(
-        client,
-        quest_id_for_spirit(spirit.spirit_id),
-        session_token=player["session_token"],
-        encounter_token=issue_encounter_token(player["player_id"], spirit.spirit_id),
-    )
-
-    body = resp.json()
-    assert body["resonance_value"] == 50  # 確實跨過了 40
-    assert body["unlock_story"] is None
-    assert body["quest_wrapper_text"] is None
+# ── 敘事欄位（#34 當時一律 null，#43 之後由 test_quest_narrative.py 接手）
+#
+# #34 原本有兩條測試釘住「`unlock_story` 與 `quest_wrapper_text` 永遠是
+# null」，那在當時是對的——那張票刻意不做敘事。#43 把敘事接上之後，那兩條
+# 就變成在釘一個已經被取代的中間狀態，所以移到
+# `tests/test_quest_narrative.py` 改成驗真正的行為（跨門檻才有 unlock_story、
+# wrapper 永遠非空）。這裡留下說明而不是靜靜刪掉，是為了讓「#34 的 AC8 去
+# 哪了」這個問題有答案。
 
 
 # ── 不呼叫任何 LLM（AC3） ────────────────────────────────────────────────
 
 
-def test_completion_never_calls_the_brain(client, player, spirit, monkeypatch):
+def test_the_completion_judgement_itself_never_calls_the_brain(
+    db_session, player, spirit, monkeypatch
+):
     """
     CONTEXT.md：可驗證微任務由後端確定性規則判定，**不由 LLM 判定**。
-    把 Gemini 的真實 client 換成一叫就爆的 fake——完成流程若偷偷呼叫了腦袋，
-    這個測試會炸；正常回 200 就證明它一次都沒被呼叫。
+
+    ⚠️ 這條原本是打整支端點的（#34 當時端點確實完全不碰腦袋）。#43 之後
+    端點會在**判定與寫入都結束之後**呼叫腦袋做敘事包裝，所以打整支端點的
+    寫法已經不成立——但 CONTEXT.md 那條規則約束的從來就是「判定」，不是
+    「事後的包裝」。因此這裡改成直接打 `complete_quest`：判定與寫入的那一段
+    仍然必須一次都不碰腦袋。
+
+    包裝那一段的行為（失敗也不能讓進度消失）由 `test_quest_narrative.py`
+    負責，不是這裡。
     """
     import app.modules.brain.gemini as gemini
 
     def explode(*args, **kwargs):
-        raise AssertionError("任務完成流程不該呼叫腦袋模組")
+        raise AssertionError("完成判定不該呼叫腦袋模組")
 
     monkeypatch.setattr(gemini.VertexAIGeminiClient, "generate", explode)
     monkeypatch.setattr(gemini.FakeGeminiClient, "generate", explode)
 
-    resp = _complete(
-        client,
-        quest_id_for_spirit(spirit.spirit_id),
-        session_token=player["session_token"],
-        encounter_token=issue_encounter_token(player["player_id"], spirit.spirit_id),
+    result = complete_quest(
+        db_session,
+        player_id=uuid.UUID(player["player_id"]),
+        spirit_id=spirit.spirit_id,
+        quest_id=quest_id_for_spirit(spirit.spirit_id),
     )
 
-    assert resp.status_code == 200
+    assert result.resonance_value == 20

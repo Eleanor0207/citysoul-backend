@@ -188,7 +188,7 @@
         "type": "object"
       },
       "QuestCompleteResponse": {
-        "description": "SDD §7.5 的完成回應。\n\n`quest_wrapper_text` 與 `unlock_story` **在這張票（#34）永遠是 null**\n——它們需要腦袋生成（B11／B2），拆給 #43。§7.5 本來就允許\n`unlock_story` 為 null，所以這是合法的完整回應，不是半成品。",
+        "description": "SDD §7.5 的完成回應。\n\n`unlock_story` 只在這次入帳**跨過門檻**時才有值，沒跨過就是 null\n——§7.5 本來就允許 null。\n\n⚠️ 一次跨過多個門檻時（例如 5 → 55 同時跨過 10 與 40），每個 stage 都\n會各自生成一段故事（見 `unlock_story.generate_unlock_stories`），但\n§7.5 的回應形狀只裝得下**一個** `unlock_story`，所以這裡放的是最高的\n那一階。中間那幾段目前沒有欄位可以帶回客戶端——MVP 的 +10／+20 跨不過\n兩個門檻，所以現階段碰不到，但契約要支援的話得先改 §7.5。",
         "properties": {
           "quest_wrapper_text": {
             "anyOf": [
@@ -208,13 +208,12 @@
           "unlock_story": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/UnlockStoryResponse"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Unlock Story"
+            ]
           }
         },
         "required": [
@@ -422,6 +421,25 @@
         "title": "SummonResponse",
         "type": "object"
       },
+      "UnlockStoryResponse": {
+        "description": "SDD §7.5 的 `unlock_story` 物件（#43）。",
+        "properties": {
+          "stage": {
+            "title": "Stage",
+            "type": "integer"
+          },
+          "story_text": {
+            "title": "Story Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage",
+          "story_text"
+        ],
+        "title": "UnlockStoryResponse",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "loc": {
@@ -513,7 +531,7 @@
     },
     "/api/v1/quests/{quest_id}/complete": {
       "post": {
-        "description": "S4／S5．任務完成與共鳴入帳（SDD §7.5 前半，#34）。\n\n需要 Session Token ＋ **Encounter Token**。持 Sense Token 者不可呼叫這支\n（SDD 第6節）——那張憑證只證明「在 150m 感應範圍內」，而挑戰任務要求\n真的到現場（50m）。這裡不接受 `X-Sense-Token`，沒有另外寫檢查：\n`require_encounter_token` 用的是 encounter 的金鑰與 `purpose` claim，\nsense token 本來就過不了。\n\n`unlock_story` 與 `quest_wrapper_text` 一律回 `null`——敘事生成屬 #43。",
+        "description": "S4／S5．任務完成、共鳴入帳與敘事包裝（SDD §7.5，#34 前半＋#43 後半）。\n\n需要 Session Token ＋ **Encounter Token**。持 Sense Token 者不可呼叫這支\n（SDD 第6節）——那張憑證只證明「在 150m 感應範圍內」，而挑戰任務要求\n真的到現場（50m）。這裡不接受 `X-Sense-Token`，沒有另外寫檢查：\n`require_encounter_token` 用的是 encounter 的金鑰與 `purpose` claim，\nsense token 本來就過不了。\n\n完成判定本身是**後端確定性規則，不由 LLM 判定**（CONTEXT.md）——那一段\n全在 `complete_quest` 裡，它碰不到腦袋模組。腦袋只在判定與寫入都結束\n之後才登場，負責把已經發生的事**包裝**成角色的話（#43，SDD §7.5 後半）。\n\n**呼叫順序硬規則（v2.1 §6.4）**：身體先寫完自己的表、再呼叫腦袋，不可\n顛倒——顛倒的話腦袋拿到的 stage 會跟資料庫不一致。`complete_quest` 回\n傳時該 commit 的都 commit 完了，底下的生成才開始。",
         "operationId": "complete_quest_endpoint_api_v1_quests__quest_id__complete_post",
         "parameters": [
           {
