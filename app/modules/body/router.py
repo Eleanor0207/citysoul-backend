@@ -17,7 +17,7 @@ from app.modules.body.encounter_tokens import (
 )
 from app.core.redis_client import append_session_turn
 from app.modules.body.geo import haversine_distance_m
-from app.modules.body import daily_event_service, queries, quests
+from app.modules.body import daily_event_service, push, queries, quests
 from app.modules.body.quests import evaluate_on_summon
 from app.modules.body.quota import (
     RESOURCE_DIALOGUE,
@@ -800,3 +800,48 @@ def get_avatar_asset(avatar_id: str, db: Session = Depends(get_db)):
         bundle_url=row.bundle_url,
         version=row.version,
     )
+
+
+@router.post(
+    "/push/register",
+    response_model=schemas.PushSubscriptionResponse,
+    responses={**_UNAUTHORIZED},
+)
+def register_push(
+    payload: schemas.PushRegisterRequest,
+    player_id: uuid.UUID = Depends(require_session_token),
+    db: Session = Depends(get_db),
+):
+    """
+    S11．註冊或更新推播 token（#39）。
+
+    **重複註冊是更新，不是新增列**——主鍵是 `player_id`，換手機或 token 輪替時
+    舊的直接被覆蓋。累積失效 token 的話，群發時得自己挑「最新的那個」，而那個
+    判斷遲早會出錯然後把推播送到別人的舊裝置上。
+
+    重新註冊視為重新訂閱：玩家會這樣做通常就是因為想再收到通知。
+    """
+    row = push.register_push_token(db, player_id=player_id, push_token=payload.push_token)
+    return schemas.PushSubscriptionResponse(is_subscribed=row.is_subscribed)
+
+
+@router.post(
+    "/push/unsubscribe",
+    response_model=schemas.PushSubscriptionResponse,
+    responses={**_UNAUTHORIZED},
+)
+def unsubscribe_push(
+    player_id: uuid.UUID = Depends(require_session_token),
+    db: Session = Depends(get_db),
+):
+    """
+    S11．退訂（#39）。
+
+    用 `is_subscribed=false` 而不是刪列：token 還有用，重新訂閱時不需要重新
+    註冊裝置。
+
+    沒註冊過的玩家也回 200——「我不想收推播」對一個從沒註冊過的人來說已經成立，
+    回 404 只會讓客戶端要為一個不是問題的狀況寫處理分支。
+    """
+    push.unsubscribe(db, player_id=player_id)
+    return schemas.PushSubscriptionResponse(is_subscribed=False)

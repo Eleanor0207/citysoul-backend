@@ -325,6 +325,36 @@
         "title": "ProfileResponse",
         "type": "object"
       },
+      "PushRegisterRequest": {
+        "description": "`POST /api/v1/push/register`（S11／#39）。\n\n只收 token。**不收位置、不收裝置型號**——推播是通知不是內容，這條路徑不\n需要知道玩家在哪裡或用什麼手機。",
+        "properties": {
+          "push_token": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Push Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "push_token"
+        ],
+        "title": "PushRegisterRequest",
+        "type": "object"
+      },
+      "PushSubscriptionResponse": {
+        "description": "訂閱狀態。\n\n刻意**不回傳 `push_token`**：客戶端本來就知道自己送了什麼，回傳它只是讓\n這個值多存在於一個地方（log、快取、錯誤回報）。",
+        "properties": {
+          "is_subscribed": {
+            "title": "Is Subscribed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "is_subscribed"
+        ],
+        "title": "PushSubscriptionResponse",
+        "type": "object"
+      },
       "QuestCompleteRequest": {
         "description": "`POST /api/v1/quests/{questId}/complete` 的請求。\n\n`completion_evidence` 目前**不參與判定**——SDD 尚未定義它的結構。仍然收下來，\n是因為之後加規則時 API 形狀不該跟著變（那會是破壞性變更，見 §11.2.1）。",
         "properties": {
@@ -935,6 +965,100 @@
           }
         ],
         "summary": "Get Profile",
+        "tags": [
+          "body"
+        ]
+      }
+    },
+    "/api/v1/push/register": {
+      "post": {
+        "description": "S11．註冊或更新推播 token（#39）。\n\n**重複註冊是更新，不是新增列**——主鍵是 `player_id`，換手機或 token 輪替時\n舊的直接被覆蓋。累積失效 token 的話，群發時得自己挑「最新的那個」，而那個\n判斷遲早會出錯然後把推播送到別人的舊裝置上。\n\n重新註冊視為重新訂閱：玩家會這樣做通常就是因為想再收到通知。",
+        "operationId": "register_push_api_v1_push_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PushRegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushSubscriptionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Session token 無效或未提供"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Register Push",
+        "tags": [
+          "body"
+        ]
+      }
+    },
+    "/api/v1/push/unsubscribe": {
+      "post": {
+        "description": "S11．退訂（#39）。\n\n用 `is_subscribed=false` 而不是刪列：token 還有用，重新訂閱時不需要重新\n註冊裝置。\n\n沒註冊過的玩家也回 200——「我不想收推播」對一個從沒註冊過的人來說已經成立，\n回 404 只會讓客戶端要為一個不是問題的狀況寫處理分支。",
+        "operationId": "unsubscribe_push_api_v1_push_unsubscribe_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushSubscriptionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Session token 無效或未提供"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Unsubscribe Push",
         "tags": [
           "body"
         ]

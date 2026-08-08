@@ -92,6 +92,9 @@ EXPECTED_RESPONSE_CODES = {
     ("get", "/api/v1/players/me/memory-summary"): {"200", "401"},
     # #38：資產位置不是玩家資料，無需驗證。
     ("get", "/api/v1/assets/{avatar_id}"): {"200", "404", "422"},
+    # #39：只需要 session token。
+    ("post", "/api/v1/push/register"): {"200", "401", "422"},
+    ("post", "/api/v1/push/unsubscribe"): {"200", "401"},
     ("get", "/health"): {"200"},
 }
 

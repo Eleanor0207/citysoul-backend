@@ -375,3 +375,28 @@ class AvatarAsset(Base):
     updated_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
+
+class PushSubscription(Base):
+    """
+    S11．推播訂閱（SDD v1 §3.1／#39）。
+
+    主鍵是 `player_id`——換手機、token 輪替時是**覆蓋**而不是累積。用代理鍵的話，
+    一個玩家會慢慢長出十幾列失效的 token，而群發時得自己挑「最新的那個」，
+    那個判斷遲早會出錯然後推播送到別人的舊裝置上。
+
+    退訂用 `is_subscribed=false` 而不是刪列：token 還有用，玩家重新訂閱時不需要
+    重新註冊裝置。
+
+    ⚠️ **沒有任何位置欄位。** 推播是通知不是內容——玩家點進來後才呼叫既有端點
+    取內容，所以這張表不需要知道他在哪裡。
+    """
+
+    __tablename__ = "push_subscriptions"
+
+    player_id = Column(UUID(as_uuid=True), ForeignKey("players.player_id"), primary_key=True)
+    push_token = Column(String(256), nullable=False)
+    is_subscribed = Column(Boolean, nullable=False, server_default="true", default=True)
+    updated_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )

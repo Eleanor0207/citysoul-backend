@@ -426,3 +426,25 @@ class AvatarAssetResponse(BaseModel):
     catalog_url: str
     bundle_url: str
     version: str
+
+
+class PushRegisterRequest(BaseModel):
+    """
+    `POST /api/v1/push/register`（S11／#39）。
+
+    只收 token。**不收位置、不收裝置型號**——推播是通知不是內容，這條路徑不
+    需要知道玩家在哪裡或用什麼手機。
+    """
+
+    push_token: str = Field(min_length=1, max_length=256)
+
+
+class PushSubscriptionResponse(BaseModel):
+    """
+    訂閱狀態。
+
+    刻意**不回傳 `push_token`**：客戶端本來就知道自己送了什麼，回傳它只是讓
+    這個值多存在於一個地方（log、快取、錯誤回報）。
+    """
+
+    is_subscribed: bool
