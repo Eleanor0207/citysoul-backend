@@ -1,0 +1,23 @@
+# 本機 Postgres 映像檔：pgvector + PostGIS
+#
+# 我們同時需要兩個 extension，而沒有現成的官方映像檔兩個都有：
+#
+#   - `vector`  → B6 長期記憶的語意檢索
+#   - `postgis` → brain.districts 的地理圍欄（ST_Contains）
+#
+# `pgvector/pgvector:pg16` 只裝了 pgvector，直接 `CREATE EXTENSION postgis`
+# 會噴 `extension "postgis" is not available`。所以在它上面疊裝 PostGIS。
+#
+# 方向選擇：以 pgvector 映像檔為基底再加 PostGIS，而不是反過來。pgvector 的
+# 映像檔是從官方 `postgres:16` 疊上來的，加 apt 套件是它預期的用法；
+# postgis/postgis 則另外改了 entrypoint 來自動建 extension，在它上面編
+# pgvector 會多出一組不必要的變數。
+#
+# Cloud SQL for PostgreSQL 16 兩個 extension 都原生支援（PostGIS 3.5.2、
+# pgvector 0.8.0），所以這個 Dockerfile 純粹是本機的事，不需要有 Cloud Run／
+# Cloud SQL 的對應物。
+FROM pgvector/pgvector:pg16
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-16-postgis-3 \
+    && rm -rf /var/lib/apt/lists/*

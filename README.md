@@ -21,13 +21,27 @@
 ## 1. 起本機資料庫/Redis
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
 會起兩個容器：
 
-- `db`：Postgres 16 + pgvector extension（跟 Cloud SQL 上會裝的 extension 一致，本機先驗證行為）
+- `db`：Postgres 16 + pgvector + PostGIS（跟 Cloud SQL 上會裝的 extension 一致，本機先驗證行為）
 - `redis`：Redis 7
+
+### 為什麼要 `--build`
+
+`db` 不是現成映像檔，是 `Dockerfile.postgres` 建出來的。我們同時需要 `vector`
+（B6 記憶檢索）和 `postgis`（區域圍欄），而沒有官方映像檔兩個都有——
+`pgvector/pgvector:pg16` 只有 pgvector，直接 `CREATE EXTENSION postgis` 會噴
+`extension "postgis" is not available`。所以在它上面疊裝 PostGIS。
+
+**第一次啟動、或改過 `Dockerfile.postgres` 之後，一定要帶 `--build`**，
+否則 compose 會沿用舊的映像檔，PostGIS 不會出現。之後日常啟動 `docker compose up -d`
+就夠了。
+
+Cloud SQL for PostgreSQL 16 兩個 extension 都原生支援，不需要對應的自建映像檔——
+那邊由 migration `0006` 的 `CREATE EXTENSION` 負責啟用。
 
 ## 2. 裝 Python 套件
 

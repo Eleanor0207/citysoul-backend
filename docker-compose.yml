@@ -1,7 +1,11 @@
 services:
   db:
-    # pgvector/pgvector 官方映像檔已內建 pgvector extension，跟 Cloud SQL 上手動裝 pgvector 行為一致
-    image: pgvector/pgvector:pg16
+    # 自建映像檔：pgvector 官方映像檔 + PostGIS。兩個 extension 都要有，
+    # 跟 Cloud SQL 上會啟用的組合一致（見 Dockerfile.postgres）。
+    # 改過 Dockerfile.postgres 之後要 `docker compose up -d --build` 才會生效。
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
     environment:
       POSTGRES_USER: city_soul
       POSTGRES_PASSWORD: city_soul_dev
