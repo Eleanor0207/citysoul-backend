@@ -34,3 +34,11 @@ unity-flutter-bridge-demo/
 # 其他開發期產物
 .scratch/
 node_modules/
+
+# 從 mattpocock/skills 拉下來的 agent skills（107 個檔案）。內容不是我們寫的，
+# 而且 skills-lock.json 已經記錄了來源與 hash——需要的人照 lock 檔還原即可，
+# 不必讓它們佔滿每一次 clone 與 diff。
+#
+# ⚠️ 這跟下面例外放行的 docs/agents/ 是兩回事：那三個檔案是 CLAUDE.md 直接
+# 引用的專案設定，必須撐過一次全新 clone。
+.agents/
