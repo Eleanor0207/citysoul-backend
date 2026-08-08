@@ -1,6 +1,32 @@
 {
   "components": {
     "schemas": {
+      "DailyEventResponse": {
+        "description": "`GET /api/v1/spirits/{placeId}/daily-event` 的回應（S10／#26）。\n\n**公開世界狀態，不需要任何 token。**\n\n`is_fallback` 為 true 有兩種可能：內容是人工預寫保底，或是回退到了前一天的\n快取。客戶端**不需要**據此改變呈現——玩家看到的都該是一段正常的敘事。\n它存在是為了讓我們觀察排程的健康度。",
+        "properties": {
+          "is_fallback": {
+            "default": false,
+            "title": "Is Fallback",
+            "type": "boolean"
+          },
+          "narrative_text": {
+            "title": "Narrative Text",
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sources",
+            "type": "array"
+          }
+        },
+        "required": [
+          "narrative_text"
+        ],
+        "title": "DailyEventResponse",
+        "type": "object"
+      },
       "DialogueRequest": {
         "description": "對話請求（SDD 第8.5節）。\n\n`user_input` 的長度上限先用保守值。SDD 提到 `prompt_max_chars` 會依實測調整，\n但那要等真的接上 Gemini、看到成本數據之後才有依據。",
         "properties": {
@@ -766,6 +792,59 @@
           }
         },
         "summary": "Get Spirit",
+        "tags": [
+          "body"
+        ]
+      }
+    },
+    "/api/v1/spirits/{place_id}/daily-event": {
+      "get": {
+        "description": "S10．當日情境查詢（#26）。\n\n**無需驗證**——這是公開的世界狀態，不含任何玩家資料。\n\n## 永遠不回空畫面\n\n    今天的快取 → 沒有就回最近一次的（通常是昨天）→ 再沒有就回人工預寫保底\n\n排程延遲、排程失敗、新地標剛上線都會讓今天的快取不存在，而它們全都是會發生\n的事。玩家不該因為我們的排程打嗝而看到空白。\n\n⚠️ 注意跟 404 的分界：**地標不存在 → 404**；**地標存在但沒內容 → 200 ＋\n保底**。前者是玩家問錯了東西，後者是我們還沒準備好。",
+        "operationId": "get_daily_event_endpoint_api_v1_spirits__place_id__daily_event_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "place_id",
+            "required": true,
+            "schema": {
+              "title": "Place Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DailyEventResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "靈魂不存在，或已下架（is_active=false）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Daily Event Endpoint",
         "tags": [
           "body"
         ]

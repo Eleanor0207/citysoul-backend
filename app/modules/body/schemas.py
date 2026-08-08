@@ -280,3 +280,19 @@ class QuestCompleteResponse(BaseModel):
     unlock_stories: list[UnlockStoryResponse] = Field(default_factory=list)
     stage: int
     newly_unlocked_stages: list[int] = Field(default_factory=list)
+
+
+class DailyEventResponse(BaseModel):
+    """
+    `GET /api/v1/spirits/{placeId}/daily-event` 的回應（S10／#26）。
+
+    **公開世界狀態，不需要任何 token。**
+
+    `is_fallback` 為 true 有兩種可能：內容是人工預寫保底，或是回退到了前一天的
+    快取。客戶端**不需要**據此改變呈現——玩家看到的都該是一段正常的敘事。
+    它存在是為了讓我們觀察排程的健康度。
+    """
+
+    narrative_text: str
+    is_fallback: bool = False
+    sources: list[str] = Field(default_factory=list)

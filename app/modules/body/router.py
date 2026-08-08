@@ -16,7 +16,7 @@ from app.modules.body.encounter_tokens import (
 )
 from app.core.redis_client import append_session_turn
 from app.modules.body.geo import haversine_distance_m
-from app.modules.body import quests
+from app.modules.body import daily_event_service, quests
 from app.modules.body.quests import evaluate_on_summon
 from app.modules.body.quota import RESOURCE_DIALOGUE, consume, default_tier_id
 from app.modules.body.resonance import AMOUNT_QUEST, SOURCE_QUEST, apply_resonance
@@ -480,3 +480,32 @@ def complete_quest_endpoint(
         stage=result.stage,
         newly_unlocked_stages=result.newly_unlocked_stages,
     )
+
+
+@router.get(
+    "/spirits/{place_id}/daily-event",
+    response_model=schemas.DailyEventResponse,
+    responses={**_SPIRIT_NOT_FOUND},
+)
+def get_daily_event_endpoint(place_id: str, db: Session = Depends(get_db)):
+    """
+    S10．當日情境查詢（#26）。
+
+    **無需驗證**——這是公開的世界狀態，不含任何玩家資料。
+
+    ## 永遠不回空畫面
+
+        今天的快取 → 沒有就回最近一次的（通常是昨天）→ 再沒有就回人工預寫保底
+
+    排程延遲、排程失敗、新地標剛上線都會讓今天的快取不存在，而它們全都是會發生
+    的事。玩家不該因為我們的排程打嗝而看到空白。
+
+    ⚠️ 注意跟 404 的分界：**地標不存在 → 404**；**地標存在但沒內容 → 200 ＋
+    保底**。前者是玩家問錯了東西，後者是我們還沒準備好。
+    """
+    try:
+        content = daily_event_service.get_daily_event(db, place_id=place_id)
+    except daily_event_service.SpiritNotFoundError:
+        raise HTTPException(status_code=404, detail="spirit not found")
+
+    return schemas.DailyEventResponse(**content)

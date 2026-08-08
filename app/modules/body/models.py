@@ -1,8 +1,8 @@
 """
 身體模組資料表：players、spirits。
 
-daily_event_cache／push_subscriptions 排在後面的 Sprint（對應 S10/S11），
-現在先不建，避免一次生太多還沒用到的表。
+`daily_event_cache` 已於 0008 建立（S10／#26）。`push_subscriptions` 仍未建，
+排在 S11（#39）——不要因為「順手」提早建一張還沒有人寫入的表。
 
 刻意不存在的表：任何形式的「玩家移動軌跡 / 位置歷史」表。
 這是 CONTEXT.md「在場紀錄」與「前景即時情境反應」兩條定義疊加後的硬限制，
@@ -28,7 +28,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.sql import func
 
 from app.core.database import Base
@@ -316,3 +316,27 @@ class EncounterCollection(Base):
     __table_args__ = (
         UniqueConstraint("player_id", "place_id", name="uq_encounter_collections"),
     )
+
+
+class DailyEventCache(Base):
+    """
+    S10．當日情境快取（SDD §3.1／#26）。
+
+    內容由 B9 生成（#20），這張表只管「什麼時候生成的、放在哪」——生成與快取
+    刻意分屬不同模組（v2.1 §6.4）。
+
+    PK `(place_id, event_date)` 保證「一個地標一天一筆」。排程重複觸發是正常的
+    （重試、多實例、手動補跑），所以去重在資料庫層級，不靠排程自己記得。
+    """
+
+    __tablename__ = "daily_event_cache"
+
+    place_id = Column(String(64), ForeignKey("spirits.spirit_id"), primary_key=True)
+    # 台北日期。存 DATE 而不是帶時區的時間點——後者會逼每個讀取端自己再算一次
+    # 「這是台北的哪一天」，而那正是 #15 踩過的坑。
+    event_date = Column(Date, primary_key=True)
+    content = Column(JSONB, nullable=False)
+    generated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    # 給清理工作用的訊號，**不是讀取時的過濾條件**：保底策略是「今天沒有就回
+    # 昨天」，所以過期的內容仍然有用——它比空畫面好。
+    expires_at = Column(DateTime(timezone=True), nullable=True)
