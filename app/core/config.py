@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     gemini_max_output_tokens: int = 256
     gemini_timeout_seconds: float = 8.0
 
+    # B2 Prompt 組裝（#12）。SDD §10 標明這兩個數字**待實測調整**，所以它們是
+    # 設定而不是常數——組裝邏輯裡不該出現任何字面量，否則調整就要改程式碼。
+    #
+    # 兩者都直接決定每輪的 prompt 長度，也就是成本與延遲（🔴 高風險項）。
+    prompt_memory_top_k: int = 3
+    prompt_recent_turns: int = 6
+
     # B10 TTS（#21）。MVP 語言固定台灣繁體中文。
     #
     # ⚠️ **語言是設定，不是從文字自動偵測。** 自動偵測會讓一句混了英文地名的
