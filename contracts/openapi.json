@@ -144,7 +144,7 @@
         "type": "object"
       },
       "QuestCompleteResponse": {
-        "description": "SDD §7.5 的完成回應。\n\n⚠️ `quest_wrapper_text` 與 `unlock_story` 在 #34 **永遠是 null**，即使跨了\n門檻也一樣——它們需要腦袋生成（B11／B2），屬 #43。§7.5 本來就允許\n`unlock_story` 為 null，所以這是合法的完整回應，不是半成品。\n\n`stage` 與 `newly_unlocked_stages` 不在 §7.5 的範例 body 裡，但 AC 要求\n「跨門檻時回應標示新達成 stage」，所以補上。`newly_unlocked_stages` 是\n陣列而不是單一值：一次入帳理論上可能跨過多個門檻，而每個新解鎖的 stage\n都該有自己的一段敘事（見 `resonance.ResonanceResult` 的註解）。",
+        "description": "SDD §7.5 的完成回應。\n\n## 為什麼有 `unlock_story` **和** `unlock_stories`\n\n§7.5 定義的是**單數** `unlock_story`，但 `newly_unlocked_stages` 是 list\n——一次入帳理論上可能跨過多個門檻（#16 刻意的設計）。單數欄位表達不了那件事。\n\n所以兩個都有，各有明確職責：\n\n- `unlock_story`：**第一個**新解鎖的階段，維持 §7.5 的形狀與客戶端相容。\n- `unlock_stories`：**完整清單**，這是真相。\n\nMVP 的 +10／+20 跨不過兩個門檻，所以清單目前最多一個元素，兩者實質相同。\n但呼叫端不該假設這件事——每個新解鎖的 stage 都該有自己的一段敘事，漏掉中間\n那段是靜默的內容缺漏，不會有任何錯誤訊息提醒。\n\n`stage` 與 `newly_unlocked_stages` 不在 §7.5 的範例 body 裡，是 #34 的 AC\n要求「跨門檻時回應標示新達成 stage」才補上的。",
         "properties": {
           "newly_unlocked_stages": {
             "items": {
@@ -172,16 +172,22 @@
             "title": "Stage",
             "type": "integer"
           },
+          "unlock_stories": {
+            "items": {
+              "$ref": "#/components/schemas/UnlockStoryResponse"
+            },
+            "title": "Unlock Stories",
+            "type": "array"
+          },
           "unlock_story": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/UnlockStoryResponse"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Unlock Story"
+            ]
           }
         },
         "required": [
@@ -423,6 +429,25 @@
         "title": "TTSResult",
         "type": "object"
       },
+      "UnlockStoryResponse": {
+        "description": "一段解鎖敘事（SDD §7.5 的 `unlock_story` 物件）。",
+        "properties": {
+          "stage": {
+            "title": "Stage",
+            "type": "integer"
+          },
+          "story_text": {
+            "title": "Story Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage",
+          "story_text"
+        ],
+        "title": "UnlockStoryResponse",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "loc": {
@@ -514,7 +539,7 @@
     },
     "/api/v1/quests/{quest_id}/complete": {
       "post": {
-        "description": "S4＋S5．任務完成與共鳴入帳（SDD §7.5 前半，#34）。\n\n    確定性規則判定 → quest_progress.status = 'completed'\n      → resonance += 20 → 門檻判定\n      → 回傳（unlock_story 與 quest_wrapper_text 皆為 null）\n\n## 不呼叫腦袋，一次都不\n\nCONTEXT.md 明訂「可驗證微任務由**後端確定性規則**判定，不由 LLM 判定」。\n這支端點因此完全不 import 任何腦袋模組——判定只看資料庫裡的狀態。\n\n## 呼叫順序硬規則（v2.1 §6.4）\n\n身體必須「先寫完自己的表、再呼叫腦袋」，不可顛倒。本票只做前半，正好\n符合此順序；#43 接上敘事生成時，那一段要加在所有寫入**之後**。\n\n## 只收 Encounter Token\n\nSDD §6：持 Sense Token 者**不可**呼叫這支端點。感應憑證代表「你在 150m\n內」，而任務完成需要「你真的到了現場」。兩者用不同金鑰簽章，所以把\nsense token 塞進 `X-Encounter-Token` 會在驗章就失敗——這不是靠我們記得\n檢查 purpose，是兩套憑證本來就換不過來。",
+        "description": "S4＋S5．任務完成、共鳴入帳與解鎖敘事（SDD §7.5，#34 ＋ #43）。\n\n    確定性規則判定 → quest_progress.status = 'completed'\n      → resonance += 20 → 門檻判定\n      → 回傳（unlock_story 與 quest_wrapper_text 皆為 null）\n\n## 不呼叫腦袋，一次都不\n\nCONTEXT.md 明訂「可驗證微任務由**後端確定性規則**判定，不由 LLM 判定」。\n這支端點因此完全不 import 任何腦袋模組——判定只看資料庫裡的狀態。\n\n## 呼叫順序硬規則（v2.1 §6.4）\n\n身體必須「先寫完自己的表、再呼叫腦袋」，不可顛倒。本票只做前半，正好\n符合此順序；#43 接上敘事生成時，那一段要加在所有寫入**之後**。\n\n## 只收 Encounter Token\n\nSDD §6：持 Sense Token 者**不可**呼叫這支端點。感應憑證代表「你在 150m\n內」，而任務完成需要「你真的到了現場」。兩者用不同金鑰簽章，所以把\nsense token 塞進 `X-Encounter-Token` 會在驗章就失敗——這不是靠我們記得\n檢查 purpose，是兩套憑證本來就換不過來。",
         "operationId": "complete_quest_endpoint_api_v1_quests__quest_id__complete_post",
         "parameters": [
           {

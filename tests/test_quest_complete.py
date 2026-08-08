@@ -325,44 +325,48 @@ def test_second_submission_reports_no_new_unlock(client, spirit, summoned):
 
 # ── 不呼叫腦袋 ─────────────────────────────────────────────────────────
 
-def test_completion_never_calls_the_brain(client, spirit, summoned, monkeypatch):
+def test_judgement_never_depends_on_the_llm(client, spirit, summoned, monkeypatch, db_session):
     """
-    🔒 AC：判定由後端確定性規則做，腦袋 fake **一次都沒被呼叫**。
+    🔒 CONTEXT.md：「可驗證微任務由**後端確定性規則**判定，不由 LLM 判定。」
 
-    CONTEXT.md 明訂「可驗證微任務由後端確定性規則判定，不由 LLM 判定」。
-    這條把它變成可驗證的事實。
+    ⚠️ **這條測試在 #43 之後改寫過。** 原本斷言「腦袋一次都沒被呼叫」，那在 #34
+    的範圍內是對的；#43 把解鎖敘事接上來之後，腦袋**會**被呼叫——但只在所有
+    資料庫寫入完成之後，而且只為了產生包裝文字。
 
-    做法是把 `GeminiClient.generate` 換成會炸的版本——用 spy 只能看到「沒被
-    呼叫」，用會炸的版本則連間接呼叫都會立刻現形。
+    判定本身仍然完全不依賴 LLM，而證明它的方式是：讓腦袋整個爆炸，任務照樣
+    完成、共鳴值照樣入帳。如果判定用到了 LLM，這裡會拿不到 200。
     """
     from app.modules.brain import gemini
 
     def _explode(*args, **kwargs):
-        raise AssertionError("任務完成流程呼叫了 LLM——這違反 CONTEXT.md 的確定性規則")
+        raise RuntimeError("模型整個掛了")
 
     monkeypatch.setattr(gemini.FakeGeminiClient, "generate", _explode)
-    monkeypatch.setattr(gemini.VertexAIGeminiClient, "generate", _explode)
 
     pid, sess = summoned
+    quest_id = quest_id_for_spirit(spirit.spirit_id)
 
     response = _complete(
         client,
-        quest_id_for_spirit(spirit.spirit_id),
+        quest_id,
         session_token=sess,
         encounter_token=issue_encounter_token(pid, spirit.spirit_id),
     )
 
     assert response.status_code == 200
+    assert _progress(db_session, pid, quest_id).status == STATUS_COMPLETED
+    assert _resonance_value(db_session, pid, spirit.spirit_id) == 20
 
 
-# ── #43 之前，敘事欄位一律 null ───────────────────────────────────────
+# ── #43：敘事欄位 ─────────────────────────────────────────────────────
 
-def test_narrative_fields_are_null_even_when_a_threshold_is_crossed(client, spirit, summoned):
+def test_narrative_fields_are_populated_when_a_threshold_is_crossed(client, spirit, summoned):
     """
-    AC：`unlock_story` 與 `quest_wrapper_text` 於本票回 null，**即使跨了門檻**。
+    ⚠️ **這條測試在 #43 之後改寫過。** 原本斷言 `unlock_story` 與
+    `quest_wrapper_text` 一律為 null，那是 #34 刻意的範圍切割（§7.5 允許
+    `unlock_story` 為 null，所以那是合法的完整回應，不是半成品）。
 
-    §7.5 本來就允許 `unlock_story` 為 null，所以這是合法的完整回應，不是半成品。
-    敘事生成屬 #43。
+    #43 把 B11 與任務包裝接上來之後，跨門檻時它們就該有值了。
     """
     pid, sess = summoned
 
@@ -373,9 +377,11 @@ def test_narrative_fields_are_null_even_when_a_threshold_is_crossed(client, spir
         encounter_token=issue_encounter_token(pid, spirit.spirit_id),
     ).json()
 
-    assert body["newly_unlocked_stages"] == [1]  # 確實跨了門檻
-    assert body["quest_wrapper_text"] is None
-    assert body["unlock_story"] is None
+    assert body["newly_unlocked_stages"] == [1]
+    assert body["unlock_story"] is not None
+    assert body["unlock_story"]["stage"] == 1
+    assert body["unlock_story"]["story_text"]
+    assert body["quest_wrapper_text"]
 
 
 # ── quest_id 格式 ─────────────────────────────────────────────────────

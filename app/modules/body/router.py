@@ -1,3 +1,4 @@
+import logging
 import uuid
 from functools import lru_cache
 
@@ -25,6 +26,8 @@ from app.modules.body.tokens import issue_session_token
 from app.modules.brain.gemini import GeminiClient, VertexAIGeminiClient
 from app.modules.brain.greetings import match_canned_greeting
 from app.modules.brain.prompt_builder import build_prompt
+from app.modules.brain.quest_narrative import generate_quest_wrapper
+from app.modules.brain.unlock_story import generate_unlock_stories
 from app.modules.brain.tts import GcsAudioStorage, GoogleCloudTTSClient, TTSClient
 
 # 未命中快速問候時的人工預寫台詞。
@@ -33,6 +36,8 @@ from app.modules.brain.tts import GcsAudioStorage, GoogleCloudTTSClient, TTSClie
 # 之前，**所有**未命中都會走到這裡——這是刻意的，讓端到端流程在沒有 GCP 憑證的
 # 情況下也能完整跑通。接上 B1 之後，這句話會退回它原本的角色：只在模型失敗時出現。
 FALLBACK_REPLY = "（城市靈魂安靜地看著你）……這件事我還沒想清楚。要不要先跟我說說你眼前看到的？"
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["body"])
 
@@ -376,9 +381,10 @@ def complete_quest_endpoint(
     session_player_id: uuid.UUID = Depends(require_session_token),
     encounter_token: str | None = Header(default=None, alias=ENCOUNTER_TOKEN_HEADER),
     db: Session = Depends(get_db),
+    gemini: GeminiClient = Depends(get_gemini_client),
 ):
     """
-    S4＋S5．任務完成與共鳴入帳（SDD §7.5 前半，#34）。
+    S4＋S5．任務完成、共鳴入帳與解鎖敘事（SDD §7.5，#34 ＋ #43）。
 
         確定性規則判定 → quest_progress.status = 'completed'
           → resonance += 20 → 門檻判定
@@ -428,10 +434,48 @@ def complete_quest_endpoint(
         amount=AMOUNT_QUEST,
     )
 
+    # ── 到這裡為止，身體的表全部寫完了 ─────────────────────────────
+    #
+    # 🔒 v2.1 §6.4 硬規則：**先寫完自己的表、再呼叫腦袋**，不可顛倒。
+    #
+    # 顛倒的話腦袋拿到的 stage 會跟資料庫不一致——玩家會看到一段講述他還沒
+    # 達到的關係階段的故事。下面所有的生成呼叫都在這條線之後，而且它們的失敗
+    # 一律不影響上面已經完成的寫入。
+
+    # ⚠️ 這一整段包在 try 裡，是**刻意的重複防護**。
+    #
+    # B1 的契約是「永遠不拋例外」，B11 與任務包裝都建立在那之上，所以理論上
+    # 這裡不需要 try。但這條路徑的失敗代價特別高：上面的寫入已經 commit 了，
+    # 一個逸出的例外會讓玩家收到 500，而他的任務其實已經完成、共鳴值也已經
+    # 入帳——他會重試，然後看到「重複提交」的結果，以為進度沒有存到。
+    #
+    # 換句話說：契約被違反時，付出代價的是玩家的信任，不是我們的 log。
+    # 敘事只是包裝，包裝失敗不能讓進度看起來像消失了。
+    try:
+        # 沒跨門檻就不呼叫 B11。這是最常見的情況，每次白呼叫一次的成本很可觀。
+        stories = generate_unlock_stories(
+            gemini, spirit_id=spirit_id, stages=result.newly_unlocked_stages
+        )
+        unlock_stories = [
+            schemas.UnlockStoryResponse(stage=s.stage, story_text=s.story_text)
+            for s in stories
+        ]
+        wrapper_text = generate_quest_wrapper(gemini, spirit_id=spirit_id, quest_id=quest_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "任務敘事生成失敗，任務仍已完成並入帳（%s）：%s: %s",
+            quest_id,
+            type(exc).__name__,
+            exc,
+        )
+        unlock_stories = []
+        wrapper_text = None
+
     return schemas.QuestCompleteResponse(
-        # 兩者屬 #43（B11 解鎖敘事生成），本票一律 null——**即使跨了門檻**。
-        quest_wrapper_text=None,
-        unlock_story=None,
+        quest_wrapper_text=wrapper_text,
+        # 單數欄位維持 §7.5 的形狀；完整清單才是真相（見 QuestCompleteResponse）。
+        unlock_story=unlock_stories[0] if unlock_stories else None,
+        unlock_stories=unlock_stories,
         resonance_value=result.resonance_value,
         stage=result.stage,
         newly_unlocked_stages=result.newly_unlocked_stages,

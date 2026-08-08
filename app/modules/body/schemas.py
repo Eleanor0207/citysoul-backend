@@ -245,22 +245,38 @@ class QuestCompleteRequest(BaseModel):
     completion_evidence: dict = Field(default_factory=dict)
 
 
+class UnlockStoryResponse(BaseModel):
+    """一段解鎖敘事（SDD §7.5 的 `unlock_story` 物件）。"""
+
+    stage: int
+    story_text: str
+
+
 class QuestCompleteResponse(BaseModel):
     """
     SDD §7.5 的完成回應。
 
-    ⚠️ `quest_wrapper_text` 與 `unlock_story` 在 #34 **永遠是 null**，即使跨了
-    門檻也一樣——它們需要腦袋生成（B11／B2），屬 #43。§7.5 本來就允許
-    `unlock_story` 為 null，所以這是合法的完整回應，不是半成品。
+    ## 為什麼有 `unlock_story` **和** `unlock_stories`
 
-    `stage` 與 `newly_unlocked_stages` 不在 §7.5 的範例 body 裡，但 AC 要求
-    「跨門檻時回應標示新達成 stage」，所以補上。`newly_unlocked_stages` 是
-    陣列而不是單一值：一次入帳理論上可能跨過多個門檻，而每個新解鎖的 stage
-    都該有自己的一段敘事（見 `resonance.ResonanceResult` 的註解）。
+    §7.5 定義的是**單數** `unlock_story`，但 `newly_unlocked_stages` 是 list
+    ——一次入帳理論上可能跨過多個門檻（#16 刻意的設計）。單數欄位表達不了那件事。
+
+    所以兩個都有，各有明確職責：
+
+    - `unlock_story`：**第一個**新解鎖的階段，維持 §7.5 的形狀與客戶端相容。
+    - `unlock_stories`：**完整清單**，這是真相。
+
+    MVP 的 +10／+20 跨不過兩個門檻，所以清單目前最多一個元素，兩者實質相同。
+    但呼叫端不該假設這件事——每個新解鎖的 stage 都該有自己的一段敘事，漏掉中間
+    那段是靜默的內容缺漏，不會有任何錯誤訊息提醒。
+
+    `stage` 與 `newly_unlocked_stages` 不在 §7.5 的範例 body 裡，是 #34 的 AC
+    要求「跨門檻時回應標示新達成 stage」才補上的。
     """
 
     quest_wrapper_text: str | None = None
     resonance_value: int
-    unlock_story: str | None = None
+    unlock_story: UnlockStoryResponse | None = None
+    unlock_stories: list[UnlockStoryResponse] = Field(default_factory=list)
     stage: int
     newly_unlocked_stages: list[int] = Field(default_factory=list)
