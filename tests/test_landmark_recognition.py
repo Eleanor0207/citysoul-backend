@@ -5,16 +5,23 @@ Ticket #22．地標視覺辨識（B13，雲端 Gemini 多模態，即用即丟�
 風格：真實 SDK 從來不載入，模型物件由 `client_factory` 注入，完全不需要
 GCP 憑證。
 
-AC6（回傳 False 時呼叫端仍可完成任務）沒有對應的整合測試——任務完成端點
-（#34）還沒落地，這裡只驗證這支函式本身「失敗不拋例外」，「不阻擋任務」
-的責任在呼叫端，等 #34 或 #43 接上時再驗整合行為。
+AC6（回傳 False 時呼叫端仍可完成任務）現在有真的整合測試了——這張票剛做完
+的時候 `POST /quests/{questId}/complete`（#34）還不存在，只能先驗「這支
+函式自己不拋例外」；#34 落地之後才驗得到「辨識失敗的玩家確實還是能完成
+任務」。見檔案最後一節。
 """
 import threading
-import time
 
 import pytest
 
-from app.modules.body.models import Spirit
+from app.modules.body.encounter_tokens import ENCOUNTER_TOKEN_HEADER, issue_encounter_token
+from app.modules.body.models import (
+    QuestProgress,
+    Resonance,
+    ResonanceEvent,
+    Spirit,
+)
+from app.modules.body.quests import quest_id_for_spirit
 from app.modules.brain.landmark_recognition import (
     FakeLandmarkRecognitionClient,
     LandmarkRecognitionClient,
@@ -82,6 +89,14 @@ def spirit(db_session, unique_spirit_id):
     db_session.add(row)
     db_session.commit()
     yield row
+
+    # 任務完成的整合測試（AC6）會寫 resonance／resonance_events，兩張表都有
+    # 外鍵指向 spirits——不先清掉，下面那行 delete 會撞 FK 而不是安靜收尾。
+    db_session.query(ResonanceEvent).filter_by(spirit_id=unique_spirit_id).delete()
+    db_session.query(Resonance).filter_by(spirit_id=unique_spirit_id).delete()
+    db_session.query(QuestProgress).filter_by(
+        quest_id=quest_id_for_spirit(unique_spirit_id)
+    ).delete()
     db_session.delete(row)
     db_session.commit()
 
@@ -239,3 +254,101 @@ def test_no_module_level_state_retains_the_image_bytes(db_session, spirit):
         if name.startswith("__"):
             continue
         assert value != image_bytes, f"模組層級變數 {name} 持有了 image_bytes"
+
+
+# ── 辨識失敗不阻擋任務完成（AC6，整合） ───────────────────────────────────
+#
+# CONTEXT.md：本機地標辨識成功時給予特別徽章，**失敗不阻擋完成**。
+# 這一節要驗的不是 `recognize_landmark` 自己不拋例外（上面已經驗過了），
+# 而是「辨識回 False 的那個玩家，走完整條 API 流程仍然拿得到任務完成與
+# 共鳴值」——那是兩件不同的事，只有整合起來才看得到。
+
+
+@pytest.fixture
+def player(client, unique_device_id):
+    return client.post("/api/v1/players", json={"device_id": unique_device_id}).json()
+
+
+def _complete_quest(client, player, spirit):
+    return client.post(
+        f"/api/v1/quests/{quest_id_for_spirit(spirit.spirit_id)}/complete",
+        json={"completion_evidence": {}},
+        headers={
+            "Authorization": f"Bearer {player['session_token']}",
+            ENCOUNTER_TOKEN_HEADER: issue_encounter_token(
+                player["player_id"], spirit.spirit_id
+            ),
+        },
+    )
+
+
+def test_failed_recognition_does_not_block_quest_completion(
+    client, db_session, player, spirit
+):
+    """
+    辨識回 False（照片拍錯、模型看不出來、Gemini 掛掉都算），玩家仍然
+    完成得了任務、共鳴值照常入帳——少的只有特別徽章。
+    """
+    recognized = recognize_landmark(
+        db_session,
+        b"a-photo-of-something-else",
+        spirit.spirit_id,
+        client=FakeLandmarkRecognitionClient(result=False),
+    )
+    assert recognized is False
+
+    resp = _complete_quest(client, player, spirit)
+
+    assert resp.status_code == 200
+    assert resp.json()["resonance_value"] == 20
+
+    progress = (
+        db_session.query(QuestProgress)
+        .filter_by(quest_id=quest_id_for_spirit(spirit.spirit_id))
+        .one()
+    )
+    assert progress.status == "completed"
+
+
+def test_recognition_outcome_does_not_change_the_completion_result(
+    client, db_session, player, spirit
+):
+    """
+    辨識成功與失敗，任務完成的結果**完全相同**——徽章是額外的獎勵，不是
+    完成條件的一部分。兩者若有差別，就代表辨識偷偷變成了完成門檻。
+
+    （徽章本身還沒有實作；等它出現時，這個測試要改成「兩邊的完成結果相同，
+    但只有成功那邊拿到徽章」，而不是刪掉。）
+    """
+    assert (
+        recognize_landmark(
+            db_session,
+            b"a-good-photo",
+            spirit.spirit_id,
+            client=FakeLandmarkRecognitionClient(result=True),
+        )
+        is True
+    )
+
+    resp = _complete_quest(client, player, spirit)
+
+    assert resp.status_code == 200
+    assert resp.json()["resonance_value"] == 20
+
+
+def test_quest_completes_even_when_the_recognition_client_is_broken(
+    client, db_session, player, spirit
+):
+    """
+    連辨識服務本身壞掉（連線錯誤）都不該影響任務——`recognize_landmark`
+    把例外吞成 False，完成流程根本不會知道發生過什麼事。
+    """
+    recognized = recognize_landmark(
+        db_session,
+        b"a-photo",
+        spirit.spirit_id,
+        client=_real_client(_StubClient(raises=ConnectionError("connection reset"))),
+    )
+    assert recognized is False
+
+    assert _complete_quest(client, player, spirit).status_code == 200
