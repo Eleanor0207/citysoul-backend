@@ -119,3 +119,79 @@ resonance_events，兩張表都外鍵指向 spirits，不先清掉的話 fixture
   `reset_local_db.sh`，還沒 push）。新增 #47（已關）、#48（ready-for-human，
   被 #41 卡住）、#49（Phase 5 全串通驗收，被 #30＋幾乎所有端點票卡住）。
   三張都不影響目前的 wave 排序。沒有人在 GitHub 上 claim 任何 issue。
+
+---
+
+# 2026-08-08：origin/main 大幅分歧，本機 9 張票被重複實作
+
+## 怎麼發現的
+
+新增 `scripts/preflight.sh`（fetch ＋ 雙向 commit 比對 ＋ open/closed issue
+清單）。第一次跑就抓到：短短幾分鐘內 `origin/main` 從 `def683c` 又前進到
+`47d2243`。**在此之前完全沒有這道檢查，這就是 #30／#32 被做兩次的原因。**
+
+⚠️ `preflight.sh` **只看得到 push 上去的東西**。同事在本機做到一半還沒 push
+的分支看不到——4 人不協調的先天限制，檢查過了不代表沒人在做同一張票。
+
+## 分歧狀況
+
+共同祖先 `70f10bf`。本機領先 23 個 commit、origin 領先 17 個，**不是
+fast-forward**。
+
+| | 本機 | origin |
+|---|---|---|
+| 測試函式數（靜態數 `def test_`） | 306 | 397 |
+| 實際跑過 | ✅ 339 passed / 1 skipped | ❌ 沒跑過（只讀原始碼比對） |
+
+**被重複實作的 9 張**：#12、#20、#21、#22、#25、#30、#32、#34、#43
+（origin 那邊都已經 close）。
+
+**只有本機有**：**#26**（S10 當日情境排程／快取／對外 API，含 migration
+與端點）。origin 上 #26 仍是 open。
+
+**只有 origin 有**：#11（B4 安全邊界）、#19（B5 史實邊界）、#41（龍山寺
+內容治理草稿）、#42（dialogue 端到端）、#46（PostGIS），以及把 #41 拆出
+#50／#51。
+
+## 比較結果（讀原始碼，沒跑他們的測試）
+
+### 他們明顯比較好
+
+- **#21 TTS：拆成兩個接縫，比我的設計好。** 我卡在「TTS 回傳位元組、契約
+  要 URL」，把它當成「要人決定的基礎設施問題」上報，然後**整個真實 client
+  都沒做**。他們拆成 `TTSClient`（合成）＋ `AudioStorage`（存放），存放是
+  注入的，所以**不需要先決定 bucket 就能把真實 client 寫完**。242 行 vs 我
+  68 行，差的是真實能力不是廢話。這是他們最明確的一勝。
+- **#19：他們做完了，我只留 stub。** 把 `factual_boundary` 映射到既有的
+  `imagination_license`，映射只集中在 `factual_boundary_for_persona()` 一個
+  函式（欄位再搬家只要改那一處），並在模組裡寫明規格漂移。那正是我當時提的
+  選項 (b)——當時決定跳過 #19 先做 #32，所以這一半是流程結果、不純粹是品質差距。
+
+### 本機比較好
+
+**#30 契約閘門，兩個具體點：**
+
+1. 他們用 `oasdiff/oasdiff-action/breaking@main`。那個 action 自己的文件寫著
+   `@main` 是「跑未發布的 tip，只適合早期試用，**不適合正式使用**」。本機
+   釘的是 `@v0.1.12`。
+2. 本機有**閘門自我測試**（`tests/fixtures/contract_gate/` 兩組 fixture，
+   證明閘門真的擋得下破壞性變更、也真的放行純新增）。他們沒有，而且他們自己
+   的註解承認「這個 job 還沒有在真實 PR 上跑過，第一次開 PR 時請確認它不會噴」。
+   **沒有人驗證過的閘門，正是那個自我測試存在要防的失效模式。**
+
+### 平手但值得知道
+
+他們注意到一件我漏掉的事：**Pydantic 的 docstring 會進
+`contracts/openapi.json`，等於送到客戶端**，所以 schema 的 docstring 該寫短。
+洞察是對的，但他們自己沒有做得比我好——他們契約裡的 description 總字數
+2701，本機 2640。
+
+## 給 Monday 的建議
+
+**#21 的 `AudioStorage` 接縫**與**#30 的版本釘選＋閘門自我測試**是可以
+**各自單獨採用**的。合併結果可以取兩邊各自較好的一半，不必整邊挑一邊。
+
+⚠️ **合併時的既知障礙**：兩邊都有 revision `0006` 且都宣告
+`down_revision = "0005"`（他們是 `0006_postgis_extension`，本機是
+`0006_daily_event_cache`），兩邊也都有內容不同的 `0007_spirit_orientation`。
+直接合會讓 Alembic 撞到重複 revision id，必須先把其中一條鏈重新編號。
