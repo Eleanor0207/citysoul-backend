@@ -310,7 +310,16 @@ class EncounterCollection(Base):
     collection_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     player_id = Column(UUID(as_uuid=True), ForeignKey("players.player_id"), nullable=False)
     place_id = Column(String(64), ForeignKey("spirits.spirit_id"), nullable=False)
+    # 裝置端本機辨識出來的標籤字串（0004 的設計），不是位置。
     recognized_label = Column(String(128), nullable=True)
+    # 雲端 B13（#22）的判定結果，決定要不要給特別徽章。
+    landmark_recognized = Column(Boolean, nullable=False, server_default="false", default=False)
+    # 這次收藏**有沒有真的入帳**共鳴值。
+    #
+    # UNIQUE(player_id, place_id) 保證一個地標只加一次，所以「有這一列」不等於
+    # 「這次加了值」——重複收藏時列還在，但沒有入帳。少了這個欄位，就沒辦法從
+    # 資料本身分辨那兩種情況。
+    resonance_awarded = Column(Boolean, nullable=False, server_default="false", default=False)
     collected_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     __table_args__ = (

@@ -1,6 +1,20 @@
 {
   "components": {
     "schemas": {
+      "Body_landmark_photo_api_v1_quests__quest_id__landmark_photo_post": {
+        "properties": {
+          "photo": {
+            "format": "binary",
+            "title": "Photo",
+            "type": "string"
+          }
+        },
+        "required": [
+          "photo"
+        ],
+        "title": "Body_landmark_photo_api_v1_quests__quest_id__landmark_photo_post",
+        "type": "object"
+      },
       "DailyEventResponse": {
         "description": "`GET /api/v1/spirits/{placeId}/daily-event` 的回應（S10／#26）。\n\n**公開世界狀態，不需要任何 token。**\n\n`is_fallback` 為 true 有兩種可能：內容是人工預寫保底，或是回退到了前一天的\n快取。客戶端**不需要**據此改變呈現——玩家看到的都該是一段正常的敘事。\n它存在是為了讓我們觀察排程的健康度。",
         "properties": {
@@ -97,6 +111,30 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "LandmarkPhotoResponse": {
+        "description": "`POST /api/v1/quests/{questId}/landmark-photo` 的回應（S12／#44）。\n\n⚠️ **回應裡沒有任何影像相關的東西**——沒有 URL、沒有雜湊、沒有尺寸。\n照片只在記憶體處理、辨識完立即捨棄（SDD §7.7），回應也不該留下它存在過的\n痕跡。\n\n`resonance_awarded` 為 false 有兩種可能：辨識失敗，或這個地標之前已經收藏過\n（`UNIQUE(player_id, place_id)`，每個地標只加一次 10 點）。兩者對玩家的意義\n不同，但都不是錯誤。",
+        "properties": {
+          "landmark_recognized": {
+            "title": "Landmark Recognized",
+            "type": "boolean"
+          },
+          "resonance_awarded": {
+            "title": "Resonance Awarded",
+            "type": "boolean"
+          },
+          "resonance_value": {
+            "title": "Resonance Value",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "landmark_recognized",
+          "resonance_awarded",
+          "resonance_value"
+        ],
+        "title": "LandmarkPhotoResponse",
         "type": "object"
       },
       "PlayerCreateRequest": {
@@ -662,6 +700,120 @@
           }
         ],
         "summary": "Complete Quest Endpoint",
+        "tags": [
+          "body"
+        ]
+      }
+    },
+    "/api/v1/quests/{quest_id}/landmark-photo": {
+      "post": {
+        "description": "S12．紀念照片（後端側，#44）。\n\n    Session ＋ Encounter → 辨識配額（#32）→ 讀進記憶體 → B13（#22）\n      → 立即捨棄影像 → 相遇收藏入帳\n\n## 隱私是核心約束（SDD §7.7）\n\n照片**只在記憶體處理，辨識完立即捨棄**：不寫檔、不上傳 Cloud Storage、\n不留作訓練資料，`encounter_collections` 也不存原始照片、GPS 座標或影像雜湊。\n\n`image_bytes` 是區域變數，函式結束就沒了。這裡刻意**不**把它存進任何\n地方——連「最近一次辨識失敗的照片」都不留（見 `brain/landmark_recognition.py`\n的模組註解）。\n\n## 只收 Encounter Token\n\nSDD §6：持 Sense Token 者不可觸發相機疊圖相關動作。感應憑證代表「你在 150m\n內」，拍紀念照需要「你真的到了現場」。\n\n## 辨識失敗不是錯誤\n\n回 `landmark_recognized: false`，任務仍可完成——玩家只是拿不到特別徽章\n（CONTEXT.md）。",
+        "operationId": "landmark_photo_api_v1_quests__quest_id__landmark_photo_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quest_id",
+            "required": true,
+            "schema": {
+              "title": "Quest Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Encounter-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Encounter-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_landmark_photo_api_v1_quests__quest_id__landmark_photo_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LandmarkPhotoResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Session token 無效或未提供"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Encounter token 屬於別的靈魂，或兩張憑證不屬於同一個玩家"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "任務或地標不存在"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "今日地標辨識配額已用完"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Landmark Photo",
         "tags": [
           "body"
         ]

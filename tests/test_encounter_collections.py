@@ -89,10 +89,37 @@ def test_collection_stores_no_coordinates(db_session, player_id, spirit):
     """
     columns = set(models.EncounterCollection.__table__.columns.keys())
 
+    # ⚠️ **新增合法欄位時更新這份清單是預期行為，加座標／照片／雜湊則不是。**
+    # `landmark_recognized` 與 `resonance_awarded` 是 #44 依 SDD §3.1 補的
+    # （0004 建表時漏了），兩者都不是位置資訊。
     assert columns == {
         "collection_id",
         "player_id",
         "place_id",
         "recognized_label",
+        "landmark_recognized",
+        "resonance_awarded",
         "collected_at",
     }
+
+    # 清單比對會在「有人新增欄位」時變紅，但改綠很容易——所以再釘一次真正的
+    # 禁忌項。這一條沒有正當理由被改掉。
+    forbidden = {
+        "latitude",
+        "longitude",
+        "lat",
+        "lon",
+        "coordinates",
+        "location",
+        "photo",
+        "image",
+        "image_url",
+        "photo_url",
+        "image_hash",
+        "photo_hash",
+        "checksum",
+    }
+    assert not (columns & forbidden), (
+        f"相遇收藏長出了位置或影像欄位：{columns & forbidden}。"
+        "這張表帶 player_id 又帶時間，加上座標就是移動軌跡，只是名字叫收藏。"
+    )

@@ -14,8 +14,13 @@ from fastapi.testclient import TestClient
 
 from app.core.database import SessionLocal
 from app.main import app
-from app.modules.body.router import get_gemini_client, get_tts_client
+from app.modules.body.router import (
+    get_gemini_client,
+    get_landmark_recognizer,
+    get_tts_client,
+)
 from app.modules.brain.gemini import FakeGeminiClient
+from app.modules.brain.landmark_recognition import FakeLandmarkRecognizer
 from app.modules.brain.tts import FakeTTSClient
 from scripts.init_db import upgrade_to_head
 
@@ -47,9 +52,11 @@ def _never_call_real_cloud_services():
     """
     app.dependency_overrides[get_gemini_client] = lambda: FakeGeminiClient()
     app.dependency_overrides[get_tts_client] = lambda: FakeTTSClient()
+    app.dependency_overrides[get_landmark_recognizer] = lambda: FakeLandmarkRecognizer()
     yield
     app.dependency_overrides.pop(get_gemini_client, None)
     app.dependency_overrides.pop(get_tts_client, None)
+    app.dependency_overrides.pop(get_landmark_recognizer, None)
 
 
 @pytest.fixture

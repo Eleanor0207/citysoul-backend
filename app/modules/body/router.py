@@ -2,7 +2,8 @@ import logging
 import uuid
 from functools import lru_cache
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -18,12 +19,28 @@ from app.core.redis_client import append_session_turn
 from app.modules.body.geo import haversine_distance_m
 from app.modules.body import daily_event_service, quests
 from app.modules.body.quests import evaluate_on_summon
-from app.modules.body.quota import RESOURCE_DIALOGUE, consume, default_tier_id
-from app.modules.body.resonance import AMOUNT_QUEST, SOURCE_QUEST, apply_resonance
+from app.modules.body.quota import (
+    RESOURCE_DIALOGUE,
+    RESOURCE_LANDMARK_RECOGNITION,
+    consume,
+    default_tier_id,
+)
+from app.modules.body.resonance import (
+    AMOUNT_ENCOUNTER_COLLECTION,
+    AMOUNT_QUEST,
+    SOURCE_ENCOUNTER_COLLECTION,
+    SOURCE_QUEST,
+    apply_resonance,
+)
 from app.modules.body.sense_tokens import SENSE_TOKEN_HEADER, require_sense_token
 from app.modules.body.sense_tokens import issue_sense_token
 from app.modules.body.tokens import issue_session_token
 from app.modules.brain.gemini import GeminiClient, VertexAIGeminiClient
+from app.modules.brain.landmark_recognition import (
+    LandmarkRecognizer,
+    VertexAILandmarkRecognizer,
+    recognize_landmark,
+)
 from app.modules.brain.greetings import match_canned_greeting
 from app.modules.brain.prompt_builder import build_prompt
 from app.modules.brain.quest_narrative import generate_quest_wrapper
@@ -88,6 +105,15 @@ def get_gemini_client() -> GeminiClient:
 
 def get_tts_client() -> TTSClient:
     return _default_tts_client()
+
+
+@lru_cache(maxsize=1)
+def _default_landmark_recognizer() -> LandmarkRecognizer:
+    return VertexAILandmarkRecognizer()
+
+
+def get_landmark_recognizer() -> LandmarkRecognizer:
+    return _default_landmark_recognizer()
 
 
 @router.post("/players", response_model=schemas.PlayerResponse)
@@ -509,3 +535,136 @@ def get_daily_event_endpoint(place_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="spirit not found")
 
     return schemas.DailyEventResponse(**content)
+
+
+@router.post(
+    "/quests/{quest_id}/landmark-photo",
+    response_model=schemas.LandmarkPhotoResponse,
+    responses={
+        **_UNAUTHORIZED,
+        **_forbidden("Encounter token 屬於別的靈魂，或兩張憑證不屬於同一個玩家"),
+        404: {"model": schemas.ErrorResponse, "description": "任務或地標不存在"},
+        429: {"model": schemas.ErrorResponse, "description": "今日地標辨識配額已用完"},
+    },
+)
+async def landmark_photo(
+    quest_id: str,
+    photo: UploadFile = File(...),
+    session_player_id: uuid.UUID = Depends(require_session_token),
+    encounter_token: str | None = Header(default=None, alias=ENCOUNTER_TOKEN_HEADER),
+    db: Session = Depends(get_db),
+    recognizer: LandmarkRecognizer = Depends(get_landmark_recognizer),
+):
+    """
+    S12．紀念照片（後端側，#44）。
+
+        Session ＋ Encounter → 辨識配額（#32）→ 讀進記憶體 → B13（#22）
+          → 立即捨棄影像 → 相遇收藏入帳
+
+    ## 隱私是核心約束（SDD §7.7）
+
+    照片**只在記憶體處理，辨識完立即捨棄**：不寫檔、不上傳 Cloud Storage、
+    不留作訓練資料，`encounter_collections` 也不存原始照片、GPS 座標或影像雜湊。
+
+    `image_bytes` 是區域變數，函式結束就沒了。這裡刻意**不**把它存進任何
+    地方——連「最近一次辨識失敗的照片」都不留（見 `brain/landmark_recognition.py`
+    的模組註解）。
+
+    ## 只收 Encounter Token
+
+    SDD §6：持 Sense Token 者不可觸發相機疊圖相關動作。感應憑證代表「你在 150m
+    內」，拍紀念照需要「你真的到了現場」。
+
+    ## 辨識失敗不是錯誤
+
+    回 `landmark_recognized: false`，任務仍可完成——玩家只是拿不到特別徽章
+    （CONTEXT.md）。
+    """
+    try:
+        spirit_id = quests.spirit_id_for_quest(quest_id)
+    except quests.QuestNotFoundError:
+        raise HTTPException(status_code=404, detail="quest not found")
+
+    holder_id = require_encounter_token(spirit_id, encounter_token)
+    if holder_id != session_player_id:
+        raise HTTPException(status_code=403, detail="token holder mismatch")
+
+    spirit = db.query(models.Spirit).filter_by(spirit_id=spirit_id).first()
+    if spirit is None or not spirit.is_active:
+        raise HTTPException(status_code=404, detail="spirit not found")
+
+    # 配額擋在辨識之前——被擋下的請求不該產生辨識成本。
+    # 超額時 QuotaExceededError 由 main.py 的 handler 轉成 429。
+    consume(db, session_player_id, RESOURCE_LANDMARK_RECOGNITION)
+
+    # 讀進記憶體。這是影像唯一存在的地方，函式結束就沒了。
+    image_bytes = await photo.read()
+
+    recognized = recognize_landmark(recognizer, image_bytes, spirit_id)
+
+    # 明確切斷參考。技術上區域變數本來就會被回收，但這一行是給讀程式碼的人看的
+    # ——它標記出「從這裡開始不再持有影像」，讓之後有人想在下面加一段
+    # 「順便存個檔」時，先撞到這個宣告。
+    image_bytes = None
+
+    return _record_landmark_collection(
+        db, player_id=session_player_id, spirit_id=spirit_id, recognized=recognized
+    )
+
+
+def _record_landmark_collection(
+    db: Session, *, player_id: uuid.UUID, spirit_id: str, recognized: bool
+) -> schemas.LandmarkPhotoResponse:
+    """
+    相遇收藏入帳。
+
+    去重靠 `UNIQUE(player_id, place_id)`——**先寫、撞到約束才知道重複**，
+    不是先查再寫（同 #16 共鳴入帳的教訓）。重複收藏是正常的使用者行為。
+
+    共鳴值只在**這次真的建立了新收藏**時才入帳。`apply_resonance` 自己也有
+    去重（`resonance_events` 的 UNIQUE），所以這裡是兩層保護，但語意不同：
+    這一層決定「要不要試著入帳」，那一層保證「試了也不會重複」。
+    """
+    row = models.EncounterCollection(
+        player_id=player_id,
+        place_id=spirit_id,
+        landmark_recognized=recognized,
+        resonance_awarded=False,
+    )
+
+    newly_collected = True
+    try:
+        with db.begin_nested():
+            db.add(row)
+    except IntegrityError:
+        newly_collected = False
+        db.rollback()
+
+    awarded = False
+    if newly_collected:
+        result = apply_resonance(
+            db,
+            player_id=player_id,
+            spirit_id=spirit_id,
+            source_type=SOURCE_ENCOUNTER_COLLECTION,
+            source_id=spirit_id,
+            amount=AMOUNT_ENCOUNTER_COLLECTION,
+        )
+        awarded = result.awarded
+        row.resonance_awarded = awarded
+        db.commit()
+        resonance_value = result.resonance_value
+    else:
+        db.commit()
+        existing = (
+            db.query(models.Resonance)
+            .filter_by(player_id=player_id, spirit_id=spirit_id)
+            .first()
+        )
+        resonance_value = existing.resonance_value if existing else 0
+
+    return schemas.LandmarkPhotoResponse(
+        landmark_recognized=recognized,
+        resonance_awarded=awarded,
+        resonance_value=resonance_value,
+    )

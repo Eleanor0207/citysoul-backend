@@ -21,6 +21,8 @@ dependencies = [
     # texttospeech 做合成，storage 放音檔——客戶端要的是 URL，中間一定有存放。
     "google-cloud-texttospeech>=2.16",
     "google-cloud-storage>=2.18",
+    # S12 紀念照片（#44）：FastAPI 的 UploadFile／multipart 解析需要它。
+    "python-multipart>=0.0.9",
     "alembic>=1.19.0",
 ]
 

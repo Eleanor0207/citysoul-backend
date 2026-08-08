@@ -296,3 +296,21 @@ class DailyEventResponse(BaseModel):
     narrative_text: str
     is_fallback: bool = False
     sources: list[str] = Field(default_factory=list)
+
+
+class LandmarkPhotoResponse(BaseModel):
+    """
+    `POST /api/v1/quests/{questId}/landmark-photo` 的回應（S12／#44）。
+
+    ⚠️ **回應裡沒有任何影像相關的東西**——沒有 URL、沒有雜湊、沒有尺寸。
+    照片只在記憶體處理、辨識完立即捨棄（SDD §7.7），回應也不該留下它存在過的
+    痕跡。
+
+    `resonance_awarded` 為 false 有兩種可能：辨識失敗，或這個地標之前已經收藏過
+    （`UNIQUE(player_id, place_id)`，每個地標只加一次 10 點）。兩者對玩家的意義
+    不同，但都不是錯誤。
+    """
+
+    landmark_recognized: bool
+    resonance_awarded: bool
+    resonance_value: int

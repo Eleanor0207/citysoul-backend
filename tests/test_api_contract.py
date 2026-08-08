@@ -82,6 +82,8 @@ EXPECTED_RESPONSE_CODES = {
     ("get", "/api/v1/spirits/{place_id}/daily-event"): {"200", "404", "422"},
     # #34：只收 encounter token，所以沒有獨立的 sense 錯誤碼。
     ("post", "/api/v1/quests/{quest_id}/complete"): {"200", "401", "403", "404", "422"},
+    # #44：配額擋在辨識之前，所以有 429。同樣只收 encounter token。
+    ("post", "/api/v1/quests/{quest_id}/landmark-photo"): {"200", "401", "403", "404", "422", "429"},
     ("get", "/health"): {"200"},
 }
 
