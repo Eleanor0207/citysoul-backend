@@ -74,7 +74,9 @@ EXPECTED_RESPONSE_CODES = {
     ("post", "/api/v1/players"): {"200", "422"},
     ("post", "/api/v1/sense"): {"200", "401", "403", "404", "422"},
     ("post", "/api/v1/summon"): {"200", "401", "403", "404", "422"},
-    ("post", "/api/v1/spirits/{place_id}/dialogue"): {"200", "401", "403", "404", "422"},
+    # 429 是 #42 接上配額（#32）之後新增的。配額是這支端點的第一道關卡
+    # （SDD v1 §3），所以它是唯一會回 429 的路由。
+    ("post", "/api/v1/spirits/{place_id}/dialogue"): {"200", "401", "403", "404", "422", "429"},
     ("get", "/api/v1/spirits/{place_id}"): {"200", "404", "422"},
     ("get", "/health"): {"200"},
 }

@@ -14,6 +14,9 @@ from fastapi.testclient import TestClient
 
 from app.core.database import SessionLocal
 from app.main import app
+from app.modules.body.router import get_gemini_client, get_tts_client
+from app.modules.brain.gemini import FakeGeminiClient
+from app.modules.brain.tts import FakeTTSClient
 from scripts.init_db import upgrade_to_head
 
 
@@ -28,6 +31,25 @@ def _ensure_schema():
     「migration 與 models 不一致」這件事會直接讓整套測試炸掉。
     """
     upgrade_to_head()
+
+
+@pytest.fixture(autouse=True)
+def _never_call_real_cloud_services():
+    """
+    🔒 對話端點的模型與語音預設一律注入 fake。
+
+    ⚠️ 這條是被實際踩到才加的：`/dialogue` 接上 B1／B10 之後，本機因為有 ADC，
+    測試**真的打到了 Google Cloud TTS**（回了「API 未啟用」的錯誤才被發現）。
+    CI 上沒有憑證所以會安靜地走 fallback，本機卻在花錢也在等網路。
+
+    預設注入 fake 之後，要碰真實服務必須在測試裡明確覆寫回去——安全的方向是
+    預設不連外，而不是每支測試各自記得要 mock。
+    """
+    app.dependency_overrides[get_gemini_client] = lambda: FakeGeminiClient()
+    app.dependency_overrides[get_tts_client] = lambda: FakeTTSClient()
+    yield
+    app.dependency_overrides.pop(get_gemini_client, None)
+    app.dependency_overrides.pop(get_tts_client, None)
 
 
 @pytest.fixture

@@ -1,8 +1,13 @@
 """
-對話端點最小可用版：B12 快速問候比對 ＋ fallback。
+`POST /spirits/{placeId}/dialogue` —— Phase 2 可用版（issue #42）。
 
-完整版（Gemini／TTS／安全邊界／Prompt 組裝）見 issue #42／#45。這裡只驗
-「憑證把關」與「命中／未命中」兩件事——它們是這條端到端路徑成立的前提。
+    Session ＋（Encounter 或 Sense）→ 配額 → B12 招呼 → B1 生成 → B10 語音
+    → B7 短期記憶
+
+模型與語音由 `conftest.py` 的 autouse fixture 預設注入 fake，所以整條路徑
+**不需要 GCP 憑證**。要驗證失敗降級的測試自己覆寫成會失敗的 fake。
+
+B4 安全邊界與 B2 完整組裝屬 Phase 3（#45），不在本檔範圍。
 """
 import uuid
 from datetime import datetime, timezone
@@ -160,14 +165,8 @@ def test_canned_greeting_hit(client, spirit, player, active_card):
     pid, sess = player
     enc = issue_encounter_token(pid, spirit.spirit_id)
     body = _say(client, spirit, sess, enc, "你好").json()
-    assert body == {"reply_text": _GREETING, "source": "canned"}
-
-
-def test_miss_returns_fallback(client, spirit, player, active_card):
-    pid, sess = player
-    enc = issue_encounter_token(pid, spirit.spirit_id)
-    body = _say(client, spirit, sess, enc, "圓頂是什麼時候蓋的？").json()
-    assert body == {"reply_text": FALLBACK_REPLY, "source": "fallback"}
+    assert body["reply_text"] == _GREETING
+    assert body["source"] == "canned"
 
 
 def test_no_active_persona_falls_back(client, spirit, player):
@@ -193,12 +192,10 @@ def test_inactive_spirit_returns_404(client, spirit, player, db_session):
     assert _say(client, spirit, sess, enc, "你好").status_code == 404
 
 
-def test_response_has_no_tts_field(client, spirit, player, active_card):
-    """
-    B10 尚未落地，回應刻意不含 `tts`。放一個永遠是 null 的欄位，只會讓客戶端
-    寫出無用的處理分支（SDD v2.1 §10.1 定義 tts 只含 audio_url）。
-    """
+def test_response_shape(client, spirit, player, active_card):
+    """SDD v2.1 §10.1：`{ reply_text, tts: { audio_url } }`（＋除錯用的 source）。"""
     pid, sess = player
     enc = issue_encounter_token(pid, spirit.spirit_id)
     body = _say(client, spirit, sess, enc, "你好").json()
-    assert set(body) == {"reply_text", "source"}
+
+    assert set(body) == {"reply_text", "source", "tts"}

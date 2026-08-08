@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.modules.brain.tts import TTSResult
+
 
 class ErrorResponse(BaseModel):
     """
@@ -147,20 +149,25 @@ class DialogueRequest(BaseModel):
 
 class DialogueResponse(BaseModel):
     """
-    對話回應。
+    對話回應（SDD v2.1 §10.1）。
 
-    ⚠️ **這是走通端到端用的最小版本**，目前只做 B12 快速問候比對——命中回預寫
-    台詞，未命中回人工預寫的 fallback。完整版（Gemini 生成、TTS 語音、安全邊界、
-    Prompt 組裝）見 issue #42／#45。
+    ⚠️ **這是 Phase 2 的「可用版」**（#42）：配額 → B12 招呼比對 → B1 生成 →
+    B10 語音 → B7 短期記憶。B4 安全邊界與 B2 完整組裝屬 Phase 3（#45）。
 
-    `tts` 欄位刻意還不存在：SDD v2.1 §10.1 定義它只含 `audio_url`，等 B10（#21）
-    落地才會加上。現在放一個永遠是 null 的欄位只會讓客戶端寫出無用的處理分支。
+    `tts` 可以是 null，那是**預期狀態而不是錯誤**：TTS 失敗時對話降級成純文字
+    （SDD §8.5「模型失敗不視為錯誤」）。客戶端 F5 對此的處置是角色維持靜止
+    口型、文字照常顯示——兩端的降級行為刻意銜接。
+
+    🔒 `tts` 裡**只有 `audio_url`**。v2.1 §10.1 已移除 viseme 時間軸，對嘴由
+    客戶端 uLipSync 即時分析負責（見 `brain/tts.py` 的模組註解）。
     """
 
     reply_text: str
-    # 'canned' = 命中預寫招呼；'fallback' = 未命中，回人工預寫台詞。
+    # 'canned' = 命中預寫招呼；'generated' = Gemini 生成；
+    # 'fallback' = 生成失敗或無法組裝，回人工預寫台詞。
     # 客戶端不需要據此改變行為，但除錯與觀察命中率時很有用。
     source: str
+    tts: TTSResult | None = None
 
 
 class SpiritOrientation(BaseModel):
