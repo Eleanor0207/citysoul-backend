@@ -333,3 +333,15 @@ class AvatarAssetResponse(BaseModel):
     avatar_id: str
     bundle_url: str
     version: str
+
+
+class DailyEventResponse(BaseModel):
+    """
+    `GET /spirits/{placeId}/daily-event`（issue #26）。
+
+    公開世界狀態，不需要任何 token。永遠回傳 `200` 加內容——今天沒快取回
+    昨天的，連昨天都沒有回人工預寫保底，不回 `404` 空畫面（見 router.py
+    的說明）。
+    """
+
+    narrative_text: str

@@ -28,7 +28,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.sql import func
 
 from app.core.database import Base
@@ -337,3 +337,30 @@ class AvatarAsset(Base):
     updated_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
+
+class DailyEventCache(Base):
+    """
+    S10．當日情境快取（issue #26；SDD §3.1）。
+
+    刻意跟 B9（`app.modules.brain.daily_event`，issue #20）的內容生成分開
+    ——那支模組只負責「怎麼生成」，這張表跟讀寫它的排程／端點負責「什麼時候
+    觸發、存哪裡、對外怎麼保底」（v2.1 §6.4 的腦袋／身體分工原則）。
+
+    PK 是 `(place_id, event_date)`，不是代理鍵：同一天同一地標的內容本來
+    就該只有一列，讓資料庫的主鍵約束直接擋住重複，排程重複觸發時「先寫、
+    撞到主鍵衝突就當作已經生成過」（同 #16 共鳴事件帳本的做法），不用先查
+    再判斷。
+
+    `content` 是 JSONB 而不是單一 `narrative_text` 欄位：B9 的
+    `DailyEventContent` 之後如果加欄位（例如情境相關的視覺提示），這張表
+    不需要跟著改 schema。
+    """
+
+    __tablename__ = "daily_event_cache"
+
+    place_id = Column(String(64), ForeignKey("spirits.spirit_id"), primary_key=True)
+    event_date = Column(Date, primary_key=True)
+    content = Column(JSONB, nullable=False)
+    generated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=False)

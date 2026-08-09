@@ -25,6 +25,20 @@
         "title": "AvatarAssetResponse",
         "type": "object"
       },
+      "DailyEventResponse": {
+        "description": "`GET /spirits/{placeId}/daily-event`（issue #26）。\n\n公開世界狀態，不需要任何 token。永遠回傳 `200` 加內容——今天沒快取回\n昨天的，連昨天都沒有回人工預寫保底，不回 `404` 空畫面（見 router.py\n的說明）。",
+        "properties": {
+          "narrative_text": {
+            "title": "Narrative Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "narrative_text"
+        ],
+        "title": "DailyEventResponse",
+        "type": "object"
+      },
       "DialogueRequest": {
         "description": "對話請求（SDD 第8.5節）。\n\n`user_input` 的長度上限先用保守值。SDD 提到 `prompt_max_chars` 會依實測調整，\n但那要等真的接上 Gemini、看到成本數據之後才有依據。",
         "properties": {
@@ -1172,6 +1186,59 @@
           }
         },
         "summary": "Get Spirit",
+        "tags": [
+          "body"
+        ]
+      }
+    },
+    "/api/v1/spirits/{place_id}/daily-event": {
+      "get": {
+        "description": "S10．當日情境查詢（issue #26）。**公開世界狀態，不需要任何 token**。\n\n保底鏈：今天的快取 → 昨天的快取 → 人工預寫保底文字，**永遠回 200**，\n不回 404 空畫面——排程延遲或失敗時玩家不該看到空白（issue #26 AC，\n硬要求）。`placeId` 本身不存在才是 404：那是「問了一個不存在的地標」，\n跟「地標存在但今天還沒有內容」是兩種不同的情況。",
+        "operationId": "get_daily_event_api_v1_spirits__place_id__daily_event_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "place_id",
+            "required": true,
+            "schema": {
+              "title": "Place Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DailyEventResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "資源不存在或已下架"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Daily Event",
         "tags": [
           "body"
         ]

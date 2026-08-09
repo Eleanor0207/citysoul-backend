@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
@@ -20,6 +20,7 @@ from app.modules.body.quests import (
     effective_state,
     evaluate_on_summon,
     spirit_id_for_quest,
+    taipei_today,
 )
 from app.modules.body.quota import QuotaExceededError, consume, default_tier_id
 from app.modules.body.resonance import (
@@ -31,6 +32,7 @@ from app.modules.body.resonance import (
 )
 from app.modules.body.sense_tokens import SENSE_TOKEN_HEADER, issue_sense_token, require_sense_token
 from app.modules.body.tokens import issue_session_token
+from app.modules.brain.daily_event import DAILY_EVENT_FALLBACK
 from app.modules.brain.gemini import GeminiClient, VertexAIGeminiClient
 from app.modules.brain.greetings import match_canned_greeting
 from app.modules.brain.models import MemoryEmbedding
@@ -604,6 +606,43 @@ def get_spirit(place_id: str, db: Session = Depends(get_db)):
     if spirit is None or not spirit.is_active:
         raise HTTPException(status_code=404, detail="spirit not found")
     return spirit
+
+
+@router.get(
+    "/spirits/{place_id}/daily-event",
+    response_model=schemas.DailyEventResponse,
+    responses={**_ERROR_404},
+)
+def get_daily_event(place_id: str, db: Session = Depends(get_db)):
+    """
+    S10．當日情境查詢（issue #26）。**公開世界狀態，不需要任何 token**。
+
+    保底鏈：今天的快取 → 昨天的快取 → 人工預寫保底文字，**永遠回 200**，
+    不回 404 空畫面——排程延遲或失敗時玩家不該看到空白（issue #26 AC，
+    硬要求）。`placeId` 本身不存在才是 404：那是「問了一個不存在的地標」，
+    跟「地標存在但今天還沒有內容」是兩種不同的情況。
+    """
+    spirit = db.query(models.Spirit).filter_by(spirit_id=place_id).first()
+    if spirit is None or not spirit.is_active:
+        raise HTTPException(status_code=404, detail="spirit not found")
+
+    today = taipei_today(datetime.now(timezone.utc))
+    row = (
+        db.query(models.DailyEventCache)
+        .filter_by(place_id=place_id, event_date=today)
+        .first()
+    )
+    if row is None:
+        row = (
+            db.query(models.DailyEventCache)
+            .filter_by(place_id=place_id, event_date=today - timedelta(days=1))
+            .first()
+        )
+
+    if row is not None:
+        return schemas.DailyEventResponse(**row.content)
+
+    return schemas.DailyEventResponse(narrative_text=DAILY_EVENT_FALLBACK)
 
 
 @router.get(

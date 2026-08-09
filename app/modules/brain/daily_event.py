@@ -48,7 +48,7 @@ _FIXED_DATE_HOLIDAYS: dict[tuple[int, int], str] = {
 # 這個敘述語境會文不對題。跟 `router.py` 原本持有自己的 FALLBACK_REPLY 是
 # 同一個理由：每個模組的回退文字要適合自己的語境，不是共用一句然後在不同
 # 地方讀起來都有點怪。
-_DAILY_EVENT_FALLBACK = "今天的城市，一如往常，安靜地繼續著它的故事。"
+DAILY_EVENT_FALLBACK = "今天的城市，一如往常，安靜地繼續著它的故事。"
 
 
 class DailyEventContent(BaseModel):
@@ -101,7 +101,7 @@ def generate_daily_event_content(
     holiday = taiwan_holiday_name(event_date)
 
     if holiday is None and official_event is None and curated_material is None:
-        return DailyEventContent(narrative_text=_DAILY_EVENT_FALLBACK)
+        return DailyEventContent(narrative_text=DAILY_EVENT_FALLBACK)
 
     prompt = _build_prompt(
         place_id, event_date, holiday=holiday, official_event=official_event,
@@ -110,6 +110,6 @@ def generate_daily_event_content(
     text = client.generate(prompt)
 
     if text == _GEMINI_CLIENT_FALLBACK:
-        text = _DAILY_EVENT_FALLBACK
+        text = DAILY_EVENT_FALLBACK
 
     return DailyEventContent(narrative_text=text)
