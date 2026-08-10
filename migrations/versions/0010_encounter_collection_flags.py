@@ -1,7 +1,7 @@
 """encounter_collections 補上 landmark_recognized / resonance_awarded（S12／#44）
 
-Revision ID: 0009
-Revises: 0008
+Revision ID: 0010
+Revises: 0009
 Create Date: 2026-08-08
 
 SDD §3.1 列的欄位是 `landmark_recognized` 與 `resonance_awarded`，但 0004 建表
@@ -24,8 +24,8 @@ SDD §3.1 列的欄位是 `landmark_recognized` 與 `resonance_awarded`，但 00
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0009"
-down_revision = "0008"
+revision = "0010"
+down_revision = "0009"
 branch_labels = None
 depends_on = None
 

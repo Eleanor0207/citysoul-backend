@@ -20,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
 
     services:
+      # Redis 還是直接拉官方映像檔——沒有自建的理由，只有 Postgres 需要
+      # 疊 PostGIS（見下方 build 步驟）。
       redis:
         image: redis:7-alpine
         ports: ['6379:6379']
@@ -44,9 +46,9 @@ jobs:
       SENSE_TOKEN_SECRET: ci-sense-secret
 
       # ⚠️ 刻意**沒有**任何 GCP 憑證（ADR-0003：不產生 service account 金鑰，
-      # 也不把金鑰塞進 secrets）。Gemini 的真實呼叫測試在沒有憑證時會自動 skip，
-      # 所以 CI 不需要碰 GCP。真的要在 CI 打 Vertex AI 的話，走 Workload
-      # Identity Federation 換發短期 token，不要加 secrets。
+      # 也不把金鑰塞進 secrets）。Gemini／TTS 的真實呼叫測試在沒有憑證時會
+      # 自動 skip，所以 CI 不需要碰 GCP。真的要在 CI 打 Vertex AI 的話，走
+      # Workload Identity Federation 換發短期 token，不要加 secrets。
 
     steps:
       - uses: actions/checkout@v7
@@ -84,6 +86,26 @@ jobs:
         with:
           enable-cache: true
 
+      # Postgres 改用手動 build + run，不是 `services:` 的 `image:`——那個
+      # 欄位只能拉現成映像檔，沒辦法先 build 自己的 Dockerfile.postgres
+      # （issue #46：官方 `pgvector/pgvector:pg16` 沒有 PostGIS，
+      # `brain.districts` 的地理圍欄跟這裡新增的 `is_point_in_polygon` 都
+      # 需要它；migration 0007 的 `CREATE EXTENSION postgis` 在純 pgvector
+      # 映像檔上會直接失敗）。跟 `docker-compose.yml` 用同一支 Dockerfile，
+      # 本機能跑的東西 CI 也要能跑，兩邊不該用不同的資料庫映像檔。
+      - name: build and start Postgres (pgvector + PostGIS)
+        run: |
+          docker build -t citysoul-postgres -f Dockerfile.postgres .
+          docker run -d --name citysoul-postgres -p 5432:5432 \
+            -e POSTGRES_USER=city_soul \
+            -e POSTGRES_PASSWORD=city_soul_dev \
+            -e POSTGRES_DB=city_soul \
+            citysoul-postgres
+          for i in $(seq 1 30); do
+            docker exec citysoul-postgres pg_isready -U city_soul && break
+            sleep 1
+          done
+
       # .python-version 鎖 3.12（psycopg[binary] 的 wheel 供應狀況，見 README）
       - run: uv sync --frozen
 
@@ -109,68 +131,26 @@ jobs:
 
       - run: uv run python -m pytest -q
 
-  # 契約閘門（issue #30）。
+  # API 契約閘門（issue #30）。只在 PR 上跑：比對這次改動前後的
+  # `contracts/openapi.json`，抓破壞性變更（刪欄位／改型別／改必填）。
+  # 純新增欄位放行；閘門本身的核心判斷邏輯（快照是否過期）已經有本機
+  # `pytest` 守著（見 tests/test_api_contract.py），這裡只做「拿正確的兩份
+  # 快照去比對」這件事。
   #
-  # 擋的是「後端無聲地改壞 API、客戶端 runtime 才炸」。以 3 天一個 Sprint 的
-  # 節奏，加上後端與客戶端分屬兩個 repo，這件事會頻繁發生。
-  #
-  # 跟 test job 分開是刻意的：這個 job 不需要資料庫，也不需要跑 migration，
-  # 而且它失敗時的訊息應該是「你改壞了契約」，不該混在測試輸出裡。
+  # ⚠️ 這個 job 尚未在真實 PR 上跑過（本 session 沒有 push 權限，無法驗證）
+  # ——語法照 oasdiff 官方文件寫，但請在第一次真的開 PR 時確認會不會噴。
   contract-gate:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-
-    # 只有 PR 才有「舊版契約」可以比對。push 到 main 時 base 就是自己，比了
-    # 沒有意義——那時候守著契約的是 pytest 的「快照未過期」那條。
-    #
-    # `breaking-change` 標籤可以跳過閘門，但**必須同時提交 v2 路由**
-    # （SDD v2.1 §11.2.1）。那是流程規範，由 review 把關，不由工具強制——
-    # 貼標籤是一個顯式的意圖表態，讓破壞性變更不會在趕 Sprint 時被順手放行。
-    if: >-
-      github.event_name == 'pull_request'
-      && !contains(github.event.pull_request.labels.*.name, 'breaking-change')
-
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v7
-
-      - uses: astral-sh/setup-uv@v9.0.0
+      - run: git fetch --depth=1 origin ${{ github.base_ref }}
+      - uses: oasdiff/oasdiff-action/breaking@v0
         with:
-          enable-cache: true
-
-      - run: uv sync --frozen
-
-      # 先確認 PR 裡的快照本身是新的。少了這步，下面比對的可能是一份過期的
-      # 快照——那等於在比一個不存在的 API，閘門會靜默失效。
-      #
-      # 這條在本機 `pytest` 也會跑到（tests/test_api_contract.py），這裡重跑
-      # 一次是為了讓「快照過期」的失敗訊息出現在契約閘門這個 job，而不是被埋
-      # 在 200 多條測試的輸出裡。
-      - name: contract snapshot is up to date
-        env:
-          SESSION_TOKEN_SECRET: ci-session-secret
-          ENCOUNTER_TOKEN_SECRET: ci-encounter-secret
-          SENSE_TOKEN_SECRET: ci-sense-secret
-        run: |
-          uv run python -m scripts.generate_openapi_contract
-          git diff --exit-code contracts/openapi.json || {
-            echo "::error::contracts/openapi.json 過期了。跑 uv run python -m scripts.generate_openapi_contract 並一起 commit。"
-            exit 1
-          }
-
-      # base 分支的契約，當作比對基準。
-      - name: fetch base contract
-        run: |
-          git fetch origin ${{ github.base_ref }} --depth=1
-          git show origin/${{ github.base_ref }}:contracts/openapi.json > /tmp/base-openapi.json \
-            || echo '{}' > /tmp/base-openapi.json
-
-      # 破壞性變更（刪欄位／改型別／改必填）讓 build 失敗；純新增欄位放行。
-      # 「只加不減」是 SDD v2.1 §11.2.1 定的相容原則。
-      #
-      # ⚠️ 這個 job 還沒有在真實 PR 上跑過（本機 session 沒有 push 權限），
-      # 語法是照 oasdiff 官方文件寫的。第一次開 PR 時請確認它不會噴。
-      - name: breaking change check
-        uses: oasdiff/oasdiff-action/breaking@main
-        with:
-          base: /tmp/base-openapi.json
-          revision: contracts/openapi.json
+          base: 'origin/${{ github.base_ref }}:contracts/openapi.json'
+          revision: 'HEAD:contracts/openapi.json'
           fail-on: ERR
+          github-token: ${{ github.token }}

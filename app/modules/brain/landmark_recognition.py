@@ -1,30 +1,23 @@
 """
-B13．地標視覺辨識（issue #22）。
+B13．地標視覺辨識（issue #22；SDD §7.7；雲端 Gemini 多模態，即用即丟）。
 
-玩家在現場拍一張照，我們判斷「這張照片拍的是不是這個地標」。成功給特別徽章，
-**失敗不阻擋任務完成**（CONTEXT.md）——辨識失敗只是拿不到徽章，不是流程錯誤。
+## 隱私是這張票的核心約束
 
-## 隱私是這個模組的核心約束（SDD §7.7）
+`image_bytes` 只在記憶體處理：組成這次多模態呼叫的請求內容、送出、拿到
+辨識結果，**辨識完成（成功或失敗）立即捨棄**——不寫入任何持久化儲存
+（含本機檔案、Cloud Storage），不留作訓練資料，也不留在任何模組層級的
+變數或快取裡。呼叫本身會把影像位元組送到 Google 的雲端服務（這是「雲端
+Gemini 多模態」的必要代價，SDD 已經接受這個前提），但**這支程式碼自己**
+不能是第二個持久化的來源。
 
-`image_bytes` **只在記憶體處理，辨識完成後立即捨棄**：
+`recognize()` 的回傳型別刻意只有 `bool`：不回傳、不夾帶任何影像資料，
+呼叫端拿到的是一個是非判斷，沒有辦法從回傳值反推出原始影像。
 
-- 不寫入任何持久化儲存（含 Cloud Storage）
-- 不留作訓練資料
-- **不放進任何模組層級的變數、快取或清單**
+## 失敗不阻擋任務完成
 
-最後那條特別容易被違反。「即用即丟」不只是不寫檔——一個為了除錯而加的
-`_last_image = image_bytes`，或一個「最近 N 次辨識」的 list，都會讓玩家的照片
-在進程記憶體裡活到重啟為止。所以這個模組**刻意沒有任何模組層級的可變狀態**，
-連統計用的計數器都沒有。
-
-`recognize_landmark()` 的回傳型別是 `bool` 而不是某個結果物件，也是同一個理由：
-一個 dataclass 很容易在某次「順手多回傳一點資訊」時把影像夾帶出去。
-
-## 這裡不使用 B1 的 GeminiClient
-
-`GeminiClient.generate(prompt: str)` 只收文字。多模態要送 `Part` 物件，介面對
-不上，硬套只會逼 B1 為了這裡改簽章。所以這裡有自己的 client 抽象——兩者共用的
-只有「失敗就回退、不拋例外」這個原則。
+CONTEXT.md：本機地標辨識成功時給予特別徽章，失敗不阻擋任務完成。呼叫失敗
+（連線錯誤、逾時、5xx）一律回傳 `False`，不拋例外——玩家頂多是拿不到那個
+徽章，不會因為辨識服務打嗝就卡住整個任務流程。
 """
 from __future__ import annotations
 
@@ -32,39 +25,30 @@ import logging
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import wait as futures_wait
+from typing import Any, Callable
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="landmark")
-
-# 判定用的提示。要求只回一個詞，理由同 B4 的分類器：這一層要的是可判定的結果，
-# 不是可讀的說明。回應愈短，被截斷或漂移的空間愈小，成本也愈低。
-_RECOGNISE_PROMPT = """這張照片拍的是不是「{landmark_name}」這個地標？
-
-只回答一個詞：
-- yes：是這個地標
-- no：不是，或無法確定
-
-答案："""
+_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="landmark-recognition")
 
 
 class LandmarkRecognizer(ABC):
     """
-    抽象介面。呼叫端只依賴這個，所以測試注入 fake 就能跑，**不需要 GCP 憑證**。
+    地標視覺辨識的抽象介面。呼叫端只依賴這個介面，測試可以注入
+    `FakeLandmarkRecognizer` 而完全不需要 GCP 憑證。
     """
 
     @abstractmethod
     def recognize(self, image_bytes: bytes, spirit_id: str) -> bool:
-        """判斷影像是否為該地標。失敗時回 `False`，不拋例外。"""
+        """判斷 `image_bytes` 是不是 `spirit_id` 這個地標。失敗時回 `False`，不拋例外。"""
 
 
 class VertexAILandmarkRecognizer(LandmarkRecognizer):
     """
-    真實實作。SDK 在需要時才 import，理由同 `gemini.py`。
-
-    憑證走 ADC，沒有任何金鑰參數（ADR-0003）。
+    真實實作。SDK 延遲 import，沒裝 `google-genai` 的環境仍可 import 這個
+    模組並使用 fake（同 `gemini.py` 的做法）。
     """
 
     def __init__(
@@ -72,15 +56,17 @@ class VertexAILandmarkRecognizer(LandmarkRecognizer):
         *,
         model_name: str | None = None,
         timeout_seconds: float | None = None,
-        client_factory=None,
-    ):
+        client_factory: Callable[[], Any] | None = None,
+    ) -> None:
+        """
+        `client_factory` 讓測試注入一個會拋例外的假 client，驗證**這個類別的**
+        回退邏輯——用一個自己就回傳 `False` 的假 recognizer 測不到這條路徑。
+        """
         self._model_name = model_name or settings.gemini_model
         self._timeout_seconds = timeout_seconds or settings.gemini_timeout_seconds
         self._client_factory = client_factory or self._create_client
         self._client = None
 
-        # ⚠️ 這裡**只記失敗原因，絕不記影像**。observability 的誘惑是「把出錯的
-        # 那張照片留下來看看」——那正是 §7.7 禁止的事。
         self.last_failure_reason: str | None = None
 
     def _create_client(self):
@@ -105,83 +91,62 @@ class VertexAILandmarkRecognizer(LandmarkRecognizer):
     def recognize(self, image_bytes: bytes, spirit_id: str) -> bool:
         self.last_failure_reason = None
 
-        if not image_bytes:
-            # 空影像不值得花一次呼叫，也不是錯誤——就是辨識不出來。
-            return False
-
         try:
-            from google import genai
+            from google.genai import types
 
             client = self._ensure_client()
 
+            # `image_bytes` 只活在這個函式呼叫的堆疊裡：組成請求內容、送出、
+            # 拿到文字結果，函式結束後這個區域變數本身也不再被任何東西持有
+            # ——沒有把它指派給 `self` 或任何模組層級變數。
             future = _EXECUTOR.submit(
                 client.models.generate_content,
                 model=self._model_name,
                 contents=[
-                    genai.types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
-                    _RECOGNISE_PROMPT.format(landmark_name=spirit_id),
+                    types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
+                    f"這張照片是不是「{spirit_id}」這個地標？只能回答 true 或 false，"
+                    "不要加任何其他文字或標點。",
                 ],
+                config=types.GenerateContentConfig(max_output_tokens=8),
             )
 
             done, _ = futures_wait([future], timeout=self._timeout_seconds)
             if not done:
-                return self._fail(f"超過 {self._timeout_seconds} 秒未回應")
+                return self._fall_back(f"超過 {self._timeout_seconds} 秒未回應")
 
             response = future.result()
             text = (getattr(response, "text", None) or "").strip().lower()
-
-            if not text:
-                return self._fail("模型回傳空字串")
-
-            # 寬鬆比對，但**往保守的方向倒**：只有明確的 yes 才算辨識成功。
-            # 認不出來就是拿不到徽章，代價很小；誤判成功則是給了不該給的獎勵。
-            return text.startswith("yes") or text == "是"
+            return text.startswith("true")
 
         except Exception as exc:  # noqa: BLE001
-            # 攔截所有例外。辨識失敗不該讓任務完成流程中斷（CONTEXT.md），
-            # 而「哪些例外算預期」的清單一定會漏。
-            return self._fail(f"{type(exc).__name__}: {exc}")
+            # 跟 GeminiClient／TTSClient 同樣的理由：任何未預期的例外都不該
+            # 讓任務完成流程中斷，這裡不列「哪些例外算預期」的清單。
+            return self._fall_back(f"{type(exc).__name__}: {exc}")
 
-    def _fail(self, reason: str) -> bool:
+    def _fall_back(self, reason: str) -> bool:
         self.last_failure_reason = reason
-        logger.warning("地標辨識失敗，本次不給徽章：%s", reason)
+        logger.warning("地標視覺辨識失敗，回傳 False（不阻擋任務完成）：%s", reason)
         return False
 
 
 class FakeLandmarkRecognizer(LandmarkRecognizer):
     """
-    測試用。放在正式程式碼而不是 tests/ 底下，理由同 `FakeGeminiClient`。
+    測試用。放在正式程式碼而不是 tests/ 底下，理由同
+    `gemini.FakeGeminiClient`——其他模組（例如 #44 紀念照片）的測試也會
+    用到它。
 
-    ⚠️ **刻意不記錄收到的 `image_bytes`**，只記 `spirit_id` 與呼叫次數。
-    如果連 fake 都留著影像，那份「即用即丟」的紀律就只存在於正式實作裡——
-    而測試替身常常是後來被複製去別處的那一個。
+    刻意不保留 `image_bytes` 本身，只記呼叫次數與收過的 `spirit_id`——連
+    測試用的 fake 都不留一份影像，「即用即丟」不能只在真實實作裡做到。
     """
 
-    def __init__(self, result: bool = True, raises: Exception | None = None):
+    def __init__(self, result: bool = True) -> None:
         self.result = result
-        self.raises = raises
-        self.spirit_ids: list[str] = []
+        self.spirit_ids_seen: list[str] = []
 
     def recognize(self, image_bytes: bytes, spirit_id: str) -> bool:
-        self.spirit_ids.append(spirit_id)
-        if self.raises is not None:
-            # fake 也遵守「不拋例外」的契約——這裡是模擬底層失敗，
-            # 真實實作會把它吞掉。
-            return False
+        self.spirit_ids_seen.append(spirit_id)
         return self.result
 
     @property
     def call_count(self) -> int:
-        return len(self.spirit_ids)
-
-
-def recognize_landmark(
-    recognizer: LandmarkRecognizer, image_bytes: bytes, spirit_id: str
-) -> bool:
-    """
-    模組的公開入口。回傳純 `bool`，**不夾帶影像**。
-
-    收 `recognizer` 而不是自己建一個，是為了讓呼叫端（#44 的 landmark-photo
-    端點）能注入 fake。
-    """
-    return recognizer.recognize(image_bytes, spirit_id)
+        return len(self.spirit_ids_seen)

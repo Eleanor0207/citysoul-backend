@@ -63,6 +63,18 @@ def quest_id_for_spirit(spirit_id: str) -> str:
     return f"{spirit_id}:daily"
 
 
+# quest_id_for_spirit() 的反函式（issue #33）。quest_progress 沒有 spirit_id
+# 欄位，GET /quests/daily 的回應卻需要它——目前唯一的來源就是這個命名慣例。
+# 之後導入任務目錄表時，這支函式要換成查表，呼叫端（router.py）不用跟著改。
+_QUEST_ID_SUFFIX = ":daily"
+
+
+def spirit_id_for_quest(quest_id: str) -> str:
+    if not quest_id.endswith(_QUEST_ID_SUFFIX):
+        raise ValueError(f"無法從 quest_id 反推 spirit_id（格式不符）：{quest_id!r}")
+    return quest_id[: -len(_QUEST_ID_SUFFIX)]
+
+
 def taipei_today(now: datetime) -> date:
     """把一個帶時區的時間點換算成 Asia/Taipei 的日期。"""
     return now.astimezone(TAIPEI).date()
@@ -80,6 +92,30 @@ class QuestState:
         self.quest_id = quest_id
         self.status = status
         self.attempts_today = attempts_today
+
+
+def effective_state(progress: QuestProgress, *, now: datetime | None = None) -> QuestState:
+    """
+    唯讀版本的狀態計算（issue #33／#36 的查詢端點用這個，不是 `evaluate_on_summon`）。
+
+    `evaluate_on_summon` 只該在 `/summon` 被呼叫一次——它有副作用（可能把
+    `attempts_today` 歸零、可能記一次失敗嘗試，兩者都會 commit）。查詢端點
+    只是「玩家現在看到的狀態是什麼」，不該因為被查詢就順便改寫資料庫，
+    尤其是「今天已跨到新的一天」這件事：查詢的當下重算就好，不需要也不該
+    寫回 DB——沒有人召喚的時候，這一列本來就不會有人在乎它現在該不該重置。
+    """
+    now = now or datetime.now(timezone.utc)
+    today = taipei_today(now)
+
+    # 跨日：顯示 0，不寫回 attempts_date／attempts_today。
+    attempts_today = 0 if progress.attempts_date != today else progress.attempts_today
+
+    if attempts_today >= MAX_DAILY_ATTEMPTS:
+        status = STATUS_DAILY_LIMIT_REACHED
+    else:
+        status = progress.status
+
+    return QuestState(progress.quest_id, status, attempts_today)
 
 
 def evaluate_on_summon(
@@ -160,76 +196,3 @@ def _count_failed_attempt_if_token_expired(progress: QuestProgress, *, now: date
     if now - issued_at > timedelta(seconds=ENCOUNTER_TOKEN_EXPIRE_SECONDS):
         progress.attempts_today += 1
         progress.current_token_issued_at = None
-
-
-class QuestNotFoundError(LookupError):
-    """quest_id 對不到任何任務（格式不符，或該玩家沒有這筆進度）。"""
-
-
-class QuestNotCompletableError(RuntimeError):
-    """任務目前的狀態不允許完成。"""
-
-
-def spirit_id_for_quest(quest_id: str) -> str:
-    """
-    任務 id → 地標 id，`quest_id_for_spirit()` 的反向。
-
-    格式不符時拋 `QuestNotFoundError` 而不是讓 `ValueError`／`IndexError` 往外
-    竄——呼叫端拿到的該是「查無此任務」（404），不是 500。玩家送一個亂打的
-    quest_id 是可預期的輸入，不是伺服器故障。
-    """
-    if not quest_id or ":" not in quest_id:
-        raise QuestNotFoundError(f"無法解析的 quest_id：{quest_id!r}")
-
-    spirit_id, _, suffix = quest_id.rpartition(":")
-    if not spirit_id or suffix != "daily":
-        raise QuestNotFoundError(f"無法解析的 quest_id：{quest_id!r}")
-
-    return spirit_id
-
-
-def complete_quest(
-    db: Session,
-    *,
-    player_id: uuid.UUID | str,
-    quest_id: str,
-    now: datetime | None = None,
-) -> QuestProgress:
-    """
-    把任務標記為完成（SDD §7.5 前半）。
-
-    ## 判定是確定性規則，不是 LLM
-
-    CONTEXT.md 明訂「可驗證微任務由後端確定性規則判定，不由 LLM 判定」。
-    這支函式因此**完全不碰腦袋模組**——判定只看資料庫裡的狀態。
-
-    MVP 的規則很小：任務進度必須存在且不是已完成。`completion_evidence` 目前
-    不參與判定（SDD 尚未定義它的結構），但仍然收下來，因為之後加規則時
-    API 形狀不該跟著變。
-
-    ## 已完成的任務再次呼叫不是錯誤
-
-    直接回傳現況。重複提交是正常的使用者行為（網路重試、連點兩下），共鳴值的
-    去重由 `resonance_events` 的 UNIQUE 約束保證，不需要在這裡擋。
-    """
-    moment = now or datetime.now(timezone.utc)
-
-    progress = (
-        db.query(QuestProgress)
-        .filter_by(player_id=uuid.UUID(str(player_id)), quest_id=quest_id)
-        .first()
-    )
-
-    if progress is None:
-        # 沒有進度列代表玩家還沒召喚過這個靈魂——任務是在 /summon 時建立的。
-        raise QuestNotFoundError(f"玩家沒有 {quest_id} 的任務進度")
-
-    if progress.status == STATUS_COMPLETED:
-        return progress
-
-    progress.status = STATUS_COMPLETED
-    progress.completed_at = moment
-    db.commit()
-    db.refresh(progress)
-
-    return progress

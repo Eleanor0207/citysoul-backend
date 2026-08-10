@@ -24,6 +24,8 @@ dependencies = [
     # S12 紀念照片（#44）：FastAPI 的 UploadFile／multipart 解析需要它。
     "python-multipart>=0.0.9",
     "alembic>=1.19.0",
+    "google-cloud-texttospeech>=2.37.0",
+    "google-cloud-storage>=3.13.1",
 ]
 
 [dependency-groups]

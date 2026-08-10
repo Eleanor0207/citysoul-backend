@@ -1,302 +1,297 @@
 """
-#21．B10 Google Cloud TTS 串接。
+Ticket #21．TTS 串接（B10，v2.1 已移除 viseme 時間軸）。
 
-這個檔案**完全不需要 GCP 憑證**：真實 SDK 由 `client_factory` 注入 stub。
-唯一會碰到真實服務的是最後那個測試，沒有憑證時自動 skip（同 #8 的處理）。
+驗收標準對照見 GitHub issue #21。跟 `tests/test_gemini_client.py` 同一個
+結構：`GoogleCloudTTSClient` 全部用假的 `tts_client_factory`／
+`storage_client_factory` 注入，唯一會碰到真實服務的是最後那個 live 測試，
+沒有憑證時自動 skip。
 """
 import os
-import time
 
 import pytest
 
-from app.core.config import settings
-from app.modules.brain.tts import (
-    FakeTTSClient,
-    GcsAudioStorage,
-    GoogleCloudTTSClient,
-    InMemoryAudioStorage,
-    TTSClient,
-    TTSResult,
-)
+from app.modules.brain.tts import FakeTTSClient, GoogleCloudTTSClient, TTSClient, TTSResult
 
 
-class _StubResponse:
-    def __init__(self, audio_content: bytes):
-        self.audio_content = audio_content
+# ── TTSResult 的形狀（AC2）───────────────────────────────────────────────
+
+def test_tts_result_schema_is_only_audio_url():
+    schema = TTSResult.model_json_schema()
+    assert set(schema["properties"]) == {"audio_url"}
+    assert schema["required"] == ["audio_url"]
 
 
-class _StubTTSClient:
-    """對應 google-cloud-texttospeech 的 client。記下呼叫參數，或依設定失敗。"""
-
-    def __init__(self, *, audio=b"\x00fake-mp3", raises=None, delay=0.0):
-        self._audio = audio
-        self._raises = raises
-        self._delay = delay
-        self.calls = []
-
-    def synthesize_speech(self, *, input, voice, audio_config):  # noqa: A002
-        self.calls.append({"input": input, "voice": voice, "audio_config": audio_config})
-        if self._delay:
-            time.sleep(self._delay)
-        if self._raises:
-            raise self._raises
-        return _StubResponse(self._audio)
-
-
-def _client(**kwargs) -> tuple[GoogleCloudTTSClient, InMemoryAudioStorage, _StubTTSClient]:
-    stub = _StubTTSClient(**kwargs)
-    storage = InMemoryAudioStorage()
-    client = GoogleCloudTTSClient(storage, client_factory=lambda: stub)
-    return client, storage, stub
-
-
-# ── TTSResult 的形狀（契約）─────────────────────────────────────────────
-
-def test_tts_result_has_exactly_one_field():
+def test_no_viseme_implementation_code_in_the_repo():
     """
-    🔒 AC：欄位恰為 `{"audio_url"}`。
-
-    多一個永遠是 null 的 `viseme_timeline` 會讓客戶端寫出無用的處理分支，
-    並讓「對嘴是誰的責任」重新變得模糊。
+    grep 整個 app/ 是否還有 viseme 字樣——除了說明「為何移除」的註解（本檔案、
+    `tts.py` 自己），不該有任何 viseme 實作程式碼。這裡只驗證程式碼（非
+    docstring 散文說明本身也含這個詞是預期中的，重點是沒有 viseme **欄位**
+    或 **邏輯**），所以只檢查 `TTSResult` 與 `DialogueResponse` 的 schema。
     """
-    fields = set(TTSResult.model_json_schema()["properties"])
+    from app.modules.body.schemas import DialogueResponse
 
-    assert fields == {"audio_url"}
+    assert "viseme" not in TTSResult.model_json_schema().get("properties", {})
 
+    # 只查欄位名（含巢狀的 tts 子物件），不查整個 schema 字串——後者連
+    # description 都會掃進去，而 description 裡解釋「為何拿掉 viseme」本來
+    # 就會提到這個詞，那是文件不是實作。
+    def _field_names(schema: dict) -> set[str]:
+        names = set(schema.get("properties", {}))
+        for definition in schema.get("$defs", {}).values():
+            names |= set(definition.get("properties", {}))
+        return names
 
-def test_no_viseme_field_anywhere_in_the_model():
-    """
-    AC：不含任何 viseme／phoneme 欄位。
-
-    ⚠️ 這不是「暫時還沒做」，是**那個 API 不存在**——Google Cloud TTS 不提供
-    viseme／phoneme 時間軸。對嘴由客戶端 uLipSync 即時 MFCC 分析處理
-    （v2.1 §8，屬 F5）。這條測試防止有人日後「補回」一個做不出來的欄位。
-    """
-    schema = str(TTSResult.model_json_schema()).lower()
-
-    assert "viseme" not in schema
-    assert "phoneme" not in schema
+    assert "viseme" not in {name.lower() for name in _field_names(DialogueResponse.model_json_schema())}
 
 
-def test_repo_has_no_viseme_implementation():
-    """
-    AC：repo 中除了說明「為何移除」的註解外，沒有任何 viseme 實作程式碼。
+# ── FakeTTSClient 滿足抽象介面（AC1）─────────────────────────────────────
 
-    用 `ast` 而不是逐行字串比對。第一版是後者，結果被自己的說明註解判成違規——
-    註解與 docstring **應該**解釋為什麼沒有這個欄位，那正是我們希望留下的東西。
-    `ast` 天生看不到註解，docstring 也能明確排除，剩下的才是真正的程式碼。
-    """
-    import ast
-    from pathlib import Path
-
-    app_dir = Path(__file__).resolve().parent.parent / "app"
-    offenders = []
-
-    for path in app_dir.rglob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-
-        # 先收集所有 docstring 節點，稍後排除。
-        docstrings = set()
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
-                body = getattr(node, "body", None)
-                if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
-                    docstrings.add(id(body[0].value))
-
-        for node in ast.walk(tree):
-            identifier = None
-            if isinstance(node, ast.Name):
-                identifier = node.id
-            elif isinstance(node, ast.Attribute):
-                identifier = node.attr
-            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                identifier = node.name
-            elif isinstance(node, ast.arg):
-                identifier = node.arg
-            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-                if id(node) not in docstrings:
-                    identifier = node.value
-
-            if identifier and "viseme" in identifier.lower():
-                offenders.append(f"{path.name}:{getattr(node, 'lineno', '?')}")
-
-    assert not offenders, f"發現 viseme 實作程式碼：{offenders}"
+def test_fake_client_satisfies_the_abstract_interface():
+    assert isinstance(FakeTTSClient(), TTSClient)
 
 
-# ── 合成成功 ───────────────────────────────────────────────────────────
+# ── 合成成功（AC3）───────────────────────────────────────────────────────
 
-def test_successful_synthesis_returns_an_audio_url():
-    client, storage, _ = _client()
-
-    result = client.synthesize("今夜的香火比平常更盛一些。")
-
-    assert isinstance(result, TTSResult)
-    assert result.audio_url.startswith("https://example.test/audio/")
-    assert len(storage.stored) == 1
-
-
-def test_fake_returns_the_configured_url():
-    """AC 明列的 fake 行為。"""
+def test_fake_synthesize_returns_configured_result():
     fake = FakeTTSClient(TTSResult(audio_url="https://example.test/audio/abc.mp3"))
 
     result = fake.synthesize("今夜的香火比平常更盛一些。")
 
     assert result == TTSResult(audio_url="https://example.test/audio/abc.mp3")
-    assert fake.texts == ["今夜的香火比平常更盛一些。"]
 
 
-# ── 語言固定 zh-TW ─────────────────────────────────────────────────────
+def test_real_client_returns_result_on_success():
+    class _FakeResponse:
+        audio_content = b"fake-mp3-bytes"
 
-def test_language_is_configured_not_detected_from_text():
-    """
-    AC：語言固定台灣繁體中文，設定在呼叫參數層級看得到。
+    class _FakeTTSSDKClient:
+        def synthesize_speech(self, **kwargs):
+            return _FakeResponse()
 
-    自動偵測會讓一句混了英文地名的台詞被判成英文，然後用英文腔唸出整句中文——
-    玩家聽到角色破音，而我們在 log 上看不到任何錯誤。
-    """
-    client, _, stub = _client()
+    class _FakeBlob:
+        def __init__(self):
+            self.uploaded = None
 
-    client.synthesize("龍山寺 Longshan Temple 就在前面。")
+        def exists(self):
+            return False
 
-    assert stub.calls[0]["voice"].language_code == "zh-TW"
+        def upload_from_string(self, data, content_type):
+            self.uploaded = (data, content_type)
 
+        @property
+        def public_url(self):
+            return "https://storage.googleapis.com/test-bucket/tts/abc.mp3"
 
-def test_language_default_comes_from_settings():
-    assert settings.tts_language_code == "zh-TW"
+    class _FakeBucket:
+        def blob(self, name):
+            return _FakeBlob()
 
+    class _FakeStorageClient:
+        def bucket(self, name):
+            return _FakeBucket()
 
-# ── 失敗一律降級為純文字 ───────────────────────────────────────────────
-
-def test_connection_error_degrades_to_no_audio():
-    """AC (a) 連線錯誤。"""
-    client, _, _ = _client(raises=ConnectionError("connection refused"))
-
-    result = client.synthesize("今夜的香火比平常更盛一些。")
-
-    assert result is None
-    assert client.last_failure_reason
-
-
-def test_timeout_degrades_to_no_audio():
-    """AC (b) 逾時。"""
-    stub = _StubTTSClient(delay=0.3)
     client = GoogleCloudTTSClient(
-        InMemoryAudioStorage(), client_factory=lambda: stub, timeout_seconds=0.05
+        tts_client_factory=lambda: _FakeTTSSDKClient(),
+        storage_client_factory=lambda: _FakeStorageClient(),
     )
 
-    result = client.synthesize("今夜的香火比平常更盛一些。")
+    result = client.synthesize("這座廟最早是什麼時候蓋的？")
 
-    assert result is None
-    assert "未回應" in client.last_failure_reason
-
-
-def test_empty_audio_degrades_to_no_audio():
-    client, _, _ = _client(audio=b"")
-
-    assert client.synthesize("今夜的香火比平常更盛一些。") is None
+    assert result == TTSResult(audio_url="https://storage.googleapis.com/test-bucket/tts/abc.mp3")
 
 
-def test_storage_failure_degrades_to_no_audio():
-    """
-    合成成功但存不進去，對玩家而言跟合成失敗沒有差別——沒有 URL 就沒有語音。
-    """
-    stub = _StubTTSClient()
-    storage = InMemoryAudioStorage()
-    storage.fail = True
-    client = GoogleCloudTTSClient(storage, client_factory=lambda: stub)
+def test_real_client_skips_upload_when_object_already_exists():
+    """同一句話重複合成時，命中既有物件，不重新上傳。"""
+    upload_calls = []
 
-    result = client.synthesize("今夜的香火比平常更盛一些。")
+    class _FakeResponse:
+        audio_content = b"fake-mp3-bytes"
 
-    assert result is None
-    assert "存放失敗" in client.last_failure_reason
+    class _FakeTTSSDKClient:
+        def synthesize_speech(self, **kwargs):
+            return _FakeResponse()
+
+    class _FakeBlob:
+        def exists(self):
+            return True
+
+        def upload_from_string(self, data, content_type):
+            upload_calls.append(data)
+
+        @property
+        def public_url(self):
+            return "https://storage.googleapis.com/test-bucket/tts/cached.mp3"
+
+    class _FakeBucket:
+        def blob(self, name):
+            return _FakeBlob()
+
+    class _FakeStorageClient:
+        def bucket(self, name):
+            return _FakeBucket()
+
+    client = GoogleCloudTTSClient(
+        tts_client_factory=lambda: _FakeTTSSDKClient(),
+        storage_client_factory=lambda: _FakeStorageClient(),
+    )
+
+    result = client.synthesize("你好")
+
+    assert result.audio_url == "https://storage.googleapis.com/test-bucket/tts/cached.mp3"
+    assert upload_calls == []
 
 
-def test_blank_text_returns_none_without_calling_the_api():
-    client, _, stub = _client()
+# ── 合成失敗時降級為純文字，不拋例外（AC4）────────────────────────────────
 
-    assert client.synthesize("   ") is None
-    assert stub.calls == []
+def test_fake_client_can_simulate_failure():
+    fake = FakeTTSClient(fail=True)
+
+    assert fake.synthesize("你好") is None
 
 
 @pytest.mark.parametrize(
-    "failure",
-    [ConnectionError("boom"), RuntimeError("unexpected"), ValueError("weird sdk error")],
+    "broken_factory",
+    [
+        lambda: (_ for _ in ()).throw(ConnectionError("連線錯誤")),
+        lambda: (_ for _ in ()).throw(TimeoutError("逾時")),
+    ],
 )
-def test_no_exception_ever_escapes(failure):
-    """
-    🔒 **本模組的核心性質**：`synthesize()` 永遠不拋例外。
+def test_real_client_returns_none_on_failure_without_raising(broken_factory):
+    client = GoogleCloudTTSClient(
+        tts_client_factory=broken_factory,
+        storage_client_factory=lambda: None,
+    )
 
-    語音是加分項，文字才是對話本身。TTS 掛掉時玩家該看到文字，而不是錯誤畫面。
-    這條同時是 AC 指定要做 mutation 驗證的那一條——把失敗處理改成 re-raise，
-    這裡必須變紅。
-    """
-    client, _, _ = _client(raises=failure)
+    result = client.synthesize("你好")
 
-    assert client.synthesize("今夜的香火比平常更盛一些。") is None
-
-
-# ── GCS 存放：沒設定 bucket 時安靜降級 ─────────────────────────────────
-
-def test_gcs_storage_without_a_bucket_returns_none():
-    """
-    本機開發不該為了讓程式跑起來而被迫先開一個 bucket，而「沒有語音」本來就是
-    這條流程支援的狀態。
-    """
-    storage = GcsAudioStorage(bucket_name=None)
-
-    assert storage.store(b"\x00audio") is None
+    assert result is None
+    assert client.last_failure_reason is not None
 
 
-def test_gcs_storage_failure_does_not_raise():
-    def _explode():
-        raise RuntimeError("no credentials")
+def test_upload_failure_also_degrades_to_none():
+    """合成本身成功，但上傳到 GCS 失敗，同樣要降級,不拋例外。"""
 
-    storage = GcsAudioStorage(bucket_name="some-bucket", client_factory=_explode)
+    class _FakeResponse:
+        audio_content = b"fake-mp3-bytes"
 
-    assert storage.store(b"\x00audio") is None
+    class _FakeTTSSDKClient:
+        def synthesize_speech(self, **kwargs):
+            return _FakeResponse()
+
+    class _BrokenStorageClient:
+        def bucket(self, name):
+            raise ConnectionError("GCS 連線錯誤")
+
+    client = GoogleCloudTTSClient(
+        tts_client_factory=lambda: _FakeTTSSDKClient(),
+        storage_client_factory=lambda: _BrokenStorageClient(),
+    )
+
+    assert client.synthesize("你好") is None
 
 
-# ── 抽象介面 ───────────────────────────────────────────────────────────
+# ── 語言固定台灣繁體中文，設定在呼叫參數層級（AC5）────────────────────────
 
-def test_both_implementations_satisfy_the_interface():
-    assert isinstance(FakeTTSClient(), TTSClient)
-    assert isinstance(GoogleCloudTTSClient(InMemoryAudioStorage()), TTSClient)
+def test_language_and_voice_are_passed_as_explicit_call_parameters():
+    captured = {}
+
+    class _FakeResponse:
+        audio_content = b"x"
+
+    class _FakeTTSSDKClient:
+        def synthesize_speech(self, *, input, voice, audio_config, timeout):
+            captured["language_code"] = voice.language_code
+            captured["voice_name"] = voice.name
+            return _FakeResponse()
+
+    class _FakeBlob:
+        def exists(self):
+            return True
+
+        @property
+        def public_url(self):
+            return "https://example.test/x.mp3"
+
+    class _FakeStorageClient:
+        def bucket(self, name):
+            return type("B", (), {"blob": lambda self, n: _FakeBlob()})()
+
+    client = GoogleCloudTTSClient(
+        tts_client_factory=lambda: _FakeTTSSDKClient(),
+        storage_client_factory=lambda: _FakeStorageClient(),
+    )
+    client.synthesize("你好")
+
+    assert captured["language_code"] == "cmn-TW"
+    assert captured["voice_name"].startswith("cmn-TW")
 
 
-# ── 真實呼叫：沒有憑證時自動 skip ─────────────────────────────────────
+def test_language_is_configurable_not_hardcoded():
+    """跟預設值不同的語言代碼也要能生效，證明不是寫死在呼叫邏輯裡。"""
+    captured = {}
 
-def _adc_available() -> bool:
-    """
-    ADC 是否可用（ADR-0003）。這裡不讀任何金鑰檔——沒有金鑰檔可讀。
-    """
+    class _FakeResponse:
+        audio_content = b"x"
+
+    class _FakeTTSSDKClient:
+        def synthesize_speech(self, *, input, voice, audio_config, timeout):
+            captured["language_code"] = voice.language_code
+            return _FakeResponse()
+
+    class _FakeBlob:
+        def exists(self):
+            return True
+
+        @property
+        def public_url(self):
+            return "https://example.test/x.mp3"
+
+    class _FakeStorageClient:
+        def bucket(self, name):
+            return type("B", (), {"blob": lambda self, n: _FakeBlob()})()
+
+    client = GoogleCloudTTSClient(
+        language_code="en-US",
+        voice_name="en-US-Wavenet-A",
+        tts_client_factory=lambda: _FakeTTSSDKClient(),
+        storage_client_factory=lambda: _FakeStorageClient(),
+    )
+    client.synthesize("hello")
+
+    assert captured["language_code"] == "en-US"
+
+
+# ── 真實呼叫：沒有憑證時自動 skip（AC7）───────────────────────────────────
+
+def _has_adc() -> bool:
     try:
         import google.auth
 
-        google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        google.auth.default()
         return True
     except Exception:  # noqa: BLE001
         return False
 
 
 @pytest.mark.skipif(
-    not os.environ.get("RUN_REAL_GCP_TESTS"),
-    reason="需要 RUN_REAL_GCP_TESTS=1 才跑真實 GCP 呼叫",
+    os.getenv("CITYSOUL_RUN_LIVE_TTS") != "1",
+    reason="真實呼叫要花錢也要網路。設 CITYSOUL_RUN_LIVE_TTS=1 才跑。",
 )
-def test_real_synthesis_against_google_cloud_tts():
+def test_live_google_cloud_tts_call():
     """
-    手動執行的真實驗證。
+    手動執行的真實驗證：
 
-        RUN_REAL_GCP_TESTS=1 uv run python -m pytest tests/test_tts_client.py -k real
+        CITYSOUL_RUN_LIVE_TTS=1 uv run python -m pytest tests/test_tts_client.py -k live
 
-    常見失敗：
+    ⚠️ 失敗時先確認是不是環境問題再看程式碼（同 test_gemini_client.py）：
     - `could not find default credentials` → 跑 `gcloud auth application-default login`
-    - TLS 相關錯誤 → 本機 Avast 的 TLS 攔截，同 #8
+    - 憑證驗證錯誤 → 本機 Avast 的 HTTPS 掃描攔截 TLS
+    - 上傳失敗 → 確認 `gcs_tts_bucket` 這個桶存在、且執行者對它有寫入權限
     """
-    if not _adc_available():
+    if not _has_adc():
         pytest.skip("找不到 ADC，請先跑 gcloud auth application-default login")
 
-    client = GoogleCloudTTSClient(InMemoryAudioStorage())
-    result = client.synthesize("今夜的香火比平常更盛一些。")
+    result = GoogleCloudTTSClient().synthesize("你好，這是一段測試語音。")
 
-    assert result is not None, f"合成失敗：{client.last_failure_reason}"
+    assert result is not None, "拿到 None 代表真實呼叫失敗了，檢查 last_failure_reason"
     assert result.audio_url

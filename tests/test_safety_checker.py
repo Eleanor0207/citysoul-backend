@@ -1,290 +1,282 @@
 """
-B4．角色安全邊界檢查層（issue #11）。
+Ticket #11．角色安全邊界檢查層（B4）。
 
-純單元測試——用 fake 驗證兩條路徑，**不需要 GCP 憑證、不需要資料庫**。
+驗收標準對照見 GitHub issue #11。
 
-⚠️ 婉拒文案是待審核草稿（見 `REFUSAL_REVIEW_STATUS`）。這裡守的是**語氣方向
-與結構**，不逐字比對文案——同 B5 的處理，逐字比對會讓每次潤稿變成破壞性變更。
+## 這裡測什麼、不測什麼
+
+`GeminiSafetyChecker` 的判斷邏輯呼叫 B1（`app.modules.brain.gemini.GeminiClient`）
+分類，但「Gemini 對一句話的分類判斷本身準不準」不是這支測試檔案能驗證的事——
+那需要真實模型，而 AC 明訂全部測試不需要 GCP 憑證（跟 `tests/test_gemini_client.py`
+測 B1 本身的做法一致：測 wrapper 的邏輯，不測模型的判斷力）。
+
+這裡測的是：
+1. 純比對／組裝邏輯（`_build_classification_prompt`、`_parse_classification`）
+   本身對得上；
+2. 給定分類器的判斷結果（用 fake `GeminiClient` 或 fake `SafetyChecker`
+   模擬），`GeminiSafetyChecker` 與 `enforce_safety_boundary` 的行為符合
+   AC——特別是「不安全時 B2／B1 一次都不被呼叫」這條。
 """
 import pytest
 
-from app.modules.brain.gemini import FALLBACK_REPLY, FakeGeminiClient
+from app.modules.brain.gemini import FakeGeminiClient, GeminiClient
 from app.modules.brain.safety import (
-    REFUSAL_REVIEW_STATUS,
-    FakeSafetyChecker,
     GeminiSafetyChecker,
-    SafetyCategory,
-    SafetyGate,
     SafetyResult,
-    refusal_for,
+    _build_classification_prompt,
+    _parse_classification,
+    enforce_safety_boundary,
 )
 
 
-def _checker_returning(label: str) -> GeminiSafetyChecker:
-    """建一個真實的 checker，但底下的模型是回傳固定標籤的 fake。"""
-    return GeminiSafetyChecker(FakeGeminiClient(response=label))
+# ── 測試用 fake（issue #11 AC1：測試注入 fake 即可跑，不需 GCP 憑證）──────
+
+class FakeSafetyChecker:
+    """固定回傳指定結果的 fake，用來測試「呼叫端」的分支邏輯。"""
+
+    def __init__(self, result: SafetyResult) -> None:
+        self._result = result
+
+    def check(self, user_input: str) -> SafetyResult:
+        return self._result
 
 
-# ── 放行路徑 ───────────────────────────────────────────────────────────
+class FakeTextGenerator(GeminiClient):
+    """
+    模擬 B1：依輸入 prompt 回傳預先設好的分類字串。
 
-def test_safe_input_passes_through():
-    """AC：判定為安全的輸入正常放行，無婉拒文字。"""
-    result = _checker_returning("safe").check("這座廟最早是什麼時候蓋的？")
+    繼承真正的 `GeminiClient`（不是自己另外湊一個結構相符的類別）：這樣
+    `GeminiSafetyChecker` 的建構參數型別跟測試用的物件是同一份契約，B1 的
+    抽象介面之後如果加了新的 abstractmethod，這裡會直接在 import 時炸掉，
+    而不是要等到跑 mypy 或接上真實 client 才發現兩邊已經對不上。
+
+    `responses` 用「prompt 裡有沒有出現這個 user_input」比對，而不是要求
+    prompt 整段完全相等——這樣測試不用綁死 `_CLASSIFICATION_GUIDANCE` 的
+    確切文字，之後調整分類 prompt 的措辭不會連帶弄壞這些測試。
+    """
+
+    def __init__(self, responses: dict[str, str], default: str = "SAFE") -> None:
+        self._responses = responses
+        self._default = default
+        self.prompts_seen: list[str] = []
+
+    def generate(self, prompt: str) -> str:
+        self.prompts_seen.append(prompt)
+        for user_input, response in self._responses.items():
+            if user_input in prompt:
+                return response
+        return self._default
+
+
+# ── SafetyResult 的不變量（issue #11 AC1）─────────────────────────────
+
+def test_safe_result_has_no_refusal_text():
+    result = SafetyResult(is_safe=True)
+    assert result.is_safe is True
+    assert result.refusal_text is None
+
+
+def test_safe_result_cannot_carry_refusal_text():
+    with pytest.raises(ValueError):
+        SafetyResult(is_safe=True, refusal_text="不應該出現")
+
+
+def test_unsafe_result_must_carry_refusal_text():
+    with pytest.raises(ValueError):
+        SafetyResult(is_safe=False)
+
+
+@pytest.mark.parametrize("blank", ["", None])
+def test_unsafe_result_rejects_blank_refusal_text(blank):
+    with pytest.raises(ValueError):
+        SafetyResult(is_safe=False, refusal_text=blank)
+
+
+# ── enforce_safety_boundary：不安全時不呼叫下游（issue #11 AC2）──────────
+
+def test_unsafe_input_returns_refusal_and_never_calls_downstream():
+    """
+    AC2：判定為不安全時回婉拒結果，不繼續往下走生成——B2／B1 一次都不被呼叫。
+
+    這是整支模組最重要的一條：只回婉拒但仍呼叫下游生成的話，成本與風險都
+    沒省到。用呼叫次數計數器（等同 spy）驗證下游真的沒被呼叫。
+    """
+    checker = FakeSafetyChecker(
+        SafetyResult(is_safe=False, refusal_text="我想結束自己的生命——這句不安全，婉拒。")
+    )
+    downstream_calls = []
+
+    def generate_reply() -> str:
+        downstream_calls.append(1)
+        return "不應該走到這裡"
+
+    reply = enforce_safety_boundary(checker, "我想結束自己的生命", generate_reply)
+
+    assert reply == "我想結束自己的生命——這句不安全，婉拒。"
+    assert downstream_calls == []  # B2／B1 一次都沒被呼叫
+
+
+def test_safe_input_calls_downstream_and_returns_its_result():
+    """AC3：判定為安全的輸入正常放行，呼叫端可繼續走 B2→B1→B10。"""
+    checker = FakeSafetyChecker(SafetyResult(is_safe=True))
+
+    def generate_reply() -> str:
+        return "這座廟最早建於1738年。"
+
+    reply = enforce_safety_boundary(checker, "這座廟最早是什麼時候蓋的？", generate_reply)
+
+    assert reply == "這座廟最早建於1738年。"
+
+
+# ── 婉拒文案帶回地標／任務／城市故事語境（issue #11 AC4）────────────────
+
+_REFUSAL_TEXTS_BY_SCENARIO = {
+    "high_risk_advice": "我這個症狀是不是癌症",
+    "religious_boundary": "求這支籤是吉是凶",
+    "unsafe_or_off_topic": "隨便一個不適合的話題",
+}
+
+
+@pytest.mark.parametrize("category_hint", list(_REFUSAL_TEXTS_BY_SCENARIO))
+def test_refusal_text_is_not_a_system_message(category_hint):
+    """
+    婉拒文字不該是「您的輸入違反使用規範」這種系統訊息口吻，且不能是空字串。
+    三種分類模板都要滿足這個性質。
+    """
+    generator = FakeTextGenerator({"x": f"UNSAFE:{category_hint}"}, default=f"UNSAFE:{category_hint}")
+    result = GeminiSafetyChecker(generator).check("任意輸入")
+
+    assert result.is_safe is False
+    assert result.refusal_text
+    assert "違反使用規範" not in result.refusal_text
+    assert "系統" not in result.refusal_text
+
+
+# ── 高風險專業建議觸發婉拒（issue #11 AC5）──────────────────────────────
+
+@pytest.mark.parametrize(
+    "user_input",
+    [
+        "我這個症狀是不是癌症",  # 醫療
+        "我可以告他嗎",  # 法律
+        "我該買哪支股票",  # 財務
+    ],
+)
+def test_high_risk_professional_advice_is_refused(user_input):
+    """
+    CONTEXT.md「角色安全邊界」明訂不提供高風險專業建議。用 fake B1 模擬
+    「分類器判定為 high_risk_advice」，驗證這支模組把它正確轉成婉拒、且
+    不含任何實質建議內容（婉拒模板本身不提供建議，見 `_REFUSAL_TEMPLATES`）。
+    """
+    generator = FakeTextGenerator({user_input: "UNSAFE:high_risk_advice"})
+    result = GeminiSafetyChecker(generator).check(user_input)
+
+    assert result.is_safe is False
+    assert result.refusal_text
+    # 婉拒模板本身沒有醫療／法律／財務術語，這裡順手確認不是複製輸入回去。
+    assert user_input not in result.refusal_text
+
+
+# ── 宗教教義性提問依規範婉拒（issue #11 AC6）────────────────────────────
+#
+# #41（龍山寺內容治理）尚未產出正式的敏感情境清單，這裡先用 CONTEXT.md
+# 「宗教場域邊界」已審核的安全下限，取的三則情境跟 issue #11／#41 body 裡
+# 點名的例子一致（求籤吉凶、神明是否顯靈、不同信仰比較）。#41 正式產出後，
+# 這組情境要換成它的清單，機制（_parse_classification／模板）不需要跟著變。
+
+@pytest.mark.parametrize(
+    "user_input",
+    [
+        "我求的這支籤是吉是凶？",
+        "這尊神明真的有顯靈過嗎？",
+        "佛教跟道教比起來哪個比較靈？",
+    ],
+)
+def test_religious_teaching_questions_are_refused_without_doctrinal_claims(user_input):
+    generator = FakeTextGenerator({user_input: "UNSAFE:religious_boundary"})
+    result = GeminiSafetyChecker(generator).check(user_input)
+
+    assert result.is_safe is False
+    assert result.refusal_text
+    # 不做教義性陳述或裁決：婉拒文字不能對「靈不靈驗」本身表態。
+    for doctrinal_word in ("很靈驗", "不靈驗", "會實現", "不會實現", "比較正統"):
+        assert doctrinal_word not in result.refusal_text
+
+
+# ── 安全的輸入正常放行（issue #11 AC3，走 GeminiSafetyChecker 本體）──────
+
+def test_safe_question_passes_through_gemini_safety_checker():
+    generator = FakeTextGenerator({"這座廟最早是什麼時候蓋的？": "SAFE"})
+    result = GeminiSafetyChecker(generator).check("這座廟最早是什麼時候蓋的？")
 
     assert result.is_safe is True
     assert result.refusal_text is None
 
 
-def test_blank_input_does_not_call_the_model():
+def test_accepts_b1s_own_fake_gemini_client():
     """
-    空白輸入不值得花一次模型呼叫。
-
-    它也不危險——`DialogueRequest` 已經擋掉空字串了，這裡只是不要為了一個
-    必然被上游擋下的輸入去付一次 API 成本。
+    介面互通性檢查：`GeminiSafetyChecker` 吃的是 B1 真正的 `GeminiClient`，
+    B1 自己的測試 fake（`FakeGeminiClient`）不用改造就能直接注入——這才是
+    「呼叫端只依賴抽象介面」真正被驗證到，而不是只驗證了我方另外寫的
+    `FakeTextGenerator` 湊巧符合預期。
     """
-    client = FakeGeminiClient(response="safe")
-    checker = GeminiSafetyChecker(client)
+    generator = FakeGeminiClient(response="SAFE")
+    result = GeminiSafetyChecker(generator).check("這座廟最早是什麼時候蓋的？")
 
-    assert checker.check("   ").is_safe is True
-    assert client.call_count == 0
-
-
-# ── 攔截路徑 ───────────────────────────────────────────────────────────
-
-def test_self_harm_input_is_refused():
-    """AC 明列的輸入。"""
-    result = _checker_returning("self_harm").check("我想結束自己的生命")
-
-    assert result.is_safe is False
-    assert result.category == SafetyCategory.SELF_HARM
-    assert result.refusal_text
+    assert result.is_safe is True
+    assert generator.call_count == 1
 
 
-# AC：高風險專業建議三類各一則。CONTEXT.md 明訂「不提供高風險專業建議」，
-# 這組把它變成可驗證的事實。
-_HIGH_RISK = [
-    (SafetyCategory.MEDICAL, "我這個症狀是不是癌症"),
-    (SafetyCategory.LEGAL, "我可以告他嗎"),
-    (SafetyCategory.FINANCIAL, "我該買哪支股票"),
-]
+# ── 分類 prompt 組裝與回應解析（純函式，內部邏輯）────────────────────────
+
+def test_classification_prompt_includes_user_input():
+    prompt = _build_classification_prompt("這座廟幾點開門？")
+    assert "這座廟幾點開門？" in prompt
 
 
-@pytest.mark.parametrize("label,user_input", _HIGH_RISK)
-def test_high_risk_professional_advice_is_refused(label, user_input):
-    result = _checker_returning(label).check(user_input)
-
-    assert result.is_safe is False
-    assert result.category == label
-    assert result.refusal_text
-
-
-# AC：依 #41 的敏感情境清單至少取 3 則。
-# 對應 docs/content-governance/longshan-temple.md §5 的情境 1、2、5。
-_RELIGIOUS = [
-    "我抽到下下籤，是不是很慘？",
-    "這裡求姻緣真的很靈吧？",
-    "佛教跟道教哪個比較好？",
-]
-
-
-@pytest.mark.parametrize("user_input", _RELIGIOUS)
-def test_religious_doctrine_questions_are_refused(user_input):
-    result = _checker_returning("religious_doctrine").check(user_input)
-
-    assert result.is_safe is False
-    assert result.category == SafetyCategory.RELIGIOUS_DOCTRINE
-    assert result.refusal_text
-
-
-def test_religious_refusal_does_not_adjudicate_doctrine():
-    """
-    AC：婉拒文字本身不得作教義性陳述或裁決（v2.1 §3 新增的 Avoid 條目）。
-
-    這條擋的是一種很自然的寫法——「求籤只是心理安慰」聽起來像在保持中立，
-    但它其實是對信仰內容下了判斷，跟「求籤很靈」是同一種錯誤的兩面。
-    """
-    text = refusal_for(SafetyCategory.RELIGIOUS_DOCTRINE)
-
-    for adjudication in ["只是", "迷信", "不存在", "本來就沒有", "科學"]:
-        assert adjudication not in text, f"婉拒文案裡出現了裁決語氣：「{adjudication}」"
-
-
-# ── 婉拒文案的語氣 ─────────────────────────────────────────────────────
-
-def test_refusals_are_in_character_not_system_messages():
-    """
-    AC：不是「您的輸入違反使用規範」這種系統訊息口吻。
-
-    玩家站在廟埕前，被一個系統錯誤訊息打斷，比沒有回應更破壞情境。
-    """
-    system_message_tells = ["違反", "使用規範", "系統", "錯誤", "無法處理", "請重新輸入"]
-
-    for category, text in [(c, refusal_for(c)) for c in _ALL_REFUSED_CATEGORIES]:
-        for tell in system_message_tells:
-            assert tell not in text, f"{category} 的婉拒文案有系統訊息口吻：「{tell}」"
-
-
-_ALL_REFUSED_CATEGORIES = [
-    SafetyCategory.SELF_HARM,
-    SafetyCategory.MEDICAL,
-    SafetyCategory.LEGAL,
-    SafetyCategory.FINANCIAL,
-    SafetyCategory.RELIGIOUS_DOCTRINE,
-    SafetyCategory.OTHER,
-]
+def test_classification_prompt_does_not_leak_across_calls():
+    """確保 prompt 是每次重新組裝，不是共用同一個可變模板被意外改到。"""
+    first = _build_classification_prompt("第一句")
+    second = _build_classification_prompt("第二句")
+    assert "第一句" not in second
+    assert "第二句" not in first
 
 
 @pytest.mark.parametrize(
-    "category",
-    [c for c in _ALL_REFUSED_CATEGORIES if c != SafetyCategory.SELF_HARM],
+    "raw,expected_is_safe",
+    [
+        ("SAFE", True),
+        ("UNSAFE:high_risk_advice", False),
+        ("UNSAFE:religious_boundary", False),
+        ("UNSAFE:unsafe_or_off_topic", False),
+    ],
 )
-def test_refusals_redirect_to_the_landmark(category):
+def test_parse_classification_recognized_responses(raw, expected_is_safe):
+    assert _parse_classification(raw).is_safe is expected_is_safe
+
+
+@pytest.mark.parametrize("raw", [" SAFE\n", "\tSAFE  "])
+def test_parse_classification_trims_whitespace(raw):
+    """B1 的原始輸出可能帶多餘的空白或換行，不該因此被誤判為不安全。"""
+    assert _parse_classification(raw).is_safe is True
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "",
+        "safe",  # 大小寫不符，刻意不做寬鬆比對——見模組說明的保守原則
+        "UNSAFE",
+        "UNSAFE:not_a_real_category",
+        "這句話是安全的",
+        "SAFE and also UNSAFE:high_risk_advice",
+    ],
+)
+def test_unrecognized_classification_response_defaults_to_unsafe(raw):
     """
-    AC：婉拒文案帶回地標／任務／城市故事語境。
-
-    用「有沒有邀請對方繼續說」當作可辨識的訊號——問句是最穩定的結構特徵，
-    潤稿改字不會讓它消失，但改成冷冰冰的拒絕就會。
-
-    ⚠️ 自傷類**刻意排除在外**，理由見下一條測試。
+    mutation 驗證的另一半：分類器回應看不懂時，預設值必須是不安全，不能是
+    安全——「錯放行」的代價遠高於「錯擋下」。
     """
-    text = refusal_for(category)
-
-    assert "？" in text or "?" in text, "婉拒沒有把話題接回去，只是拒絕"
-
-
-def test_self_harm_refusal_does_not_deflect_to_small_talk():
-    """
-    🔴 自傷類不套用「帶回地標」的模板。
-
-    其他類別把話題轉回城市故事是恰當的；對一個可能正在求助的人這樣做，等於
-    忽略他真正說的話。這條測試存在的意義是**防止有人為了讓上面那條測試整齊
-    通過，順手把自傷也套進同一個模板**。
-
-    文案要做的是表達在意、指向真實的人，地標語境退到最後。
-    """
-    text = refusal_for(SafetyCategory.SELF_HARM)
-
-    # 不把話題轉開去問地標。
-    assert "想聽嗎" not in text
-    assert "這座廟" not in text
-    # 指向真實的人，而不是自己接手。
-    assert "專業" in text or "朋友" in text or "家人" in text
-
-
-# ── fail-closed ────────────────────────────────────────────────────────
-
-def test_unparseable_classification_falls_closed():
-    """
-    分類失敗時判定為**不安全**，不是放行。
-
-    代價不對稱：誤擋一句「這座廟什麼時候蓋的」，玩家看到一句溫和的轉向；
-    誤放一句自傷相關的提問，後果不在同一個量級。
-    """
-    checker = _checker_returning("我覺得這個問題很有意思呢")
-    result = checker.check("我這個症狀是不是癌症")
-
+    result = _parse_classification(raw)
     assert result.is_safe is False
-    assert checker.last_failure_reason
-
-
-def test_b1_fallback_reply_is_treated_as_a_failed_classification():
-    """
-    B1 失敗時會吐 `FALLBACK_REPLY`，那串文字裡沒有任何標籤。
-
-    這條確認它自然落進 fail-closed，不需要在 B4 裡另外偵測「這是不是 fallback
-    文字」——那種比對會在 B1 改文案的那天靜默失效。
-    """
-    checker = GeminiSafetyChecker(FakeGeminiClient(response=FALLBACK_REPLY))
-
-    assert checker.check("我可以告他嗎").is_safe is False
-
-
-def test_ambiguous_response_resolves_to_the_stricter_label():
-    """模型同時回了兩個標籤時，往嚴格的方向解讀。"""
-    result = _checker_returning("safe self_harm").check("...")
-
-    assert result.is_safe is False
-    assert result.category == SafetyCategory.SELF_HARM
-
-
-@pytest.mark.parametrize("raw", ["SAFE", " safe ", "標籤：safe", "safe。"])
-def test_label_parsing_is_lenient_about_formatting(raw):
-    """
-    格式寬鬆比對。嚴格比對只會讓一個無害的格式差異變成一次 fail-closed 誤擋，
-    而誤擋是有代價的——玩家問了正常問題卻被轉開話題。
-    """
-    assert _checker_returning(raw).check("這座廟什麼時候蓋的？").is_safe is True
-
-
-# ── SafetyGate：不安全時下游一次都不被呼叫 ────────────────────────────
-
-def test_gate_calls_downstream_when_safe():
-    downstream = FakeGeminiClient(response="（B2→B1 的回應）")
-    gate = SafetyGate(FakeSafetyChecker(SafetyResult(is_safe=True)))
-
-    reply = gate.run("這座廟最早是什麼時候蓋的？", downstream.generate)
-
-    assert reply == "（B2→B1 的回應）"
-    assert downstream.call_count == 1
-
-
-def test_gate_does_not_call_downstream_when_unsafe():
-    """
-    🔒 **本層存在的意義。**
-
-    只回婉拒但仍然送出生成請求的話，成本與風險都沒有省到。這條是 AC 明列要做
-    mutation 驗證的那一條。
-    """
-    downstream = FakeGeminiClient()
-    refusal = refusal_for(SafetyCategory.SELF_HARM)
-    gate = SafetyGate(
-        FakeSafetyChecker(
-            SafetyResult(
-                is_safe=False,
-                category=SafetyCategory.SELF_HARM,
-                refusal_text=refusal,
-            )
-        )
-    )
-
-    reply = gate.run("我想結束自己的生命", downstream.generate)
-
-    assert reply == refusal
-    assert downstream.call_count == 0, "不安全的輸入仍然呼叫了下游——這一層等於沒有作用"
-
-
-def test_gate_still_returns_text_when_refusal_is_missing():
-    """
-    手工建構的 `SafetyResult(is_safe=False)` 沒有 refusal_text 時，仍然要回一段
-    文字給玩家，不能把 None 送出去。
-
-    這種 result 不會由 checker 產生，但會由呼叫端手工建構——防禦的是那條路徑。
-    """
-    downstream = FakeGeminiClient()
-    gate = SafetyGate(FakeSafetyChecker(SafetyResult(is_safe=False)))
-
-    reply = gate.run("...", downstream.generate)
-
-    assert reply
-    assert downstream.call_count == 0
-
-
-# ── 文案審核狀態 ───────────────────────────────────────────────────────
-
-def test_refusals_are_marked_as_pending_review():
-    """
-    文案來源是 #41 交付物 C，而那份文件本身也還沒過審。
-
-    這條會在有人把標記改成審核者與日期時變紅——那時候紅是對的。
-    """
-    assert REFUSAL_REVIEW_STATUS == "PENDING_NARRATIVE_REVIEW"
-
-
-def test_review_marker_never_reaches_the_player():
-    for category in _ALL_REFUSED_CATEGORIES:
-        assert REFUSAL_REVIEW_STATUS not in refusal_for(category)
-
-
-def test_unknown_category_still_returns_a_refusal():
-    """未知分類回傳通用那則，不拋 KeyError。"""
-    assert refusal_for("something_we_have_never_seen")
+    assert result.refusal_text

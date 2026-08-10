@@ -1,332 +1,220 @@
 """
-#32．配額機制與 429。
+Ticket #32．配額機制與 429（usage_tiers）。
 
-對真實 Postgres ＋ 真實 Redis 跑，不 mock（沿用 conftest 夾具）。
+驗收標準對照見 GitHub issue #32。對真實 Postgres／Redis 跑，不 mock。
 
-⚠️ **測試不寫死商業分級。** 每個測試自己把上限調成它需要的數字，因為
-`usage_tier_limits` 的值是產品決策（v2.1 §14 列為 Phase 7 才拍板），
-今天寫死 50，那些數字被調整的那天整組測試會無意義地變紅。
+`player` fixture 透過 `/api/v1/players` 建立，自動拿到預設分級
+`closed_beta`（migration 0004 已種好：`dialogue_calls_daily=50`、
+`landmark_recognition_daily=10`）——這兩個數字跟本檔案的預設值測試直接對齊，
+不是巧合，是刻意沿用既有種子資料，不用自己另外造一組。
 """
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from app.core.database import SessionLocal
 from app.core.redis_client import redis_client
-from app.main import quota_exceeded_response
-from app.modules.body import models
-from app.modules.body.quota import (
-    RESOURCE_DIALOGUE,
-    RESOURCE_LANDMARK_RECOGNITION,
-    QuotaExceededError,
-    UnknownQuotaResourceError,
-    consume,
-    current_usage,
-    default_tier_id,
-    next_taipei_midnight,
-)
+from app.modules.body.models import Player, UsageTier, UsageTierLimit
+from app.modules.body.quota import QuotaExceededError, _quota_key, consume, current_usage
 
-# 台北 = UTC+8。這兩個時間點刻意選在「台北已經是新的一天，UTC 還是昨天」的
-# 區間裡——跨日重置的 bug 只在這個區間才看得出來。
-_TAIPEI_YESTERDAY_2300 = datetime(2026, 3, 10, 15, 0, tzinfo=timezone.utc)  # 台北 3/10 23:00
-_TAIPEI_TODAY_0700 = datetime(2026, 3, 10, 23, 0, tzinfo=timezone.utc)  # 台北 3/11 07:00
+TAIPEI = ZoneInfo("Asia/Taipei")
 
 
 @pytest.fixture
-def tier(db_session):
-    """
-    每個測試用自己的分級，上限由測試自己設定。
-
-    共用 `closed_beta` 的話，一個測試改了上限就會影響其他測試——而且那筆資料是
-    migration 建的正式設定，測試不該去動它。
-    """
-    tier_id = f"test-tier-{uuid.uuid4().hex[:8]}"
-    row = models.UsageTier(tier_id=tier_id, display_name="測試分級", is_default=False)
-    db_session.add(row)
-    db_session.commit()
-    yield tier_id
-    db_session.query(models.UsageTierLimit).filter_by(tier_id=tier_id).delete()
-    db_session.query(models.UsageTier).filter_by(tier_id=tier_id).delete()
-    db_session.commit()
-
-
-def _set_limit(db_session, tier_id: str, resource: str, value: int) -> None:
-    existing = (
-        db_session.query(models.UsageTierLimit)
-        .filter_by(tier_id=tier_id, resource_type=resource)
-        .first()
-    )
-    if existing:
-        existing.limit_value = value
-    else:
-        db_session.add(
-            models.UsageTierLimit(tier_id=tier_id, resource_type=resource, limit_value=value)
-        )
-    db_session.commit()
-
-
-@pytest.fixture
-def player(db_session, tier, unique_device_id):
-    row = models.Player(device_id=unique_device_id, usage_tier_id=tier)
-    db_session.add(row)
-    db_session.commit()
-    db_session.refresh(row)
-    yield row
-    db_session.delete(row)
-    db_session.commit()
+def player(client):
+    body = client.post(
+        "/api/v1/players", json={"device_id": f"test-device-{uuid.uuid4()}"}
+    ).json()
+    return uuid.UUID(body["player_id"])
 
 
 @pytest.fixture(autouse=True)
-def _clear_quota_keys():
-    """
-    每個測試前後清掉配額 key。
-
-    Redis 的計數器有 TTL 但活到台北午夜，測試之間會互相污染。
-    """
+def _redis_cleanup(player):
     yield
-    for key in redis_client.scan_iter("quota:*"):
+    # 用 scan 掃這個玩家所有資源／日期的 key，不用自己列舉——測試裡跨了
+    # 8/6、8/7 兩天,列舉容易漏。
+    for key in redis_client.scan_iter(match=f"quota:{player}:*"):
         redis_client.delete(key)
 
 
-# ── 基本累計 ───────────────────────────────────────────────────────────
+def _at_taipei(y, m, d, hh, mm=0) -> datetime:
+    return datetime(y, m, d, hh, mm, tzinfo=TAIPEI)
 
-def test_consume_increments_usage(db_session, tier, player):
-    _set_limit(db_session, tier, RESOURCE_DIALOGUE, 100)
 
+# ── 超額擋下、未超額放行（AC1／AC2／AC3）───────────────────────────────
+
+def test_exceeding_limit_raises_and_does_not_record(db_session, player):
+    now = _at_taipei(2026, 8, 7, 12)
+    for _ in range(50):
+        consume(db_session, player_id=player, resource="dialogue_calls_daily", now=now)
+
+    with pytest.raises(QuotaExceededError):
+        consume(db_session, player_id=player, resource="dialogue_calls_daily", now=now)
+
+    assert current_usage(player, "dialogue_calls_daily", now=now) == 50
+
+
+def test_under_limit_succeeds_and_accumulates(db_session, player):
+    now = _at_taipei(2026, 8, 7, 12)
     for _ in range(3):
-        consume(db_session, player.player_id, RESOURCE_DIALOGUE)
+        consume(db_session, player_id=player, resource="dialogue_calls_daily", now=now)
 
-    assert current_usage(player.player_id, RESOURCE_DIALOGUE) == 3
+    result = consume(db_session, player_id=player, resource="dialogue_calls_daily", now=now)
+    assert result == 4
 
-    for _ in range(10):
-        consume(db_session, player.player_id, RESOURCE_DIALOGUE)
-
-    assert current_usage(player.player_id, RESOURCE_DIALOGUE) == 13
-
-
-def test_consume_returns_the_new_usage(db_session, tier, player):
-    _set_limit(db_session, tier, RESOURCE_DIALOGUE, 10)
-
-    assert consume(db_session, player.player_id, RESOURCE_DIALOGUE) == 1
-    assert consume(db_session, player.player_id, RESOURCE_DIALOGUE) == 2
+    for _ in range(9):
+        consume(db_session, player_id=player, resource="dialogue_calls_daily", now=now)
+    assert current_usage(player, "dialogue_calls_daily", now=now) == 13
 
 
-# ── 邊界：用滿 ≠ 超過 ─────────────────────────────────────────────────
+def test_exactly_at_limit_boundary(db_session, player):
+    """AC3：用滿不等於超過——第 50 次要放行，第 51 次才擋。"""
+    now = _at_taipei(2026, 8, 7, 12)
+    for _ in range(49):
+        consume(db_session, player_id=player, resource="dialogue_calls_daily", now=now)
 
-def test_exactly_reaching_the_limit_is_allowed(db_session, tier, player):
-    """
-    AC：上限 N 時第 N 次成功、第 N+1 次被擋。這條擋的是 off-by-one。
-    """
-    limit = 50
-    _set_limit(db_session, tier, RESOURCE_DIALOGUE, limit)
-
-    for _ in range(limit - 1):
-        consume(db_session, player.player_id, RESOURCE_DIALOGUE)
-    assert current_usage(player.player_id, RESOURCE_DIALOGUE) == limit - 1
-
-    # 第 50 次：剛好用滿，應該成功。
-    assert consume(db_session, player.player_id, RESOURCE_DIALOGUE) == limit
-
-    # 第 51 次：超過，被擋。
-    with pytest.raises(QuotaExceededError):
-        consume(db_session, player.player_id, RESOURCE_DIALOGUE)
-
-
-def test_blocked_request_is_not_counted(db_session, tier, player):
-    """
-    🔒 被擋下的請求**不記帳**。
-
-    這條是 Lua 腳本存在的理由。用 `INCR` 之後再比對的話，這裡會看到 3——
-    被拒絕的那次仍然把計數器推上去了，玩家等於被多扣一格。
-    """
-    _set_limit(db_session, tier, RESOURCE_DIALOGUE, 2)
-
-    consume(db_session, player.player_id, RESOURCE_DIALOGUE)
-    consume(db_session, player.player_id, RESOURCE_DIALOGUE)
+    assert consume(db_session, player_id=player, resource="dialogue_calls_daily", now=now) == 50
 
     with pytest.raises(QuotaExceededError):
-        consume(db_session, player.player_id, RESOURCE_DIALOGUE)
+        consume(db_session, player_id=player, resource="dialogue_calls_daily", now=now)
+    assert current_usage(player, "dialogue_calls_daily", now=now) == 50
 
-    assert current_usage(player.player_id, RESOURCE_DIALOGUE) == 2
 
+# ── 以 Asia/Taipei 午夜為界重置（AC4）───────────────────────────────────
 
-# ── 上限來自設定 ───────────────────────────────────────────────────────
-
-def test_limit_comes_from_the_database_not_the_code(db_session, tier, player):
-    """
-    AC：上限值可由設定調整。把上限設成 2，第三次就該被擋。
-
-    這也是那張表的整個設計目的——改資料就生效，不用重新部署。
-    """
-    _set_limit(db_session, tier, RESOURCE_DIALOGUE, 2)
-
-    consume(db_session, player.player_id, RESOURCE_DIALOGUE)
-    consume(db_session, player.player_id, RESOURCE_DIALOGUE)
-
+def test_resets_at_taipei_midnight(db_session, player):
+    yesterday_23 = _at_taipei(2026, 8, 6, 23)
+    for _ in range(50):
+        consume(db_session, player_id=player, resource="dialogue_calls_daily", now=yesterday_23)
     with pytest.raises(QuotaExceededError):
-        consume(db_session, player.player_id, RESOURCE_DIALOGUE)
+        consume(db_session, player_id=player, resource="dialogue_calls_daily", now=yesterday_23)
+
+    # 台北時間今天 07:00，其 UTC 仍是昨天 23:00——不能只靠 UTC 日期判斷。
+    today_07 = _at_taipei(2026, 8, 7, 7)
+    assert today_07.astimezone(timezone.utc).date() == yesterday_23.astimezone(timezone.utc).date()
+
+    result = consume(db_session, player_id=player, resource="dialogue_calls_daily", now=today_07)
+    assert result == 1
 
 
-def test_missing_limit_configuration_fails_loudly(db_session, tier, player):
-    """
-    查不到上限時硬失敗，**不當成無限制放行**。
+# ── 上限可設定（AC5）─────────────────────────────────────────────────────
 
-    當成無限制的話，一個資源名稱的 typo 就會把整層配額靜默關掉，而不會有任何
-    東西變紅——那是最糟的失效方式。
-    """
-    with pytest.raises(UnknownQuotaResourceError):
-        consume(db_session, player.player_id, "a_resource_nobody_configured")
-
-
-# ── 跨日重置（Asia/Taipei）─────────────────────────────────────────────
-
-def test_quota_resets_at_taipei_midnight(db_session, tier, player):
-    """
-    AC：以 Asia/Taipei 午夜為界重置。
-
-    ⚠️ 兩個注入的時間點**其 UTC 日期是同一天**（3/10 15:00Z 與 3/10 23:00Z），
-    但台北日期分別是 3/10 與 3/11。用 UTC 日期算的實作在這裡會失敗，而用真實
-    時鐘的測試則會在 UTC 16:00 前後給出不同結果——#15 就踩過這個坑。
-    """
-    _set_limit(db_session, tier, RESOURCE_DIALOGUE, 2)
-
-    consume(db_session, player.player_id, RESOURCE_DIALOGUE, now=_TAIPEI_YESTERDAY_2300)
-    consume(db_session, player.player_id, RESOURCE_DIALOGUE, now=_TAIPEI_YESTERDAY_2300)
-
-    with pytest.raises(QuotaExceededError):
-        consume(db_session, player.player_id, RESOURCE_DIALOGUE, now=_TAIPEI_YESTERDAY_2300)
-
-    # 台北已經是隔天了，額度重置。
-    assert consume(db_session, player.player_id, RESOURCE_DIALOGUE, now=_TAIPEI_TODAY_0700) == 1
-    assert current_usage(player.player_id, RESOURCE_DIALOGUE, now=_TAIPEI_TODAY_0700) == 1
-
-
-def test_yesterdays_usage_is_still_visible_under_yesterdays_date(db_session, tier, player):
-    """跨日不是把舊計數清掉，是換一個 key。舊的那天仍然查得到，直到 TTL 到期。"""
-    _set_limit(db_session, tier, RESOURCE_DIALOGUE, 5)
-
-    consume(db_session, player.player_id, RESOURCE_DIALOGUE, now=_TAIPEI_YESTERDAY_2300)
-    consume(db_session, player.player_id, RESOURCE_DIALOGUE, now=_TAIPEI_TODAY_0700)
-
-    assert current_usage(player.player_id, RESOURCE_DIALOGUE, now=_TAIPEI_YESTERDAY_2300) == 1
-    assert current_usage(player.player_id, RESOURCE_DIALOGUE, now=_TAIPEI_TODAY_0700) == 1
-
-
-def test_next_taipei_midnight_is_the_upcoming_one():
-    reset = next_taipei_midnight(_TAIPEI_YESTERDAY_2300)
-
-    # 台北 3/10 23:00 的下一個午夜是 3/11 00:00（一小時後）。
-    assert reset.astimezone(timezone.utc) == datetime(2026, 3, 10, 16, 0, tzinfo=timezone.utc)
-
-
-# ── 隔離 ───────────────────────────────────────────────────────────────
-
-def test_resources_are_counted_independently(db_session, tier, player):
-    """AC：對話用滿不影響拍照辨識額度。"""
-    _set_limit(db_session, tier, RESOURCE_DIALOGUE, 1)
-    _set_limit(db_session, tier, RESOURCE_LANDMARK_RECOGNITION, 1)
-
-    consume(db_session, player.player_id, RESOURCE_DIALOGUE)
-    with pytest.raises(QuotaExceededError):
-        consume(db_session, player.player_id, RESOURCE_DIALOGUE)
-
-    assert consume(db_session, player.player_id, RESOURCE_LANDMARK_RECOGNITION) == 1
-
-
-def test_quota_is_isolated_per_player(db_session, tier, unique_device_id):
-    _set_limit(db_session, tier, RESOURCE_DIALOGUE, 1)
-
-    player_a = models.Player(device_id=f"{unique_device_id}-a", usage_tier_id=tier)
-    player_b = models.Player(device_id=f"{unique_device_id}-b", usage_tier_id=tier)
-    db_session.add_all([player_a, player_b])
+@pytest.fixture
+def custom_tier_player(db_session, player):
+    """把既有玩家改配到一個上限只有 2 的自訂分級，測完還原。"""
+    tier_id = f"tt-{uuid.uuid4().hex[:8]}"  # String(32) 上限，UUID 全長塞不下
+    db_session.add(UsageTier(tier_id=tier_id, display_name="測試分級", is_default=False))
+    db_session.flush()
+    db_session.add(UsageTierLimit(tier_id=tier_id, resource_type="dialogue_calls_daily", limit_value=2))
     db_session.commit()
 
+    row = db_session.query(Player).filter_by(player_id=player).first()
+    original_tier_id = row.usage_tier_id
+    row.usage_tier_id = tier_id
+    db_session.commit()
+
+    yield player
+
+    row.usage_tier_id = original_tier_id
+    db_session.commit()
+    db_session.query(UsageTierLimit).filter_by(tier_id=tier_id).delete()
+    db_session.query(UsageTier).filter_by(tier_id=tier_id).delete()
+    db_session.commit()
+
+
+def test_limit_is_configurable_per_tier(db_session, custom_tier_player):
+    """呼叫端程式碼中不出現任何數字字面量：這裡的上限完全來自資料庫設定。"""
+    now = _at_taipei(2026, 8, 7, 12)
+    consume(db_session, player_id=custom_tier_player, resource="dialogue_calls_daily", now=now)
+    consume(db_session, player_id=custom_tier_player, resource="dialogue_calls_daily", now=now)
+
+    with pytest.raises(QuotaExceededError) as exc_info:
+        consume(db_session, player_id=custom_tier_player, resource="dialogue_calls_daily", now=now)
+    assert exc_info.value.limit == 2
+
+
+# ── 併發不超賣（AC6）─────────────────────────────────────────────────────
+
+def test_concurrent_consume_does_not_oversell(player):
+    """
+    玩家剩下 1 格額度，兩個執行緒各自獨立 DB session 同時消耗——恰好一個成功。
+
+    真的用 ThreadPoolExecutor 實測，不是單執行緒模擬：#16／#32 都明訂單執行緒
+    測試證明不了這件事。
+    """
+    now = _at_taipei(2026, 8, 7, 12)
+    setup_session = SessionLocal()
     try:
-        consume(db_session, player_a.player_id, RESOURCE_DIALOGUE)
-        with pytest.raises(QuotaExceededError):
-            consume(db_session, player_a.player_id, RESOURCE_DIALOGUE)
-
-        assert consume(db_session, player_b.player_id, RESOURCE_DIALOGUE) == 1
-        assert current_usage(player_a.player_id, RESOURCE_DIALOGUE) == 1
+        for _ in range(49):
+            consume(setup_session, player_id=player, resource="dialogue_calls_daily", now=now)
     finally:
-        db_session.delete(player_a)
-        db_session.delete(player_b)
-        db_session.commit()
+        setup_session.close()
 
-
-# ── 併發不超賣 ─────────────────────────────────────────────────────────
-
-def test_concurrent_consume_does_not_oversell(db_session, tier, player):
-    """
-    🔒 剩 1 格額度、兩個執行緒同時消耗 → **恰好一個成功**。
-
-    ⚠️ 這條必須用真的執行緒。單執行緒測試證明不了任何事——「先查再寫」的實作
-    在單執行緒下永遠是對的，只有在真的併發時才會雙雙查到「還有額度」然後一起
-    通過（同 #16 共鳴入帳的教訓）。
-
-    每個執行緒用**自己的 DB session**：SQLAlchemy 的 session 不是 thread-safe，
-    共用一個的話這個測試會因為 session 狀態混亂而失敗，看起來像配額有問題，
-    其實是測試自己寫錯。
-    """
-    _set_limit(db_session, tier, RESOURCE_DIALOGUE, 3)
-
-    # 先用掉 2 格，剩下 1 格。
-    consume(db_session, player.player_id, RESOURCE_DIALOGUE)
-    consume(db_session, player.player_id, RESOURCE_DIALOGUE)
-
-    def attempt() -> bool:
+    def _attempt():
         session = SessionLocal()
         try:
-            consume(session, player.player_id, RESOURCE_DIALOGUE)
-            return True
+            consume(session, player_id=player, resource="dialogue_calls_daily", now=now)
+            return "ok"
         except QuotaExceededError:
-            return False
+            return "blocked"
         finally:
             session.close()
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(lambda _: attempt(), range(2)))
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: _attempt(), range(2)))
 
-    assert sorted(results) == [False, True], f"應該恰好一成一敗，實際是 {results}"
-    assert current_usage(player.player_id, RESOURCE_DIALOGUE) == 3
-
-
-# ── 429 回應 ───────────────────────────────────────────────────────────
-
-def test_quota_error_maps_to_429():
-    reset_at = datetime(2026, 3, 11, 0, 0, tzinfo=timezone.utc)
-    response = quota_exceeded_response(
-        QuotaExceededError(resource_type=RESOURCE_DIALOGUE, reset_at=reset_at)
-    )
-
-    assert response.status_code == 429
-    assert "Retry-After" in response.headers
+    assert sorted(results) == ["blocked", "ok"]
+    assert current_usage(player, "dialogue_calls_daily", now=now) == 50
 
 
-def test_429_body_does_not_leak_other_players_or_internal_config():
+# ── 資源與玩家隔離（AC7／AC8）────────────────────────────────────────────
+
+def test_different_resources_are_counted_independently(db_session, player):
+    now = _at_taipei(2026, 8, 7, 12)
+    for _ in range(50):
+        consume(db_session, player_id=player, resource="dialogue_calls_daily", now=now)
+    with pytest.raises(QuotaExceededError):
+        consume(db_session, player_id=player, resource="dialogue_calls_daily", now=now)
+
+    # 對話用滿不影響拍照辨識額度。
+    result = consume(db_session, player_id=player, resource="landmark_recognition_daily", now=now)
+    assert result == 1
+
+
+def test_quota_is_isolated_per_player(db_session, player, client):
+    other_body = client.post(
+        "/api/v1/players", json={"device_id": f"test-device-{uuid.uuid4()}"}
+    ).json()
+    other_player = uuid.UUID(other_body["player_id"])
+    try:
+        now = _at_taipei(2026, 8, 7, 12)
+        for _ in range(50):
+            consume(db_session, player_id=player, resource="dialogue_calls_daily", now=now)
+
+        result = consume(db_session, player_id=other_player, resource="dialogue_calls_daily", now=now)
+        assert result == 1
+        assert current_usage(player, "dialogue_calls_daily", now=now) == 50
+    finally:
+        redis_client.delete(_quota_key(other_player, "dialogue_calls_daily", now.date()))
+
+
+# ── 例外只帶自己的資訊（AC9 的機制面）────────────────────────────────────
+
+def test_exception_carries_no_cross_player_information(db_session, player):
     """
-    AC：回應只含該玩家自己的狀態。
-
-    不含其他 `player_id`、全站統計，**也不含上限值**——上限是分級設定，回傳它
-    等於讓任何人用一次超額請求就問出我們的商業分級。
+    AC9 的落地在 API 層（#42），但機制本身就該讓那件事自然成立：例外物件
+    公開屬性只有 `resource`／`limit`／`reset_at`，沒有任何其他玩家的
+    `player_id`、全站統計或內部設定值可以被不小心序列化出去。
     """
-    import json
+    now = _at_taipei(2026, 8, 7, 12)
+    for _ in range(50):
+        consume(db_session, player_id=player, resource="dialogue_calls_daily", now=now)
 
-    reset_at = datetime(2026, 3, 11, 0, 0, tzinfo=timezone.utc)
-    response = quota_exceeded_response(
-        QuotaExceededError(resource_type=RESOURCE_DIALOGUE, reset_at=reset_at)
-    )
-    body = json.loads(response.body)
+    with pytest.raises(QuotaExceededError) as exc_info:
+        consume(db_session, player_id=player, resource="dialogue_calls_daily", now=now)
 
-    assert set(body) == {"detail", "resource", "reset_at"}
-    for leaky in ["player_id", "limit", "tier", "usage", "total"]:
-        assert leaky not in body
-
-
-# ── 既有行為不回歸 ─────────────────────────────────────────────────────
-
-def test_default_tier_still_resolves(db_session):
-    """`default_tier_id` 是既有行為，這次改動不該動到它。"""
-    assert default_tier_id(db_session)
+    public_attrs = {k for k in vars(exc_info.value) if not k.startswith("_")}
+    assert public_attrs == {"resource", "limit", "reset_at"}

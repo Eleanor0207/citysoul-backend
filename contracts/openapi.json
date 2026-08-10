@@ -2,7 +2,7 @@
   "components": {
     "schemas": {
       "AvatarAssetResponse": {
-        "description": "`GET /api/v1/assets/{avatarId}`（v2.1 §7.4／#38）。\n\n`version` 讓客戶端判斷快取是否過期：**改了要變，沒改要穩定不變**。\n後者一樣重要——每次回傳新值的話，客戶端每次啟動都會重抓整包。\n\n**無需驗證**：資產位置不是玩家資料。",
+        "description": "`GET /assets/{avatarId}`（issue #38，v2.1 §7.4）。",
         "properties": {
           "avatar_id": {
             "title": "Avatar Id",
@@ -12,10 +12,6 @@
             "title": "Bundle Url",
             "type": "string"
           },
-          "catalog_url": {
-            "title": "Catalog Url",
-            "type": "string"
-          },
           "version": {
             "title": "Version",
             "type": "string"
@@ -23,45 +19,18 @@
         },
         "required": [
           "avatar_id",
-          "catalog_url",
           "bundle_url",
           "version"
         ],
         "title": "AvatarAssetResponse",
         "type": "object"
       },
-      "Body_landmark_photo_api_v1_quests__quest_id__landmark_photo_post": {
-        "properties": {
-          "photo": {
-            "format": "binary",
-            "title": "Photo",
-            "type": "string"
-          }
-        },
-        "required": [
-          "photo"
-        ],
-        "title": "Body_landmark_photo_api_v1_quests__quest_id__landmark_photo_post",
-        "type": "object"
-      },
       "DailyEventResponse": {
-        "description": "`GET /api/v1/spirits/{placeId}/daily-event` 的回應（S10／#26）。\n\n**公開世界狀態，不需要任何 token。**\n\n`is_fallback` 為 true 有兩種可能：內容是人工預寫保底，或是回退到了前一天的\n快取。客戶端**不需要**據此改變呈現——玩家看到的都該是一段正常的敘事。\n它存在是為了讓我們觀察排程的健康度。",
+        "description": "`GET /spirits/{placeId}/daily-event`（issue #26）。\n\n公開世界狀態，不需要任何 token。永遠回傳 `200` 加內容——今天沒快取回\n昨天的，連昨天都沒有回人工預寫保底，不回 `404` 空畫面（見 router.py\n的說明）。",
         "properties": {
-          "is_fallback": {
-            "default": false,
-            "title": "Is Fallback",
-            "type": "boolean"
-          },
           "narrative_text": {
             "title": "Narrative Text",
             "type": "string"
-          },
-          "sources": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Sources",
-            "type": "array"
           }
         },
         "required": [
@@ -87,7 +56,7 @@
         "type": "object"
       },
       "DialogueResponse": {
-        "description": "對話回應（SDD v2.1 §10.1）。\n\n⚠️ **這是 Phase 2 的「可用版」**（#42）：配額 → B12 招呼比對 → B1 生成 →\nB10 語音 → B7 短期記憶。B4 安全邊界與 B2 完整組裝屬 Phase 3（#45）。\n\n`tts` 可以是 null，那是**預期狀態而不是錯誤**：TTS 失敗時對話降級成純文字\n（SDD §8.5「模型失敗不視為錯誤」）。客戶端 F5 對此的處置是角色維持靜止\n口型、文字照常顯示——兩端的降級行為刻意銜接。\n\n🔒 `tts` 裡**只有 `audio_url`**。v2.1 §10.1 已移除 viseme 時間軸，對嘴由\n客戶端 uLipSync 即時分析負責（見 `brain/tts.py` 的模組註解）。",
+        "description": "對話回應（issue #42 可用版）。\n\n`tts` 為 `None` 時，路由層會用 `response_model_exclude_none=True` 把這個\n欄位整個從 JSON 拿掉，不會序列化成 `\"tts\": null`——TTS 合成失敗時是「這輪\n沒有語音」，不是「有一個空的語音物件」，兩者對客戶端的處理分支意義不同\n（同 B10 `tts.py` 模組說明）。安全邊界（B4）與完整 Prompt 組裝（B2）見\nissue #45。",
         "properties": {
           "reply_text": {
             "title": "Reply Text",
@@ -116,11 +85,10 @@
         "type": "object"
       },
       "ErrorResponse": {
-        "description": "所有錯誤回應的統一形狀（SDD v2.1 §11.2.1）。\n\n**這不是新的錯誤格式，是對既有格式的描述。** 形狀刻意對齊 FastAPI\n`HTTPException` 本來就會產出的 `{\"detail\": \"...\"}`，一個位元組都沒改。\n\n存在的理由是讓契約說得出錯誤長什麼樣。在這之前，錯誤回應完全不在 OpenAPI\n文件裡——SDD v2.1 §10.3 明訂「錯誤碼全數不變」代表錯誤碼是契約的一部分，\n但機器可讀的那份契約看不到它們，客戶端只能回頭讀規格散文，這正好違背\n「單一真相來源」的初衷。\n\n具名之後，客戶端 codegen 會產出**單一**錯誤 DTO，錯誤處理可以寫成一份共用\n程式碼，而不是每支端點各寫一次。",
+        "description": "統一錯誤回應模型（issue #30）。\n\n形狀對齊 FastAPI `HTTPException` 既有的 `{\"detail\": ...}`——**不改變任何\n現有錯誤的實際 JSON 形狀**，只是讓契約描述它，讓 codegen 產出單一錯誤\nDTO。`detail` 用 `Any`：多數端點是字串，配額超限（429）是物件\n（`resource`／`limit`／`reset_at`），契約要能同時涵蓋兩種而不失真。",
         "properties": {
           "detail": {
-            "title": "Detail",
-            "type": "string"
+            "title": "Detail"
           }
         },
         "required": [
@@ -142,53 +110,8 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
-      "LandmarkPhotoResponse": {
-        "description": "`POST /api/v1/quests/{questId}/landmark-photo` 的回應（S12／#44）。\n\n⚠️ **回應裡沒有任何影像相關的東西**——沒有 URL、沒有雜湊、沒有尺寸。\n照片只在記憶體處理、辨識完立即捨棄（SDD §7.7），回應也不該留下它存在過的\n痕跡。\n\n`resonance_awarded` 為 false 有兩種可能：辨識失敗，或這個地標之前已經收藏過\n（`UNIQUE(player_id, place_id)`，每個地標只加一次 10 點）。兩者對玩家的意義\n不同，但都不是錯誤。",
-        "properties": {
-          "landmark_recognized": {
-            "title": "Landmark Recognized",
-            "type": "boolean"
-          },
-          "resonance_awarded": {
-            "title": "Resonance Awarded",
-            "type": "boolean"
-          },
-          "resonance_value": {
-            "title": "Resonance Value",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "landmark_recognized",
-          "resonance_awarded",
-          "resonance_value"
-        ],
-        "title": "LandmarkPhotoResponse",
-        "type": "object"
-      },
-      "MemoryGroup": {
-        "description": "依靈魂分組的記憶。",
-        "properties": {
-          "memories": {
-            "items": {
-              "$ref": "#/components/schemas/MemoryItem"
-            },
-            "title": "Memories",
-            "type": "array"
-          },
-          "spirit_id": {
-            "title": "Spirit Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "spirit_id"
-        ],
-        "title": "MemoryGroup",
-        "type": "object"
-      },
-      "MemoryItem": {
-        "description": "單筆記憶摘要。\n\n🔒 **沒有 embedding 欄位。** 向量是內部實作，對玩家沒有意義，而且 768 維\n浮點數會讓回應暴增數十 KB。",
+      "MemorySummaryItem": {
+        "description": "`GET /players/me/memory-summary` 的單筆記憶（issue #37）。\n\n刻意不含 `embedding`——向量是內部實作，對玩家無意義，回應會因此暴增\n數十 KB（AC 明訂檢查）。",
         "properties": {
           "created_at": {
             "format": "date-time",
@@ -204,21 +127,46 @@
           "summary_text",
           "created_at"
         ],
-        "title": "MemoryItem",
+        "title": "MemorySummaryItem",
         "type": "object"
       },
       "MemorySummaryResponse": {
-        "description": "`GET /api/v1/players/me/memory-summary`（#37）。\n\n🔒 只含該玩家自己的記憶（CONTEXT.md「玩家記憶僅屬單一玩家」）。\n世界記憶不含任何玩家輸入，兩者不得混用。\n\nB8 nightly batch（#40）未上線前，這裡回的是既有的 `dialogue_summary`\n來源記錄——那是**預期行為，不是缺陷**。",
+        "description": "依 `spirit_id` 分組（issue #37 AC2）。",
         "properties": {
-          "groups": {
-            "items": {
-              "$ref": "#/components/schemas/MemoryGroup"
+          "memories_by_spirit": {
+            "additionalProperties": {
+              "items": {
+                "$ref": "#/components/schemas/MemorySummaryItem"
+              },
+              "type": "array"
             },
-            "title": "Groups",
-            "type": "array"
+            "title": "Memories By Spirit",
+            "type": "object"
           }
         },
+        "required": [
+          "memories_by_spirit"
+        ],
         "title": "MemorySummaryResponse",
+        "type": "object"
+      },
+      "OrientationInfo": {
+        "description": "SDD v2.1 §10.2：3DoF 定向用的靈魂方位設定（issue #30）。\n\n`bearing_deg`：相對召喚點的方位角，真北 0°、順時針。`height_offset_m`：\n垂直偏移。兩者包成巢狀物件（不是攤平兩個欄位），對齊 SDD 的回應範例，\n也讓客戶端能把「方位設定」整包傳給 `OrientationService`。",
+        "properties": {
+          "bearing_deg": {
+            "title": "Bearing Deg",
+            "type": "number"
+          },
+          "height_offset_m": {
+            "title": "Height Offset M",
+            "type": "number"
+          }
+        },
+        "required": [
+          "bearing_deg",
+          "height_offset_m"
+        ],
+        "title": "OrientationInfo",
         "type": "object"
       },
       "PlayerCreateRequest": {
@@ -281,7 +229,6 @@
         "type": "object"
       },
       "ProfileResonanceItem": {
-        "description": "Profile 裡的單一靈魂共鳴。\n\n刻意**沒有** `next_threshold`：Profile 是總覽，要看下一個門檻就去\n`GET /resonance/{spiritId}`。多回一個欄位不痛，但它會變成第二個必須跟\n單一查詢保持一致的地方。",
         "properties": {
           "resonance_value": {
             "title": "Resonance Value",
@@ -305,7 +252,7 @@
         "type": "object"
       },
       "ProfileResponse": {
-        "description": "`GET /api/v1/profile`（SDD v1 §8.10）。\n\n⚠️ v2.1 §10.3 的端點清單**漏列了這支**，已確認為漏列而非移除。\n\n兩個陣列的長度**不必相同**：一個靈魂可以有共鳴值但沒有任務進度（例如只\n收藏過紀念照片）。",
+        "description": "`GET /profile`（issue #36，v2.1 §10.3 漏列，補回；SDD v1 §8.10）。\n\n純身體自己的表直查，不呼叫腦袋——`quests`／`resonance` 兩個陣列長度不必\n相同（玩家可能對某靈魂有共鳴但沒有任務進度列，反之亦然）。",
         "properties": {
           "quests": {
             "items": {
@@ -322,41 +269,15 @@
             "type": "array"
           }
         },
+        "required": [
+          "quests",
+          "resonance"
+        ],
         "title": "ProfileResponse",
         "type": "object"
       },
-      "PushRegisterRequest": {
-        "description": "`POST /api/v1/push/register`（S11／#39）。\n\n只收 token。**不收位置、不收裝置型號**——推播是通知不是內容，這條路徑不\n需要知道玩家在哪裡或用什麼手機。",
-        "properties": {
-          "push_token": {
-            "maxLength": 256,
-            "minLength": 1,
-            "title": "Push Token",
-            "type": "string"
-          }
-        },
-        "required": [
-          "push_token"
-        ],
-        "title": "PushRegisterRequest",
-        "type": "object"
-      },
-      "PushSubscriptionResponse": {
-        "description": "訂閱狀態。\n\n刻意**不回傳 `push_token`**：客戶端本來就知道自己送了什麼，回傳它只是讓\n這個值多存在於一個地方（log、快取、錯誤回報）。",
-        "properties": {
-          "is_subscribed": {
-            "title": "Is Subscribed",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "is_subscribed"
-        ],
-        "title": "PushSubscriptionResponse",
-        "type": "object"
-      },
       "QuestCompleteRequest": {
-        "description": "`POST /api/v1/quests/{questId}/complete` 的請求。\n\n`completion_evidence` 目前**不參與判定**——SDD 尚未定義它的結構。仍然收下來，\n是因為之後加規則時 API 形狀不該跟著變（那會是破壞性變更，見 §11.2.1）。",
+        "description": "`POST /quests/{questId}/complete`（issue #34）。\n\n`completion_evidence` 刻意是不驗證內容的 dict：後端確定性規則判定完成\n與否是由呼叫端（客戶端的可驗證微任務邏輯）自己保證的前提，這裡不重新\n驗一次任務內容——CONTEXT.md「可驗證微任務」的定義是「以後端確定性規則\n驗證完成與否」，而完成條件本身屬於任務設計，不是這支端點的職責。",
         "properties": {
           "completion_evidence": {
             "title": "Completion Evidence",
@@ -367,15 +288,8 @@
         "type": "object"
       },
       "QuestCompleteResponse": {
-        "description": "SDD §7.5 的完成回應。\n\n## 為什麼有 `unlock_story` **和** `unlock_stories`\n\n§7.5 定義的是**單數** `unlock_story`，但 `newly_unlocked_stages` 是 list\n——一次入帳理論上可能跨過多個門檻（#16 刻意的設計）。單數欄位表達不了那件事。\n\n所以兩個都有，各有明確職責：\n\n- `unlock_story`：**第一個**新解鎖的階段，維持 §7.5 的形狀與客戶端相容。\n- `unlock_stories`：**完整清單**，這是真相。\n\nMVP 的 +10／+20 跨不過兩個門檻，所以清單目前最多一個元素，兩者實質相同。\n但呼叫端不該假設這件事——每個新解鎖的 stage 都該有自己的一段敘事，漏掉中間\n那段是靜默的內容缺漏，不會有任何錯誤訊息提醒。\n\n`stage` 與 `newly_unlocked_stages` 不在 §7.5 的範例 body 裡，是 #34 的 AC\n要求「跨門檻時回應標示新達成 stage」才補上的。",
+        "description": "issue #34（前半：確定性規則判定完成 ＋ 共鳴入帳）／#43（後半：接上敘事\n包裝與解鎖故事）。\n\n`unlock_stories` 是 **list**，不是單一 `unlock_story | null`——issue #34\n的原始回應範例只想到「跨一個門檻」的情況，但 #43 AC3 明訂一次入帳跨過\n多個門檻時每個 stage 都要各有一段故事（`resonance.ResonanceResult\n.newly_unlocked_stages` 本身也是 list，同一個理由：只取最後一個會讓\n中間那段靜默消失）。空 list 就是「沒跨門檻」，不需要另外一個\n`newly_unlocked_stages` 欄位重複同一件事——每個 `UnlockStory.stage`\n已經帶著這個資訊。",
         "properties": {
-          "newly_unlocked_stages": {
-            "items": {
-              "type": "integer"
-            },
-            "title": "Newly Unlocked Stages",
-            "type": "array"
-          },
           "quest_wrapper_text": {
             "anyOf": [
               {
@@ -391,37 +305,22 @@
             "title": "Resonance Value",
             "type": "integer"
           },
-          "stage": {
-            "title": "Stage",
-            "type": "integer"
-          },
           "unlock_stories": {
             "items": {
-              "$ref": "#/components/schemas/UnlockStoryResponse"
+              "$ref": "#/components/schemas/UnlockStory"
             },
             "title": "Unlock Stories",
             "type": "array"
-          },
-          "unlock_story": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/UnlockStoryResponse"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "required": [
-          "resonance_value",
-          "stage"
+          "resonance_value"
         ],
         "title": "QuestCompleteResponse",
         "type": "object"
       },
       "QuestListItem": {
-        "description": "`GET /api/v1/quests/daily` 的單一任務（SDD v1 §8.7）。\n\n`spirit_id` **不在 `quest_progress` 表裡**，是從 `quest_id` 的命名慣例\n反推的（見 `queries.quest_view`）。客戶端仍然需要它才知道這個任務屬於哪個\n地標，所以它是對外契約的一部分。",
+        "description": "`GET /quests/daily` 的單筆任務（issue #33 SDD v1 §8.7）。\n\n`spirit_id` 不是資料庫欄位，是從 `quest_id` 反推的（見\n`quests.spirit_id_for_quest`）——`quest_progress` 表本身沒有這一欄。",
         "properties": {
           "attempts_today": {
             "title": "Attempts Today",
@@ -454,8 +353,24 @@
         "title": "QuestListItem",
         "type": "object"
       },
+      "QuestListResponse": {
+        "properties": {
+          "quests": {
+            "items": {
+              "$ref": "#/components/schemas/QuestListItem"
+            },
+            "title": "Quests",
+            "type": "array"
+          }
+        },
+        "required": [
+          "quests"
+        ],
+        "title": "QuestListResponse",
+        "type": "object"
+      },
       "QuestStateResponse": {
-        "description": "SDD 第8.4節的 `quest` 欄位。\n\n`status` 是 `QuestStatus` 而非裸 `str`，讓客戶端能生出真正的 C# enum，\n任務狀態比對由編譯器把關，不用比對魔術字串。",
+        "description": "SDD 第8.4節的 `quest` 欄位。\n\n`status` 是 `Literal`（issue #30）而不是裸 `str`——OpenAPI 因此產出真正\n的 `enum`，Unity 端才有 enum 可解析（SDD v2.1 §11.2.1 硬規則5）。三個值\n的語意分界不變：`in_progress`／`completed` 是資料庫狀態，\n`daily_limit_reached` **只存在於 API 回應**，是查詢當下依 `attempts_date`\n算出來的結果（見 `quests.effective_state`），不落地。",
         "properties": {
           "attempts_today": {
             "title": "Attempts Today",
@@ -483,22 +398,8 @@
         "title": "QuestStateResponse",
         "type": "object"
       },
-      "QuestsDailyResponse": {
-        "description": "沒有任何任務時 `quests` 是空陣列，不是 404——冷啟動是正常狀態。",
-        "properties": {
-          "quests": {
-            "items": {
-              "$ref": "#/components/schemas/QuestListItem"
-            },
-            "title": "Quests",
-            "type": "array"
-          }
-        },
-        "title": "QuestsDailyResponse",
-        "type": "object"
-      },
-      "ResonanceProgressResponse": {
-        "description": "`GET /api/v1/resonance/{spiritId}` 的回應（SDD v1 §8.9）。\n\n`stage` 與 `next_threshold` 一律由 `resonance_value` 重算。\n已滿階時 `next_threshold` 為 null。",
+      "ResonanceQueryResponse": {
+        "description": "`GET /resonance/{spiritId}`（issue #35 SDD v1 §8.9）。",
         "properties": {
           "next_threshold": {
             "anyOf": [
@@ -527,9 +428,10 @@
         "required": [
           "spirit_id",
           "resonance_value",
-          "stage"
+          "stage",
+          "next_threshold"
         ],
-        "title": "ResonanceProgressResponse",
+        "title": "ResonanceQueryResponse",
         "type": "object"
       },
       "SenseRequest": {
@@ -580,25 +482,6 @@
         "title": "SenseResponse",
         "type": "object"
       },
-      "SpiritOrientation": {
-        "description": "靈魂方位設定（SDD v2.1 §10.2），供客戶端 S14 的 3DoF 定向服務使用。\n\n做成巢狀物件而不是兩個平鋪欄位，是為了對齊 SDD v2.1 §10.2 的回應範例，\n也讓客戶端能把「方位設定」當成一個可整包傳給 `OrientationService` 的值，\n而不是每次都得手動把兩個散落的欄位湊起來。",
-        "properties": {
-          "bearing_deg": {
-            "title": "Bearing Deg",
-            "type": "number"
-          },
-          "height_offset_m": {
-            "title": "Height Offset M",
-            "type": "number"
-          }
-        },
-        "required": [
-          "bearing_deg",
-          "height_offset_m"
-        ],
-        "title": "SpiritOrientation",
-        "type": "object"
-      },
       "SpiritResponse": {
         "description": "`GET /api/v1/spirits/{placeId}` 的回應。\n\n**欄位名是對外契約，跟資料庫欄位名脫鉤。** 0002 把 DB 欄位改成\n`spirit_id` / `display_name` / `*_radius_meters` 之後，這裡靠\n`validation_alias` 從 ORM 物件讀新名字，但輸出仍是舊的 JSON key——\nUnity client 的 `SpiritDto` 用 `[JsonProperty(\"place_id\")]` 寫死了那些\n名字，改動等於要發一版客戶端。\n\n改 DB 欄位名不需要動客戶端，這正是兩者脫鉤的用途；反過來說，**要改這裡的\n欄位名時，必須連同 client 一起改**。",
         "properties": {
@@ -619,7 +502,7 @@
             "type": "string"
           },
           "orientation": {
-            "$ref": "#/components/schemas/SpiritOrientation"
+            "$ref": "#/components/schemas/OrientationInfo"
           },
           "place_id": {
             "title": "Place Id",
@@ -722,7 +605,7 @@
         "type": "object"
       },
       "TTSResult": {
-        "description": "語音合成結果（SDD v2.1 §10.1）。欄位恰為 audio_url。",
+        "description": "v2.1 §10.1：`DialogueResponse.tts` 的形狀，**只有** `audio_url`。用\npydantic model（不是 dataclass）是因為它會直接嵌進 API response 序列化\n出去，跟其他 response model 用同一種宣告方式。\n\n不含任何 viseme／phoneme 欄位是刻意的契約——見模組開頭說明；#30 的契約\n快照會固定住這個形狀，之後想加欄位要走那邊的流程，不是在這裡隨手加。",
         "properties": {
           "audio_url": {
             "title": "Audio Url",
@@ -735,8 +618,7 @@
         "title": "TTSResult",
         "type": "object"
       },
-      "UnlockStoryResponse": {
-        "description": "一段解鎖敘事（SDD §7.5 的 `unlock_story` 物件）。",
+      "UnlockStory": {
         "properties": {
           "stage": {
             "title": "Stage",
@@ -751,7 +633,7 @@
           "stage",
           "story_text"
         ],
-        "title": "UnlockStoryResponse",
+        "title": "UnlockStory",
         "type": "object"
       },
       "ValidationError": {
@@ -803,7 +685,7 @@
   "paths": {
     "/api/v1/assets/{avatar_id}": {
       "get": {
-        "description": "F7．Addressables catalog 與版本查詢（#38）。\n\n**無需驗證**——資產位置不是玩家資料。\n\n`version` 直接回傳資料表裡明確寫入的值，**不從 `updated_at` 或內容 hash\n算**：那樣的話一次無關的資料列更新就會讓所有客戶端重抓整包。\n\n開發期指向本機或測試 bucket 只需要改資料，不用改程式碼也不用等 CDN 佈建好\n——那正是把它放進資料表的理由。",
+        "description": "Unity Addressables catalog／bundle 版本查詢（issue #38，v2.1 §7.4）。\n\n不需要任何憑證——這是靜態資產的版本資訊，不是玩家資料。`bundle_url` 指向\n哪裡（本機路徑、測試 bucket、正式 CDN）完全由 `avatar_assets` 資料列本身\n決定，這支端點不關心也不驗證那個 URL 是不是真的可用（issue #38 AC4：\n開發期不該被基礎建設進度卡住）。",
         "operationId": "get_avatar_asset_api_v1_assets__avatar_id__get",
         "parameters": [
           {
@@ -835,7 +717,7 @@
                 }
               }
             },
-            "description": "avatar 不存在"
+            "description": "資源不存在或已下架"
           },
           "422": {
             "content": {
@@ -898,7 +780,7 @@
     },
     "/api/v1/players/me/memory-summary": {
       "get": {
-        "description": "記憶摘要查詢（#37）。\n\n🔒 **只回傳該玩家自己的記憶**（CONTEXT.md「玩家記憶僅屬單一玩家」）。\n過濾條件是 `player_id` 而不是 `spirit_id`——同一個靈魂底下有很多玩家的記憶。\n\n回應**不含 embedding 向量**：那是內部實作，對玩家沒有意義，而且 768 維\n浮點數會讓回應暴增數十 KB。\n\nB8 nightly batch（#40）未上線前，這裡回的是既有的 `dialogue_summary`\n來源記錄——**預期行為，不是缺陷**。",
+        "description": "B6．玩家記憶摘要查詢（issue #37）。\n\n只讀取，不生成——摘要生成是 B8 nightly batch（#40）的職責，本端點在\n#40 上線前只會看到既有的 `dialogue_summary` 來源記錄，這是預期行為。\n\n隱私邊界（CONTEXT.md「玩家記憶僅屬單一玩家」）：`filter_by(player_id=...)`\n是唯一的過濾條件，拿掉它會讓別的玩家對同一靈魂的記憶洩漏出來——這正是\nissue #37 AC3 特別設計成「Q 的記錄比 P 多」來確保測得到的情況。",
         "operationId": "get_memory_summary_api_v1_players_me_memory_summary_get",
         "responses": {
           "200": {
@@ -919,7 +801,7 @@
                 }
               }
             },
-            "description": "Session token 無效或未提供"
+            "description": "缺少或無效的憑證"
           }
         },
         "security": [
@@ -935,7 +817,7 @@
     },
     "/api/v1/profile": {
       "get": {
-        "description": "S8．玩家彙總查詢（#36）。\n\nProfile 畫面一次拿齊資料，避免前端發多次請求。**純身體自己的表直查，\n不呼叫腦袋。**\n\n🔒 `stage` 與 `GET /resonance/{spiritId}` 走**同一支** `stage_for_value()`\n（見 `queries.py` 的模組註解）。各自重算的話，哪天有人改了門檻規則卻只改到\n一邊，玩家會在兩個畫面看到不同的階段，而且不會有任何錯誤。",
+        "description": "玩家個人頁彙總（issue #36，v2.1 §10.3 漏列補回；SDD v1 §8.10）。\n\n純身體自己的表直查，不呼叫腦袋。`stage` 用跟 `get_resonance` 完全同一支\n`stage_for_value`——兩支端點不得各自重算門檻邏輯，那會製造「同一個玩家\n在 Profile 頁跟共鳴頁看到不同 stage」這種只能靠巧合才不會發生的 bug。",
         "operationId": "get_profile_api_v1_profile_get",
         "responses": {
           "200": {
@@ -956,7 +838,7 @@
                 }
               }
             },
-            "description": "Session token 無效或未提供"
+            "description": "缺少或無效的憑證"
           }
         },
         "security": [
@@ -970,110 +852,16 @@
         ]
       }
     },
-    "/api/v1/push/register": {
-      "post": {
-        "description": "S11．註冊或更新推播 token（#39）。\n\n**重複註冊是更新，不是新增列**——主鍵是 `player_id`，換手機或 token 輪替時\n舊的直接被覆蓋。累積失效 token 的話，群發時得自己挑「最新的那個」，而那個\n判斷遲早會出錯然後把推播送到別人的舊裝置上。\n\n重新註冊視為重新訂閱：玩家會這樣做通常就是因為想再收到通知。",
-        "operationId": "register_push_api_v1_push_register_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PushRegisterRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PushSubscriptionResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Session token 無效或未提供"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Register Push",
-        "tags": [
-          "body"
-        ]
-      }
-    },
-    "/api/v1/push/unsubscribe": {
-      "post": {
-        "description": "S11．退訂（#39）。\n\n用 `is_subscribed=false` 而不是刪列：token 還有用，重新訂閱時不需要重新\n註冊裝置。\n\n沒註冊過的玩家也回 200——「我不想收推播」對一個從沒註冊過的人來說已經成立，\n回 404 只會讓客戶端要為一個不是問題的狀況寫處理分支。",
-        "operationId": "unsubscribe_push_api_v1_push_unsubscribe_post",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PushSubscriptionResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Session token 無效或未提供"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Unsubscribe Push",
-        "tags": [
-          "body"
-        ]
-      }
-    },
     "/api/v1/quests/daily": {
       "get": {
-        "description": "S8．任務列表查詢（#33）。\n\n⚠️ **唯讀，不推進狀態機。** 跨日的 `attempts_today` 歸零是**算出來的**，\n不寫回資料庫——查詢端點如果順手做了狀態轉移，玩家只要打開任務列表就等於\n推進了一次任務，那是很難追查的副作用。真正的歸零由下一次 `/summon` 寫入。\n\n`daily_limit_reached` 同理：它取決於「今天」是哪一天，存進資料庫隔天就是\n錯的，所以只存在於回應。",
-        "operationId": "get_daily_quests_api_v1_quests_daily_get",
+        "description": "S4．玩家任務列表查詢（issue #33，SDD v1 §8.7）。\n\n只查詢，不寫入——`daily_limit_reached` 與跨日後的 `attempts_today=0` 都是\n查詢當下用 `quests.effective_state` 重算出來的，資料庫裡的 `status` 可能\n仍是 `in_progress`（那是對的，見該函式的說明）。",
+        "operationId": "list_daily_quests_api_v1_quests_daily_get",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/QuestsDailyResponse"
+                  "$ref": "#/components/schemas/QuestListResponse"
                 }
               }
             },
@@ -1087,7 +875,7 @@
                 }
               }
             },
-            "description": "Session token 無效或未提供"
+            "description": "缺少或無效的憑證"
           }
         },
         "security": [
@@ -1095,7 +883,7 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Get Daily Quests",
+        "summary": "List Daily Quests",
         "tags": [
           "body"
         ]
@@ -1103,8 +891,8 @@
     },
     "/api/v1/quests/{quest_id}/complete": {
       "post": {
-        "description": "S4＋S5．任務完成、共鳴入帳與解鎖敘事（SDD §7.5，#34 ＋ #43）。\n\n    確定性規則判定 → quest_progress.status = 'completed'\n      → resonance += 20 → 門檻判定\n      → 回傳（unlock_story 與 quest_wrapper_text 皆為 null）\n\n## 不呼叫腦袋，一次都不\n\nCONTEXT.md 明訂「可驗證微任務由**後端確定性規則**判定，不由 LLM 判定」。\n這支端點因此完全不 import 任何腦袋模組——判定只看資料庫裡的狀態。\n\n## 呼叫順序硬規則（v2.1 §6.4）\n\n身體必須「先寫完自己的表、再呼叫腦袋」，不可顛倒。本票只做前半，正好\n符合此順序；#43 接上敘事生成時，那一段要加在所有寫入**之後**。\n\n## 只收 Encounter Token\n\nSDD §6：持 Sense Token 者**不可**呼叫這支端點。感應憑證代表「你在 150m\n內」，而任務完成需要「你真的到了現場」。兩者用不同金鑰簽章，所以把\nsense token 塞進 `X-Encounter-Token` 會在驗章就失敗——這不是靠我們記得\n檢查 purpose，是兩套憑證本來就換不過來。",
-        "operationId": "complete_quest_endpoint_api_v1_quests__quest_id__complete_post",
+        "description": "S4／S5／B11／B2．任務完成，含敘事包裝（issue #34 前半 ＋ #43 後半，\nSDD §7.5）。\n\n```\n驗完成（後端確定性規則，不是 LLM）→ 寫 quest_progress → 共鳴入帳\n  → 若跨過門檻：B11 generate_unlock_story（可能多次，見下方）\n  → B2 generate_quest_wrapper\n```\n\n只接受 Encounter Token（**不接受 Sense**，SDD 第6節）：完成任務需要「真的\n在場」，感應範圍不夠格。刻意不比照 dialogue 端點呼叫\n`_require_presence_token`——那支函式會接受 Sense 當替代，這裡不行，用\n共用邏輯反而會不小心放寬這條規則。\n\n`payload.completion_evidence` 不驗證內容：完成條件由前端的可驗證微任務\n邏輯保證，這支端點只負責記帳，不重新判定任務有沒有完成。\n\n**v2.1 §6.4 硬規則**：身體先寫完自己的表、再呼叫腦袋——`quest_progress`\n與 `resonance` 的寫入（含 commit）全部發生在下面任何一次 `gemini_client`\n呼叫之前。順序顛倒的話，腦袋看到的 stage 可能跟資料庫最終落地的值不\n一致（issue #43 AC：資料庫寫入一定發生在腦袋呼叫之前）。\n\n敘事生成（`generate_unlock_story`／`generate_quest_wrapper`）包在\n`try/except` 裡：任務已經完成、共鳴已經入帳，這兩個呼叫只是「把結果講\n成故事」，講失敗了不能讓玩家的進度消失（issue #43）。`GeminiClient`\n本身的契約是「呼叫失敗也不拋例外」，但這裡仍然多包一層——敘事生成的\n測試需要能注入「真的會拋例外」的 fake 來驗證這個防線本身有效，不能\n只靠信任下游永遠遵守契約。",
+        "operationId": "complete_quest_api_v1_quests__quest_id__complete_post",
         "parameters": [
           {
             "in": "path",
@@ -1161,7 +949,7 @@
                 }
               }
             },
-            "description": "Session token 無效或未提供"
+            "description": "缺少或無效的憑證"
           },
           "403": {
             "content": {
@@ -1171,7 +959,7 @@
                 }
               }
             },
-            "description": "Encounter token 屬於別的靈魂，或兩張憑證不屬於同一個玩家"
+            "description": "憑證有效，但不適用於這個資源"
           },
           "404": {
             "content": {
@@ -1181,7 +969,7 @@
                 }
               }
             },
-            "description": "任務不存在，或玩家還沒有這筆進度"
+            "description": "資源不存在或已下架"
           },
           "422": {
             "content": {
@@ -1199,121 +987,7 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Complete Quest Endpoint",
-        "tags": [
-          "body"
-        ]
-      }
-    },
-    "/api/v1/quests/{quest_id}/landmark-photo": {
-      "post": {
-        "description": "S12．紀念照片（後端側，#44）。\n\n    Session ＋ Encounter → 辨識配額（#32）→ 讀進記憶體 → B13（#22）\n      → 立即捨棄影像 → 相遇收藏入帳\n\n## 隱私是核心約束（SDD §7.7）\n\n照片**只在記憶體處理，辨識完立即捨棄**：不寫檔、不上傳 Cloud Storage、\n不留作訓練資料，`encounter_collections` 也不存原始照片、GPS 座標或影像雜湊。\n\n`image_bytes` 是區域變數，函式結束就沒了。這裡刻意**不**把它存進任何\n地方——連「最近一次辨識失敗的照片」都不留（見 `brain/landmark_recognition.py`\n的模組註解）。\n\n## 只收 Encounter Token\n\nSDD §6：持 Sense Token 者不可觸發相機疊圖相關動作。感應憑證代表「你在 150m\n內」，拍紀念照需要「你真的到了現場」。\n\n## 辨識失敗不是錯誤\n\n回 `landmark_recognized: false`，任務仍可完成——玩家只是拿不到特別徽章\n（CONTEXT.md）。",
-        "operationId": "landmark_photo_api_v1_quests__quest_id__landmark_photo_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "quest_id",
-            "required": true,
-            "schema": {
-              "title": "Quest Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Encounter-Token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Encounter-Token"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "multipart/form-data": {
-              "schema": {
-                "$ref": "#/components/schemas/Body_landmark_photo_api_v1_quests__quest_id__landmark_photo_post"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LandmarkPhotoResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Session token 無效或未提供"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Encounter token 屬於別的靈魂，或兩張憑證不屬於同一個玩家"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "任務或地標不存在"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          },
-          "429": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "今日地標辨識配額已用完"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Landmark Photo",
+        "summary": "Complete Quest",
         "tags": [
           "body"
         ]
@@ -1321,7 +995,7 @@
     },
     "/api/v1/resonance/{spirit_id}": {
       "get": {
-        "description": "S8．共鳴進度查詢（#35）。\n\n「還沒開始」回 0 而不是 404——前端要能直接畫一條 0/10 的進度條。\n地標不存在或已下架才是 404。",
+        "description": "S5．單一靈魂共鳴進度查詢（issue #35，SDD v1 §8.9）。\n\n`stage`／`next_threshold` 一律由 `resonance_value` 重算（`resonance.stage_for_value`\n／`next_threshold`），不信任任何快取欄位——`resonance_value` 才是事實來源\n（見 `models.Resonance` 的說明）。",
         "operationId": "get_resonance_api_v1_resonance__spirit_id__get",
         "parameters": [
           {
@@ -1339,7 +1013,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ResonanceProgressResponse"
+                  "$ref": "#/components/schemas/ResonanceQueryResponse"
                 }
               }
             },
@@ -1353,7 +1027,7 @@
                 }
               }
             },
-            "description": "Session token 無效或未提供"
+            "description": "缺少或無效的憑證"
           },
           "404": {
             "content": {
@@ -1363,7 +1037,7 @@
                 }
               }
             },
-            "description": "靈魂不存在，或已下架（is_active=false）"
+            "description": "資源不存在或已下架"
           },
           "422": {
             "content": {
@@ -1420,7 +1094,7 @@
                 }
               }
             },
-            "description": "Session token 無效或未提供"
+            "description": "缺少或無效的憑證"
           },
           "403": {
             "content": {
@@ -1430,7 +1104,7 @@
                 }
               }
             },
-            "description": "不在感應範圍內"
+            "description": "憑證有效，但不適用於這個資源"
           },
           "404": {
             "content": {
@@ -1440,7 +1114,7 @@
                 }
               }
             },
-            "description": "靈魂不存在，或已下架（is_active=false）"
+            "description": "資源不存在或已下架"
           },
           "422": {
             "content": {
@@ -1466,7 +1140,7 @@
     },
     "/api/v1/spirits/{place_id}": {
       "get": {
-        "description": "對應對外 API 清單：GET /api/v1/spirits/{placeId}。\n\n回應含 `orientation`（SDD v2.1 §10.2）：客戶端 S14 的 3DoF 定向服務靠它\n決定把角色固定在哪個方位，少了它城市靈魂只能永遠黏在螢幕正中央。",
+        "description": "對應對外 API 清單：GET /api/v1/spirits/{placeId}（Sprint1 先只回基本資料）。\n\n`is_active=false` 也回 404（issue #30 補上，寫專屬測試檔時發現這裡漏了\n這個檢查）——對齊 `/sense`／`/summon`／`/resonance/{spiritId}` 一致的\n處理原則：下架的靈魂對玩家來說就是不存在，不該讓這支端點單獨露出一個\n已下架靈魂的基本資料。",
         "operationId": "get_spirit_api_v1_spirits__place_id__get",
         "parameters": [
           {
@@ -1498,7 +1172,7 @@
                 }
               }
             },
-            "description": "靈魂不存在，或已下架（is_active=false）"
+            "description": "資源不存在或已下架"
           },
           "422": {
             "content": {
@@ -1519,8 +1193,8 @@
     },
     "/api/v1/spirits/{place_id}/daily-event": {
       "get": {
-        "description": "S10．當日情境查詢（#26）。\n\n**無需驗證**——這是公開的世界狀態，不含任何玩家資料。\n\n## 永遠不回空畫面\n\n    今天的快取 → 沒有就回最近一次的（通常是昨天）→ 再沒有就回人工預寫保底\n\n排程延遲、排程失敗、新地標剛上線都會讓今天的快取不存在，而它們全都是會發生\n的事。玩家不該因為我們的排程打嗝而看到空白。\n\n⚠️ 注意跟 404 的分界：**地標不存在 → 404**；**地標存在但沒內容 → 200 ＋\n保底**。前者是玩家問錯了東西，後者是我們還沒準備好。",
-        "operationId": "get_daily_event_endpoint_api_v1_spirits__place_id__daily_event_get",
+        "description": "S10．當日情境查詢（issue #26）。**公開世界狀態，不需要任何 token**。\n\n保底鏈：今天的快取 → 昨天的快取 → 人工預寫保底文字，**永遠回 200**，\n不回 404 空畫面——排程延遲或失敗時玩家不該看到空白（issue #26 AC，\n硬要求）。`placeId` 本身不存在才是 404：那是「問了一個不存在的地標」，\n跟「地標存在但今天還沒有內容」是兩種不同的情況。",
+        "operationId": "get_daily_event_api_v1_spirits__place_id__daily_event_get",
         "parameters": [
           {
             "in": "path",
@@ -1551,7 +1225,7 @@
                 }
               }
             },
-            "description": "靈魂不存在，或已下架（is_active=false）"
+            "description": "資源不存在或已下架"
           },
           "422": {
             "content": {
@@ -1564,7 +1238,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Get Daily Event Endpoint",
+        "summary": "Get Daily Event",
         "tags": [
           "body"
         ]
@@ -1572,7 +1246,7 @@
     },
     "/api/v1/spirits/{place_id}/dialogue": {
       "post": {
-        "description": "對話端點（**Phase 2 可用版**，#42）。\n\n    Session ＋（Encounter 或 Sense）\n      → 配額（#32）\n      → B12 招呼比對（命中就直接回，不呼叫 Gemini）\n      → B2 組裝（#12）→ B1 生成（#8）→ B10 語音（#21）\n      → B7 短期記憶寫入\n\n**B4 安全邊界不在這條路徑上**——那是 Phase 3（#45）。目前 Prompt 用 B2 的\n最小可用組裝（沒有 embedding，所以沒有長期記憶；沒有當日情境）。\n\n## 順序不是隨意的\n\n配額是**第一道關卡**（SDD v1 §3）。它排在最前面的理由跟 B4 排在 B2 之前\n一樣：被擋下的請求不該讓下游付出任何成本。B12 排在生成之前，是因為命中\n預寫台詞時完全不需要模型——那是 B12 的全部價值（零成本、零延遲）。\n\n## 三種 token 的驗證邏輯不共用（SDD 第6節）\n\nSession ＋ Encounter 或 Session ＋ Sense 都可以。Encounter 代表「你真的\n到了現場（50m）」，Sense 代表「你在感應範圍內（150m），可以隔空聊天」。\n兩者換到的對話能力相同，差別在別的端點。",
+        "description": "對話端點（issue #45 完整版）。\n\n```\n驗證 Session Token ＋（Encounter 或 Sense Token）\n  → 配額檢查（#32）\n  → B12 固定招呼比對 → 命中直接回預寫台詞，不呼叫 B4／B2／B1\n  → 未命中 → B4 安全邊界（#11）→ 不安全就婉拒，不繼續往下\n                          → 安全 → B2 Prompt 組裝（#12）→ B1 Gemini（#8）\n  → B10 TTS（#21）\n  → B7 短期記憶寫入\n```\n\n`user_input` 空白或超長由 `DialogueRequest` 的 pydantic 驗證在進到這支\n函式之前就擋下（422），配額因此不會被消耗——格式錯誤不該扣玩家額度。",
         "operationId": "dialogue_api_v1_spirits__place_id__dialogue_post",
         "parameters": [
           {
@@ -1646,7 +1320,7 @@
                 }
               }
             },
-            "description": "Session token 無效或未提供"
+            "description": "缺少或無效的憑證"
           },
           "403": {
             "content": {
@@ -1656,7 +1330,7 @@
                 }
               }
             },
-            "description": "憑證屬於別的靈魂，或兩張憑證不屬於同一個玩家"
+            "description": "憑證有效，但不適用於這個資源"
           },
           "404": {
             "content": {
@@ -1666,7 +1340,7 @@
                 }
               }
             },
-            "description": "靈魂不存在，或已下架（is_active=false）"
+            "description": "資源不存在或已下架"
           },
           "422": {
             "content": {
@@ -1686,7 +1360,7 @@
                 }
               }
             },
-            "description": "今日對話配額已用完"
+            "description": "配額已用滿"
           }
         },
         "security": [
@@ -1733,7 +1407,7 @@
                 }
               }
             },
-            "description": "Session token 無效或未提供"
+            "description": "缺少或無效的憑證"
           },
           "403": {
             "content": {
@@ -1743,7 +1417,7 @@
                 }
               }
             },
-            "description": "不在召喚半徑內"
+            "description": "憑證有效，但不適用於這個資源"
           },
           "404": {
             "content": {
@@ -1753,7 +1427,7 @@
                 }
               }
             },
-            "description": "靈魂不存在，或已下架（is_active=false）"
+            "description": "資源不存在或已下架"
           },
           "422": {
             "content": {

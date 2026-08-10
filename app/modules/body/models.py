@@ -122,6 +122,15 @@ class Spirit(Base):
     summon_radius_meters = Column(Integer, nullable=False, default=50)
     sense_radius_meters = Column(Integer, nullable=False, default=150, server_default="150")
     is_active = Column(Boolean, nullable=False, default=True)
+    # SDD v2.1 §10.2：3DoF 定向用的方位設定（issue #30）。真北 0°、順時針；
+    # 預設 0 表示「還沒特別設定過」，不是「這個靈魂沒有方位」——3DoF 服務
+    # 收到 0 一樣會用，只是角色會固定朝向正北，不是缺角度資料的錯誤狀態。
+    #
+    # 型別刻意用 DOUBLE PRECISION（issue #30 明訂），不是 lat/lon 那種
+    # NUMERIC——這兩個值驅動的是視覺呈現，不是像 haversine 那樣拿來做
+    # 「50m 內才算在場」的規則判斷，浮點誤差在這裡不影響任何遊戲規則。
+    bearing_deg = Column(Float, nullable=False, default=0, server_default="0")
+    height_offset_m = Column(Float, nullable=False, default=0, server_default="0")
 
     # 靈魂方位（SDD v2.1 §10.2），供客戶端 S14 的 3DoF 定向使用。
     # `bearing_deg` 是相對召喚點的方位角（真北 0°、順時針），
@@ -327,76 +336,50 @@ class EncounterCollection(Base):
     )
 
 
-class DailyEventCache(Base):
-    """
-    S10．當日情境快取（SDD §3.1／#26）。
-
-    內容由 B9 生成（#20），這張表只管「什麼時候生成的、放在哪」——生成與快取
-    刻意分屬不同模組（v2.1 §6.4）。
-
-    PK `(place_id, event_date)` 保證「一個地標一天一筆」。排程重複觸發是正常的
-    （重試、多實例、手動補跑），所以去重在資料庫層級，不靠排程自己記得。
-    """
-
-    __tablename__ = "daily_event_cache"
-
-    place_id = Column(String(64), ForeignKey("spirits.spirit_id"), primary_key=True)
-    # 台北日期。存 DATE 而不是帶時區的時間點——後者會逼每個讀取端自己再算一次
-    # 「這是台北的哪一天」，而那正是 #15 踩過的坑。
-    event_date = Column(Date, primary_key=True)
-    content = Column(JSONB, nullable=False)
-    generated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    # 給清理工作用的訊號，**不是讀取時的過濾條件**：保底策略是「今天沒有就回
-    # 昨天」，所以過期的內容仍然有用——它比空畫面好。
-    expires_at = Column(DateTime(timezone=True), nullable=True)
-
-
 class AvatarAsset(Base):
     """
-    Unity Addressables 的 remote catalog／bundle 位置與版本（#38）。
+    Unity Addressables remote catalog／bundle 的版本紀錄（issue #38，v2.1 §7.4）。
 
-    ## 版本是這張表存在的理由
+    只存「目前指到哪個版本、URL 是什麼」，不存資產本身——資產打包（F6）跟
+    上傳都是客戶端／CI 的工作，這張表只是版本比對的單一真相來源，讓 F7
+    （下載與快取）能問「我快取的這版還是最新的嗎」而不用每次啟動都重抓整包。
 
-    客戶端要能問「我快取的這版還是最新的嗎」，而不是每次啟動都重抓整包。
-    所以 `version` 必須**改了要變、沒改要穩定不變**——它是一個明確寫入的欄位，
-    刻意**不從** `updated_at` 或內容 hash 算出來：那樣的話一次無關的資料列更新
-    就會讓所有客戶端重抓。
-
-    catalog 與 bundle 分成兩個欄位，因為 Addressables 的索引與實際內容可能放在
-    不同路徑甚至不同 bucket。合成一個欄位的話，之後要分開就是破壞性變更。
+    `version` 是字串不是遞增整數：版本號的格式（時間戳、語意化版本、hash）
+    是資產產線的決定，不該被這張表的型別綁死。
     """
 
     __tablename__ = "avatar_assets"
 
     avatar_id = Column(String(64), primary_key=True)
-    catalog_url = Column(Text, nullable=False)
     bundle_url = Column(Text, nullable=False)
-    version = Column(String(64), nullable=False)
+    version = Column(String(32), nullable=False)
     updated_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
 
-class PushSubscription(Base):
+class DailyEventCache(Base):
     """
-    S11．推播訂閱（SDD v1 §3.1／#39）。
+    S10．當日情境快取（issue #26；SDD §3.1）。
 
-    主鍵是 `player_id`——換手機、token 輪替時是**覆蓋**而不是累積。用代理鍵的話，
-    一個玩家會慢慢長出十幾列失效的 token，而群發時得自己挑「最新的那個」，
-    那個判斷遲早會出錯然後推播送到別人的舊裝置上。
+    刻意跟 B9（`app.modules.brain.daily_event`，issue #20）的內容生成分開
+    ——那支模組只負責「怎麼生成」，這張表跟讀寫它的排程／端點負責「什麼時候
+    觸發、存哪裡、對外怎麼保底」（v2.1 §6.4 的腦袋／身體分工原則）。
 
-    退訂用 `is_subscribed=false` 而不是刪列：token 還有用，玩家重新訂閱時不需要
-    重新註冊裝置。
+    PK 是 `(place_id, event_date)`，不是代理鍵：同一天同一地標的內容本來
+    就該只有一列，讓資料庫的主鍵約束直接擋住重複，排程重複觸發時「先寫、
+    撞到主鍵衝突就當作已經生成過」（同 #16 共鳴事件帳本的做法），不用先查
+    再判斷。
 
-    ⚠️ **沒有任何位置欄位。** 推播是通知不是內容——玩家點進來後才呼叫既有端點
-    取內容，所以這張表不需要知道他在哪裡。
+    `content` 是 JSONB 而不是單一 `narrative_text` 欄位：B9 的
+    `DailyEventContent` 之後如果加欄位（例如情境相關的視覺提示），這張表
+    不需要跟著改 schema。
     """
 
-    __tablename__ = "push_subscriptions"
+    __tablename__ = "daily_event_cache"
 
-    player_id = Column(UUID(as_uuid=True), ForeignKey("players.player_id"), primary_key=True)
-    push_token = Column(String(256), nullable=False)
-    is_subscribed = Column(Boolean, nullable=False, server_default="true", default=True)
-    updated_at = Column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
-    )
+    place_id = Column(String(64), ForeignKey("spirits.spirit_id"), primary_key=True)
+    event_date = Column(Date, primary_key=True)
+    content = Column(JSONB, nullable=False)
+    generated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=False)

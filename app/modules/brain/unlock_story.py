@@ -1,154 +1,88 @@
 """
 B11．共鳴值解鎖敘事生成（issue #25）。
 
-共鳴值跨過 10／40／100 任一門檻時，由**身體**呼叫這裡生成該階段的解鎖短故事。
+當玩家與某個城市靈魂的共鳴值跨過 10／40／100 任一門檻時，由身體（S5
+`resonance.py`）呼叫這支模組，生成該階段的解鎖短故事。
 
-## 呼叫順序是硬規則（v2.1 §6.4）
+## 呼叫順序硬規則（v2.1 §6.4）：先寫資料庫，再呼叫腦袋
 
-身體必須「**先寫完自己的 `resonance` 表、再呼叫腦袋**」，不可顛倒——否則腦袋
-拿到的 `stage` 會跟資料庫不一致，玩家會看到一段講述他還沒達到的關係階段的故事。
+這支模組**不寫入任何資料表**，`stage` 完全由呼叫端（身體，已經呼叫過
+`apply_resonance` 並拿到 `newly_unlocked_stages`）決定。呼叫順序顛倒的話
+——先問腦袋「現在是第幾階」再寫資料庫——腦袋看到的 `stage` 可能跟資料庫
+最終落地的值不一致（例如同時有兩筆事件入帳）。這支函式因此故意不去查
+`resonance` 表自己算 stage，只信任呼叫端傳進來的值。
 
-這個模組因此**不碰 `resonance` 表，也不自己算 stage**：`stage` 是參數，由已經
-寫完資料庫的呼叫端傳進來。它沒有能力顛倒順序，就不會有人不小心顛倒。
+## 一次跨多個門檻時，每個 stage 都要生成
 
-## 一次跨多個門檻要生成多段
-
-`apply_resonance` 的 `newly_unlocked_stages` 是 **list**（#16 刻意的設計）。
-`generate_unlock_stories()` 對清單裡的每個 stage 各生成一段——只取最後一個會讓
-中間那段**靜默消失**，不會有任何錯誤訊息提醒。
-
-## 失敗一律回退，不阻擋任務完成
-
-`generate_unlock_story()` 永遠回傳一個 `UnlockStory`，永遠不拋例外。共鳴值已經
-入帳了，玩家的進度是真的——一次生成失敗不該讓整個任務完成流程看起來像出錯。
+`apply_resonance`（issue #16）的 `newly_unlocked_stages` 刻意回傳 list，
+就是為了「一次入帳跨過兩個門檻」這種情況（例如 5 → 55，跨過 10 與 40）。
+只取最後一個會讓中間那段故事**靜默消失**，玩家永遠不會知道自己其實跨過了
+兩個階段。`generate_unlock_stories()` 對 list 裡每個 stage 各呼叫一次，
+呼叫端不需要自己寫迴圈。
 """
 from __future__ import annotations
 
-import logging
-from dataclasses import dataclass
+from collections.abc import Sequence
 
-from app.modules.brain.gemini import FALLBACK_REPLY, GeminiClient
-from app.modules.brain.historical_boundary import get_historical_boundary_rules
+from pydantic import BaseModel
 
-logger = logging.getLogger(__name__)
+from app.modules.brain.gemini import FALLBACK_REPLY as _GEMINI_CLIENT_FALLBACK
+from app.modules.brain.gemini import GeminiClient
 
-# 🔒 文案審核狀態，與 B5／B4 同一個慣例。
-STORY_REVIEW_STATUS = "PENDING_NARRATIVE_REVIEW"
+# 三個階段的關係遞進描述（issue #25 AC：內容依 stage 不同而不同，且要能
+# 反映階段遞進）。文案本身待敘事負責人審核，這裡先用簡單但方向正確的描述，
+# 跟 B4／B5 遇到同樣情況時的做法一致。
+_STAGE_DESCRIPTIONS: dict[int, str] = {
+    1: "玩家剛建立起初步的信任，還只是個剛認識不久的訪客",
+    2: "玩家已經來過好幾次，開始願意分享比較深的心事，關係比初識更近一層",
+    3: "玩家與這個靈魂已經是走過漫長時間累積下來的知交，是三個階段裡最深的關係",
+}
+
+# 生成失敗、或 Gemini 回傳它自己的對話語境回退句時，換成的解鎖敘事專用回退
+# 文字（issue #25 AC3）。理由同 daily_event.py：對話用的回退句套進「解鎖了
+# 一段新故事」這個語境會文不對題。
+FALLBACK_STORY_TEXT = "這段緣分還在繼續累積……這次沒能捕捉到完整的故事，但下次見面，它還在那裡。"
 
 
-@dataclass(frozen=True)
-class UnlockStory:
-    """
-    一段解鎖敘事。
-
-    `is_fallback` 讓呼叫端能觀察生成成功率，但**不建議用它改變玩家看到的東西**
-    ——回退台詞本來就寫得像角色會說的話，把它標成「這是備用內容」只會讓玩家
-    感覺到系統的存在。
-    """
-
+class UnlockStory(BaseModel):
     stage: int
     story_text: str
-    is_fallback: bool = False
 
 
-# 每個階段的關係定位。三段刻意寫成**遞進**而不是同義改寫：
-#
-#   stage 1（共鳴 10）：認得你了
-#   stage 2（共鳴 40）：願意講一些不對外人說的事
-#   stage 3（共鳴 100）：把你當成這條街記憶的一部分
-#
-# 若三段講的其實是同一件事，解鎖的意義就消失了——玩家會發現三次拿到同樣的故事，
-# 而「共鳴值」這整個機制的說服力就沒了。
-_STAGE_BRIEFS = {
-    1: (
-        "這是你們關係的第一個轉折：你開始認得這個人了。"
-        "講一件你注意到他的小事——他站的位置、他問過的問題、他來的時間。"
-        "語氣是剛認出一個常客，不是久別重逢。"
-    ),
-    2: (
-        "你們已經熟到你願意講一些平常不對外人說的事。"
-        "分享一段這個地方比較私密的記憶——某個時代的細節、某個沒被寫進導覽的角落。"
-        "語氣比第一階段更放鬆，但還不到交心。"
-    ),
-    3: (
-        "這個人已經是你記憶的一部分了。"
-        "說出這件事本身，以及它對一個由記憶構成的存在意味著什麼。"
-        "這是三個階段裡最深的，語氣可以最安靜、最不設防。"
-    ),
-}
-
-# 人工預寫的回退台詞，一個 stage 一句。
-#
-# 跟 gemini.py 的 FALLBACK_REPLY **刻意各自持有**：那句是「我沒有答案」，
-# 這裡是「你解鎖了新階段，但我這次說不出話」。兩者會因為不同的理由被改寫。
-_FALLBACK_STORIES = {
-    1: "（城市靈魂看了你一會兒）……我記得你了。你來過幾次，站的位置都差不多。",
-    2: "（沉默了一下）有些事我平常不跟人說的。下次你再來，我慢慢講給你聽。",
-    3: "（很輕地）你已經是這條街的一部分了。這句話我沒對幾個人說過。",
-}
-
-_DEFAULT_FALLBACK = "（城市靈魂安靜地看著你）……有些話我還沒想好怎麼說。"
-
-
-def fallback_story_for(stage: int) -> str:
-    """未知階段回傳通用那句，不拋 KeyError。"""
-    return _FALLBACK_STORIES.get(stage, _DEFAULT_FALLBACK)
-
-
-def build_unlock_prompt(spirit_id: str, stage: int) -> str:
-    """
-    組出該階段的生成提示。
-
-    做成獨立的純函式，是為了讓「三個 stage 的 prompt 必須不同」這條保證可以
-    被直接測試，不需要繞過模型。
-
-    史實邊界規則（B5）一併注入：解鎖故事同樣會講到這座地標的過去，沒有理由讓它
-    比一般對話寬鬆。
-    """
-    brief = _STAGE_BRIEFS.get(stage, _STAGE_BRIEFS[1])
-
+def _build_prompt(spirit_id: str, stage: int) -> str:
+    description = _STAGE_DESCRIPTIONS.get(stage, f"玩家剛跨過第 {stage} 個共鳴階段")
     return (
-        f"你是地標「{spirit_id}」的擬人化集體意識。\n"
-        f"玩家與你的共鳴值剛跨過第 {stage} 個階段。\n\n"
-        f"{brief}\n\n"
-        f"{get_historical_boundary_rules()}\n\n"
-        "寫一段 60 到 120 字的短敘事，用第一人稱，不要標題、不要條列。"
+        f"你是「{spirit_id}」這個地標的城市靈魂。玩家剛跨過共鳴值的第 {stage} 個門檻，"
+        f"關係階段是：{description}。\n"
+        "請用兩三句話寫一段符合這個階段、屬於這次解鎖的短故事，語氣要符合角色設定，"
+        "不要條列、不要開場白或結語，要能讓玩家感覺到跟前面階段不一樣。"
     )
 
 
 def generate_unlock_story(
-    client: GeminiClient, *, spirit_id: str, stage: int
+    player_id: str, spirit_id: str, stage: int, client: GeminiClient
 ) -> UnlockStory:
     """
-    生成單一階段的解鎖敘事。**永遠回傳結果，永遠不拋例外。**
+    產生單一階段的解鎖故事（issue #25 AC1）。
 
-    `player_id` 刻意不是參數。issue #25 的簽章寫了它，但它在這裡沒有用途——
-    敘事的內容只取決於地標與階段，而傳入一個不會被使用的識別碼，只會讓人以為
-    生成內容是個人化的。要做個人化（例如帶入該玩家的長期記憶）時，那是一次
-    明確的功能決定，不該靠一個早就悄悄放在簽章裡的參數。
+    `stage` 完全由呼叫端決定，這支函式不查資料庫、不自己重算——見模組開頭
+    「呼叫順序硬規則」的說明。
     """
-    prompt = build_unlock_prompt(spirit_id, stage)
-
-    # B1 的契約是「永遠回非空字串，失敗時回 FALLBACK_REPLY」，所以這裡靠內容
-    # 判斷是否回退，而不是 try/except——B1 根本不會拋例外給我們。
+    prompt = _build_prompt(spirit_id, stage)
     text = client.generate(prompt)
 
-    if not text or text == FALLBACK_REPLY:
-        logger.info("B11 解鎖敘事生成失敗，回退人工預寫台詞（stage=%s）", stage)
-        return UnlockStory(stage=stage, story_text=fallback_story_for(stage), is_fallback=True)
+    if text == _GEMINI_CLIENT_FALLBACK:
+        text = FALLBACK_STORY_TEXT
 
     return UnlockStory(stage=stage, story_text=text)
 
 
 def generate_unlock_stories(
-    client: GeminiClient, *, spirit_id: str, stages: list[int]
+    player_id: str, spirit_id: str, stages: Sequence[int], client: GeminiClient
 ) -> list[UnlockStory]:
     """
-    對每個新解鎖的階段各生成一段。
-
-    ⚠️ **不要改成只取 `stages[-1]`。** `apply_resonance` 回傳 list 就是為了這件
-    事（#16 的設計）：一次入帳可能跨過多個門檻，而每個階段都該有自己的一段敘事。
-    只取最後一個會讓中間那段靜默消失——沒有例外、沒有 log，玩家只是永遠看不到
-    那一段。
+    對 `newly_unlocked_stages`（issue #16 `ResonanceResult`）裡每個 stage
+    各生成一段故事（issue #25 AC4）。空 list 回傳空 list，不是每次入帳都
+    一定有新故事——沒跨過門檻時本來就不該有東西可以生成。
     """
-    return [generate_unlock_story(client, spirit_id=spirit_id, stage=s) for s in stages]
+    return [generate_unlock_story(player_id, spirit_id, stage, client) for stage in stages]

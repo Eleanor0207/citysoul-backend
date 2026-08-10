@@ -1,30 +1,21 @@
 """
-`GET /api/v1/spirits/{placeId}` 的執行期行為。
-
-這支端點原本**沒有專屬測試檔**，只被 summon／sense 的測試間接涵蓋。issue #30
-順手補上回歸保護——契約說它會回什麼是一回事，它實際回什麼是另一回事，兩者都要
-有東西守著。
+Ticket #30 AC（issue #30 Testing Decisions）：`GET /spirits/{placeId}` 目前
+沒有專屬測試檔，只被間接涵蓋（`test_sense.py` 測了欄位脫鉤，但那不是這支
+端點本身的回歸保護）。這裡補上，並涵蓋這次新增的 `orientation`（SDD v2.1
+§10.2）執行期行為——契約層的形狀檢查在 `tests/test_api_contract.py`。
 """
+import uuid
+
 import pytest
 
 from app.modules.body import models
-
-_LAT = 25.0955
-_LON = 121.5186
 
 
 @pytest.fixture
 def spirit(db_session, unique_spirit_id):
     row = models.Spirit(
-        spirit_id=unique_spirit_id,
-        display_name="測試地標",
-        latitude=_LAT,
-        longitude=_LON,
-        summon_radius_meters=50,
-        sense_radius_meters=150,
-        is_active=True,
-        bearing_deg=137.5,
-        height_offset_m=2.25,
+        spirit_id=unique_spirit_id, display_name="測試地標",
+        latitude=25.0367, longitude=121.4998, summon_radius_meters=50, is_active=True,
     )
     db_session.add(row)
     db_session.commit()
@@ -33,72 +24,43 @@ def spirit(db_session, unique_spirit_id):
     db_session.commit()
 
 
-@pytest.fixture
-def spirit_without_orientation(db_session, unique_spirit_id):
-    """不指定方位，驗證 server_default 讓既有資料列拿到合理的 0。"""
-    row = models.Spirit(
-        spirit_id=unique_spirit_id,
-        display_name="沒設定方位的地標",
-        latitude=_LAT,
-        longitude=_LON,
-        summon_radius_meters=50,
-        sense_radius_meters=150,
-        is_active=True,
-    )
-    db_session.add(row)
-    db_session.commit()
-    yield row
-    db_session.delete(row)
-    db_session.commit()
-
-
-def test_returns_spirit_basics(client, spirit):
-    resp = client.get(f"/api/v1/spirits/{spirit.spirit_id}")
-
-    assert resp.status_code == 200
-    body = resp.json()
-    # 對外欄位名跟 DB 欄位名刻意脫鉤，這裡釘住的是**對外**那組。
-    assert body["place_id"] == spirit.spirit_id
-    assert body["name"] == "測試地標"
-    assert body["summon_radius_m"] == 50
-    assert body["sense_radius_m"] == 150
-
-
-def test_returns_orientation_from_database(client, spirit):
-    """方位值來自資料庫，不是寫死的預設。"""
+def test_returns_basic_fields(client, spirit):
     body = client.get(f"/api/v1/spirits/{spirit.spirit_id}").json()
 
-    assert body["orientation"] == {"bearing_deg": 137.5, "height_offset_m": 2.25}
+    assert body["place_id"] == spirit.spirit_id
+    assert body["name"] == "測試地標"
+    assert body["latitude"] == pytest.approx(25.0367)
+    assert body["longitude"] == pytest.approx(121.4998)
+    assert body["summon_radius_m"] == 50
+    assert body["is_active"] is True
 
 
-def test_orientation_defaults_to_zero(client, spirit_without_orientation):
-    """
-    未設定時回傳 0，不是 null。
+def test_nonexistent_spirit_returns_404(client):
+    response = client.get(f"/api/v1/spirits/no-such-spirit-{uuid.uuid4()}")
+    assert response.status_code == 404
+    assert response.json() == {"detail": "spirit not found"}
 
-    客戶端的 `OrientationService` 拿到 null 就得自己決定要 fallback 成什麼，
-    那等於把契約的責任推給每個消費端各猜一次。0° 即正北、無垂直偏移，是明確
-    且合理的預設。
-    """
-    body = client.get(f"/api/v1/spirits/{spirit_without_orientation.spirit_id}").json()
+
+def test_inactive_spirit_returns_404(client, db_session, spirit):
+    spirit.is_active = False
+    db_session.commit()
+    assert client.get(f"/api/v1/spirits/{spirit.spirit_id}").status_code == 404
+
+
+# ── orientation（issue #30，SDD v2.1 §10.2）───────────────────────────────
+
+def test_orientation_defaults_to_zero_when_unset(client, spirit):
+    """新建的靈魂沒有特別設定過方位——預設 0，不是缺欄位或 null。"""
+    body = client.get(f"/api/v1/spirits/{spirit.spirit_id}").json()
 
     assert body["orientation"] == {"bearing_deg": 0.0, "height_offset_m": 0.0}
 
 
-def test_unknown_spirit_returns_404(client):
-    assert client.get("/api/v1/spirits/does-not-exist").status_code == 404
-
-
-def test_inactive_spirit_returns_404(client, db_session, spirit):
-    """
-    下架的靈魂是 404，跟不存在的一視同仁。
-
-    這條對齊 /sense、/summon、/dialogue 的既有行為——對玩家來說，下架的靈魂
-    跟不存在的靈魂沒有差別，不需要區分成兩種錯誤讓人推敲。
-
-    這支端點原本漏了 `is_active` 檢查，是整個 repo 裡唯一會把下架靈魂回給玩家
-    的地方。寫這次的契約測試時才發現，已一併修掉。
-    """
-    spirit.is_active = False
+def test_orientation_reflects_configured_values(client, db_session, spirit):
+    spirit.bearing_deg = 137.5
+    spirit.height_offset_m = 1.8
     db_session.commit()
 
-    assert client.get(f"/api/v1/spirits/{spirit.spirit_id}").status_code == 404
+    body = client.get(f"/api/v1/spirits/{spirit.spirit_id}").json()
+
+    assert body["orientation"] == {"bearing_deg": 137.5, "height_offset_m": 1.8}
