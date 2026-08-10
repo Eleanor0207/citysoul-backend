@@ -9,6 +9,8 @@ node_modules/
 build/
 .idea/
 .vscode/
+# 個人的 Claude Code 設定，含本機絕對路徑（citysoul-doc 的位置）
+.claude/settings.local.json
 # 個人的多資料夾 workspace 檔，路徑假設 citysoul-client 就在隔壁目錄
 *.code-workspace
 
