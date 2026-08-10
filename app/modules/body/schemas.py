@@ -1,29 +1,20 @@
 import uuid
-from datetime import datetime
-from typing import Literal
+from datetime import date, datetime
+from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.brain.tts import TTSResult
 
 
-class ErrorResponse(BaseModel):
-    """
-    所有錯誤回應的統一形狀（SDD v2.1 §11.2.1）。
+class HTTPErrorDetail(BaseModel):
+    code: str
+    message: str
 
-    **這不是新的錯誤格式，是對既有格式的描述。** 形狀刻意對齊 FastAPI
-    `HTTPException` 本來就會產出的 `{"detail": "..."}`，一個位元組都沒改。
 
-    存在的理由是讓契約說得出錯誤長什麼樣。在這之前，錯誤回應完全不在 OpenAPI
-    文件裡——SDD v2.1 §10.3 明訂「錯誤碼全數不變」代表錯誤碼是契約的一部分，
-    但機器可讀的那份契約看不到它們，客戶端只能回頭讀規格散文，這正好違背
-    「單一真相來源」的初衷。
-
-    具名之後，客戶端 codegen 會產出**單一**錯誤 DTO，錯誤處理可以寫成一份共用
-    程式碼，而不是每支端點各寫一次。
-    """
-
-    detail: str
+class HTTPErrorResponse(BaseModel):
+    detail: HTTPErrorDetail
 
 
 class PlayerCreateRequest(BaseModel):
@@ -98,28 +89,22 @@ class SenseResponse(BaseModel):
     spirit_id: str
 
 
-# 任務狀態的合法值，會在 OpenAPI 產出真正的 `enum`。
-#
-# 以前這三個值只活在中文註解裡，`status` 產出的是裸 `type: string`——客戶端在
-# 整個 API 最狀態密集的欄位上拿不到任何型別安全，SDD v2.1 §11.2.1 的 Unity
-# 硬規則 5「Enum 採寬鬆解析」也因此無 enum 可解析。
-#
-# 三個值的語意分界不變：`in_progress` / `completed` 是資料庫狀態；
-# `daily_limit_reached` **只存在於 API 回應**，是查詢當下依 `attempts_date`
-# 算出來的結果，不落地（存進資料庫隔天就是錯的）。
-QuestStatus = Literal["in_progress", "completed", "daily_limit_reached"]
+class QuestStatusEnum(str, Enum):
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    DAILY_LIMIT_REACHED = "daily_limit_reached"
 
 
 class QuestStateResponse(BaseModel):
     """
     SDD 第8.4節的 `quest` 欄位。
 
-    `status` 是 `QuestStatus` 而非裸 `str`，讓客戶端能生出真正的 C# enum，
-    任務狀態比對由編譯器把關，不用比對魔術字串。
+    `status` 可能是 `in_progress` / `completed` / `daily_limit_reached`，
+    最後一個只存在於回應中，不是資料庫狀態（見 models.QuestProgress）。
     """
 
     quest_id: str
-    status: QuestStatus
+    status: QuestStatusEnum
     attempts_today: int
 
 
@@ -149,40 +134,22 @@ class DialogueRequest(BaseModel):
 
 class DialogueResponse(BaseModel):
     """
-    對話回應（SDD v2.1 §10.1）。
+    對話回應（v2.1 §10.1）。
 
-    ⚠️ **這是 Phase 2 的「可用版」**（#42）：配額 → B12 招呼比對 → B1 生成 →
-    B10 語音 → B7 短期記憶。B4 安全邊界與 B2 完整組裝屬 Phase 3（#45）。
-
-    `tts` 可以是 null，那是**預期狀態而不是錯誤**：TTS 失敗時對話降級成純文字
-    （SDD §8.5「模型失敗不視為錯誤」）。客戶端 F5 對此的處置是角色維持靜止
-    口型、文字照常顯示——兩端的降級行為刻意銜接。
-
-    🔒 `tts` 裡**只有 `audio_url`**。v2.1 §10.1 已移除 viseme 時間軸，對嘴由
-    客戶端 uLipSync 即時分析負責（見 `brain/tts.py` 的模組註解）。
+    包含對話文字 `reply_text`、來源 `source`（'canned' | 'gemini' | 'fallback'）
+    以及語音 `tts`（含 `audio_url`，合成失敗時為 null，不含 viseme 時間軸）。
     """
 
     reply_text: str
-    # 'canned' = 命中預寫招呼；'generated' = Gemini 生成；
-    # 'fallback' = 生成失敗或無法組裝，回人工預寫台詞。
-    # 客戶端不需要據此改變行為，但除錯與觀察命中率時很有用。
+    # 'canned' = 命中預寫招呼；'gemini' = AI 生成；'fallback' = 模型/TTS 失敗回退。
     source: str
     tts: TTSResult | None = None
 
 
-class SpiritOrientation(BaseModel):
-    """
-    靈魂方位設定（SDD v2.1 §10.2），供客戶端 S14 的 3DoF 定向服務使用。
 
-    做成巢狀物件而不是兩個平鋪欄位，是為了對齊 SDD v2.1 §10.2 的回應範例，
-    也讓客戶端能把「方位設定」當成一個可整包傳給 `OrientationService` 的值，
-    而不是每次都得手動把兩個散落的欄位湊起來。
-    """
-
-    # 相對召喚點的方位角：真北 0°、順時針。
-    bearing_deg: float
-    # 相對玩家視線高度的垂直偏移（公尺）。
-    height_offset_m: float
+class SpiritOrientationResponse(BaseModel):
+    bearing_deg: float = Field(default=0.0)
+    height_offset_m: float = Field(default=0.0)
 
 
 class SpiritResponse(BaseModel):
@@ -210,241 +177,96 @@ class SpiritResponse(BaseModel):
     # 少了它，客戶端只能把 150 寫死在自己這邊——那條路一旦走了，之後調整半徑
     # 就得同時改後端與發版客戶端。
     sense_radius_m: int = Field(validation_alias="sense_radius_meters")
+    orientation: SpiritOrientationResponse = Field(default_factory=SpiritOrientationResponse)
     is_active: bool
-    # 巢狀物件，資料庫是兩個平鋪欄位（`bearing_deg` / `height_offset_m`）。
-    # 這層轉換由 `from_spirit()` 做，不靠 `from_attributes` 自動推——
-    # ORM 物件上沒有 `orientation` 這個屬性可讀。
-    orientation: SpiritOrientation
-
-    @classmethod
-    def from_spirit(cls, spirit) -> "SpiritResponse":
-        """把 ORM 的 `Spirit` 轉成對外回應，含平鋪欄位 → `orientation` 的收攏。"""
-        return cls(
-            place_id=spirit.spirit_id,
-            name=spirit.display_name,
-            latitude=spirit.latitude,
-            longitude=spirit.longitude,
-            summon_radius_m=spirit.summon_radius_meters,
-            sense_radius_m=spirit.sense_radius_meters,
-            is_active=spirit.is_active,
-            orientation=SpiritOrientation(
-                bearing_deg=spirit.bearing_deg,
-                height_offset_m=spirit.height_offset_m,
-            ),
-        )
 
 
-class QuestCompleteRequest(BaseModel):
-    """
-    `POST /api/v1/quests/{questId}/complete` 的請求。
-
-    `completion_evidence` 目前**不參與判定**——SDD 尚未定義它的結構。仍然收下來，
-    是因為之後加規則時 API 形狀不該跟著變（那會是破壞性變更，見 §11.2.1）。
-    """
-
-    completion_evidence: dict = Field(default_factory=dict)
-
-
-class UnlockStoryResponse(BaseModel):
-    """一段解鎖敘事（SDD §7.5 的 `unlock_story` 物件）。"""
-
-    stage: int
-    story_text: str
-
-
-class QuestCompleteResponse(BaseModel):
-    """
-    SDD §7.5 的完成回應。
-
-    ## 為什麼有 `unlock_story` **和** `unlock_stories`
-
-    §7.5 定義的是**單數** `unlock_story`，但 `newly_unlocked_stages` 是 list
-    ——一次入帳理論上可能跨過多個門檻（#16 刻意的設計）。單數欄位表達不了那件事。
-
-    所以兩個都有，各有明確職責：
-
-    - `unlock_story`：**第一個**新解鎖的階段，維持 §7.5 的形狀與客戶端相容。
-    - `unlock_stories`：**完整清單**，這是真相。
-
-    MVP 的 +10／+20 跨不過兩個門檻，所以清單目前最多一個元素，兩者實質相同。
-    但呼叫端不該假設這件事——每個新解鎖的 stage 都該有自己的一段敘事，漏掉中間
-    那段是靜默的內容缺漏，不會有任何錯誤訊息提醒。
-
-    `stage` 與 `newly_unlocked_stages` 不在 §7.5 的範例 body 裡，是 #34 的 AC
-    要求「跨門檻時回應標示新達成 stage」才補上的。
-    """
-
-    quest_wrapper_text: str | None = None
-    resonance_value: int
-    unlock_story: UnlockStoryResponse | None = None
-    unlock_stories: list[UnlockStoryResponse] = Field(default_factory=list)
-    stage: int
-    newly_unlocked_stages: list[int] = Field(default_factory=list)
-
-
-class DailyEventResponse(BaseModel):
-    """
-    `GET /api/v1/spirits/{placeId}/daily-event` 的回應（S10／#26）。
-
-    **公開世界狀態，不需要任何 token。**
-
-    `is_fallback` 為 true 有兩種可能：內容是人工預寫保底，或是回退到了前一天的
-    快取。客戶端**不需要**據此改變呈現——玩家看到的都該是一段正常的敘事。
-    它存在是為了讓我們觀察排程的健康度。
-    """
-
-    narrative_text: str
-    is_fallback: bool = False
-    sources: list[str] = Field(default_factory=list)
-
-
-class LandmarkPhotoResponse(BaseModel):
-    """
-    `POST /api/v1/quests/{questId}/landmark-photo` 的回應（S12／#44）。
-
-    ⚠️ **回應裡沒有任何影像相關的東西**——沒有 URL、沒有雜湊、沒有尺寸。
-    照片只在記憶體處理、辨識完立即捨棄（SDD §7.7），回應也不該留下它存在過的
-    痕跡。
-
-    `resonance_awarded` 為 false 有兩種可能：辨識失敗，或這個地標之前已經收藏過
-    （`UNIQUE(player_id, place_id)`，每個地標只加一次 10 點）。兩者對玩家的意義
-    不同，但都不是錯誤。
-    """
-
-    landmark_recognized: bool
-    resonance_awarded: bool
-    resonance_value: int
-
-
-class QuestListItem(BaseModel):
-    """
-    `GET /api/v1/quests/daily` 的單一任務（SDD v1 §8.7）。
-
-    `spirit_id` **不在 `quest_progress` 表裡**，是從 `quest_id` 的命名慣例
-    反推的（見 `queries.quest_view`）。客戶端仍然需要它才知道這個任務屬於哪個
-    地標，所以它是對外契約的一部分。
-    """
-
+class QuestItemResponse(BaseModel):
     quest_id: str
     spirit_id: str
-    status: QuestStatus
+    status: QuestStatusEnum
     attempts_today: int
 
 
-class QuestsDailyResponse(BaseModel):
-    """沒有任何任務時 `quests` 是空陣列，不是 404——冷啟動是正常狀態。"""
+class DailyQuestsResponse(BaseModel):
+    quests: list[QuestItemResponse]
 
-    quests: list[QuestListItem] = Field(default_factory=list)
+
+class QuestCompleteRequest(BaseModel):
+    completion_evidence: dict[str, Any] = Field(default_factory=dict)
+
+
+class QuestCompleteResponse(BaseModel):
+    quest_wrapper_text: str | None = None
+    resonance_value: int
+    stage: int
+    unlock_story: str | None = None
 
 
 class ResonanceProgressResponse(BaseModel):
-    """
-    `GET /api/v1/resonance/{spiritId}` 的回應（SDD v1 §8.9）。
-
-    `stage` 與 `next_threshold` 一律由 `resonance_value` 重算。
-    已滿階時 `next_threshold` 為 null。
-    """
-
     spirit_id: str
     resonance_value: int
     stage: int
     next_threshold: int | None = None
 
 
-class ProfileResonanceItem(BaseModel):
-    """
-    Profile 裡的單一靈魂共鳴。
-
-    刻意**沒有** `next_threshold`：Profile 是總覽，要看下一個門檻就去
-    `GET /resonance/{spiritId}`。多回一個欄位不痛，但它會變成第二個必須跟
-    單一查詢保持一致的地方。
-    """
-
+class ResonanceItemResponse(BaseModel):
     spirit_id: str
     resonance_value: int
     stage: int
 
 
 class ProfileResponse(BaseModel):
-    """
-    `GET /api/v1/profile`（SDD v1 §8.10）。
-
-    ⚠️ v2.1 §10.3 的端點清單**漏列了這支**，已確認為漏列而非移除。
-
-    兩個陣列的長度**不必相同**：一個靈魂可以有共鳴值但沒有任務進度（例如只
-    收藏過紀念照片）。
-    """
-
-    quests: list[QuestListItem] = Field(default_factory=list)
-    resonance: list[ProfileResonanceItem] = Field(default_factory=list)
+    quests: list[QuestItemResponse]
+    resonance: list[ResonanceItemResponse]
 
 
-class MemoryItem(BaseModel):
-    """
-    單筆記憶摘要。
+class LandmarkPhotoResponse(BaseModel):
+    landmark_recognized: bool
+    resonance_value: int
+    stage: int
 
-    🔒 **沒有 embedding 欄位。** 向量是內部實作，對玩家沒有意義，而且 768 維
-    浮點數會讓回應暴增數十 KB。
-    """
 
+class DailyEventResponse(BaseModel):
+    place_id: str
+    event_date: date
+    narrative_text: str
+    theme_title: str | None = None
+
+
+class MemoryItemResponse(BaseModel):
+    memory_id: uuid.UUID
+    spirit_id: str
     summary_text: str
     created_at: datetime
 
 
-class MemoryGroup(BaseModel):
-    """依靈魂分組的記憶。"""
-
-    spirit_id: str
-    memories: list[MemoryItem] = Field(default_factory=list)
-
-
 class MemorySummaryResponse(BaseModel):
-    """
-    `GET /api/v1/players/me/memory-summary`（#37）。
-
-    🔒 只含該玩家自己的記憶（CONTEXT.md「玩家記憶僅屬單一玩家」）。
-    世界記憶不含任何玩家輸入，兩者不得混用。
-
-    B8 nightly batch（#40）未上線前，這裡回的是既有的 `dialogue_summary`
-    來源記錄——那是**預期行為，不是缺陷**。
-    """
-
-    groups: list[MemoryGroup] = Field(default_factory=list)
+    memories: list[MemoryItemResponse]
 
 
-class AvatarAssetResponse(BaseModel):
-    """
-    `GET /api/v1/assets/{avatarId}`（v2.1 §7.4／#38）。
-
-    `version` 讓客戶端判斷快取是否過期：**改了要變，沒改要穩定不變**。
-    後者一樣重要——每次回傳新值的話，客戶端每次啟動都會重抓整包。
-
-    **無需驗證**：資產位置不是玩家資料。
-    """
-
+class AssetCatalogResponse(BaseModel):
     avatar_id: str
     catalog_url: str
     bundle_url: str
     version: str
+    updated_at: datetime
 
 
-class PushRegisterRequest(BaseModel):
-    """
-    `POST /api/v1/push/register`（S11／#39）。
-
-    只收 token。**不收位置、不收裝置型號**——推播是通知不是內容，這條路徑不
-    需要知道玩家在哪裡或用什麼手機。
-    """
-
-    push_token: str = Field(min_length=1, max_length=256)
+class PushSubscriptionRequest(BaseModel):
+    push_token: str
+    is_subscribed: bool = True
 
 
 class PushSubscriptionResponse(BaseModel):
-    """
-    訂閱狀態。
-
-    刻意**不回傳 `push_token`**：客戶端本來就知道自己送了什麼，回傳它只是讓
-    這個值多存在於一個地方（log、快取、錯誤回報）。
-    """
-
+    player_id: uuid.UUID
+    push_token: str
     is_subscribed: bool
+    updated_at: datetime
+
+
+
+
+
+
+

@@ -1,8 +1,7 @@
 {
   "components": {
     "schemas": {
-      "AvatarAssetResponse": {
-        "description": "`GET /api/v1/assets/{avatarId}`（v2.1 §7.4／#38）。\n\n`version` 讓客戶端判斷快取是否過期：**改了要變，沒改要穩定不變**。\n後者一樣重要——每次回傳新值的話，客戶端每次啟動都會重抓整包。\n\n**無需驗證**：資產位置不是玩家資料。",
+      "AssetCatalogResponse": {
         "properties": {
           "avatar_id": {
             "title": "Avatar Id",
@@ -16,6 +15,11 @@
             "title": "Catalog Url",
             "type": "string"
           },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
           "version": {
             "title": "Version",
             "type": "string"
@@ -25,49 +29,75 @@
           "avatar_id",
           "catalog_url",
           "bundle_url",
-          "version"
+          "version",
+          "updated_at"
         ],
-        "title": "AvatarAssetResponse",
+        "title": "AssetCatalogResponse",
         "type": "object"
       },
-      "Body_landmark_photo_api_v1_quests__quest_id__landmark_photo_post": {
+      "Body_upload_landmark_photo_api_v1_quests__quest_id__landmark_photo_post": {
         "properties": {
-          "photo": {
+          "file": {
             "format": "binary",
-            "title": "Photo",
+            "title": "File",
             "type": "string"
           }
         },
         "required": [
-          "photo"
+          "file"
         ],
-        "title": "Body_landmark_photo_api_v1_quests__quest_id__landmark_photo_post",
+        "title": "Body_upload_landmark_photo_api_v1_quests__quest_id__landmark_photo_post",
         "type": "object"
       },
       "DailyEventResponse": {
-        "description": "`GET /api/v1/spirits/{placeId}/daily-event` 的回應（S10／#26）。\n\n**公開世界狀態，不需要任何 token。**\n\n`is_fallback` 為 true 有兩種可能：內容是人工預寫保底，或是回退到了前一天的\n快取。客戶端**不需要**據此改變呈現——玩家看到的都該是一段正常的敘事。\n它存在是為了讓我們觀察排程的健康度。",
         "properties": {
-          "is_fallback": {
-            "default": false,
-            "title": "Is Fallback",
-            "type": "boolean"
+          "event_date": {
+            "format": "date",
+            "title": "Event Date",
+            "type": "string"
           },
           "narrative_text": {
             "title": "Narrative Text",
             "type": "string"
           },
-          "sources": {
+          "place_id": {
+            "title": "Place Id",
+            "type": "string"
+          },
+          "theme_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Theme Title"
+          }
+        },
+        "required": [
+          "place_id",
+          "event_date",
+          "narrative_text"
+        ],
+        "title": "DailyEventResponse",
+        "type": "object"
+      },
+      "DailyQuestsResponse": {
+        "properties": {
+          "quests": {
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/QuestItemResponse"
             },
-            "title": "Sources",
+            "title": "Quests",
             "type": "array"
           }
         },
         "required": [
-          "narrative_text"
+          "quests"
         ],
-        "title": "DailyEventResponse",
+        "title": "DailyQuestsResponse",
         "type": "object"
       },
       "DialogueRequest": {
@@ -87,7 +117,7 @@
         "type": "object"
       },
       "DialogueResponse": {
-        "description": "對話回應（SDD v2.1 §10.1）。\n\n⚠️ **這是 Phase 2 的「可用版」**（#42）：配額 → B12 招呼比對 → B1 生成 →\nB10 語音 → B7 短期記憶。B4 安全邊界與 B2 完整組裝屬 Phase 3（#45）。\n\n`tts` 可以是 null，那是**預期狀態而不是錯誤**：TTS 失敗時對話降級成純文字\n（SDD §8.5「模型失敗不視為錯誤」）。客戶端 F5 對此的處置是角色維持靜止\n口型、文字照常顯示——兩端的降級行為刻意銜接。\n\n🔒 `tts` 裡**只有 `audio_url`**。v2.1 §10.1 已移除 viseme 時間軸，對嘴由\n客戶端 uLipSync 即時分析負責（見 `brain/tts.py` 的模組註解）。",
+        "description": "對話回應（v2.1 §10.1）。\n\n包含對話文字 `reply_text`、來源 `source`（'canned' | 'gemini' | 'fallback'）\n以及語音 `tts`（含 `audio_url`，合成失敗時為 null，不含 viseme 時間軸）。",
         "properties": {
           "reply_text": {
             "title": "Reply Text",
@@ -115,18 +145,34 @@
         "title": "DialogueResponse",
         "type": "object"
       },
-      "ErrorResponse": {
-        "description": "所有錯誤回應的統一形狀（SDD v2.1 §11.2.1）。\n\n**這不是新的錯誤格式，是對既有格式的描述。** 形狀刻意對齊 FastAPI\n`HTTPException` 本來就會產出的 `{\"detail\": \"...\"}`，一個位元組都沒改。\n\n存在的理由是讓契約說得出錯誤長什麼樣。在這之前，錯誤回應完全不在 OpenAPI\n文件裡——SDD v2.1 §10.3 明訂「錯誤碼全數不變」代表錯誤碼是契約的一部分，\n但機器可讀的那份契約看不到它們，客戶端只能回頭讀規格散文，這正好違背\n「單一真相來源」的初衷。\n\n具名之後，客戶端 codegen 會產出**單一**錯誤 DTO，錯誤處理可以寫成一份共用\n程式碼，而不是每支端點各寫一次。",
+      "HTTPErrorDetail": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "HTTPErrorDetail",
+        "type": "object"
+      },
+      "HTTPErrorResponse": {
         "properties": {
           "detail": {
-            "title": "Detail",
-            "type": "string"
+            "$ref": "#/components/schemas/HTTPErrorDetail"
           }
         },
         "required": [
           "detail"
         ],
-        "title": "ErrorResponse",
+        "title": "HTTPErrorResponse",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -143,56 +189,42 @@
         "type": "object"
       },
       "LandmarkPhotoResponse": {
-        "description": "`POST /api/v1/quests/{questId}/landmark-photo` 的回應（S12／#44）。\n\n⚠️ **回應裡沒有任何影像相關的東西**——沒有 URL、沒有雜湊、沒有尺寸。\n照片只在記憶體處理、辨識完立即捨棄（SDD §7.7），回應也不該留下它存在過的\n痕跡。\n\n`resonance_awarded` 為 false 有兩種可能：辨識失敗，或這個地標之前已經收藏過\n（`UNIQUE(player_id, place_id)`，每個地標只加一次 10 點）。兩者對玩家的意義\n不同，但都不是錯誤。",
         "properties": {
           "landmark_recognized": {
             "title": "Landmark Recognized",
             "type": "boolean"
           },
-          "resonance_awarded": {
-            "title": "Resonance Awarded",
-            "type": "boolean"
-          },
           "resonance_value": {
             "title": "Resonance Value",
+            "type": "integer"
+          },
+          "stage": {
+            "title": "Stage",
             "type": "integer"
           }
         },
         "required": [
           "landmark_recognized",
-          "resonance_awarded",
-          "resonance_value"
+          "resonance_value",
+          "stage"
         ],
         "title": "LandmarkPhotoResponse",
         "type": "object"
       },
-      "MemoryGroup": {
-        "description": "依靈魂分組的記憶。",
-        "properties": {
-          "memories": {
-            "items": {
-              "$ref": "#/components/schemas/MemoryItem"
-            },
-            "title": "Memories",
-            "type": "array"
-          },
-          "spirit_id": {
-            "title": "Spirit Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "spirit_id"
-        ],
-        "title": "MemoryGroup",
-        "type": "object"
-      },
-      "MemoryItem": {
-        "description": "單筆記憶摘要。\n\n🔒 **沒有 embedding 欄位。** 向量是內部實作，對玩家沒有意義，而且 768 維\n浮點數會讓回應暴增數十 KB。",
+      "MemoryItemResponse": {
         "properties": {
           "created_at": {
             "format": "date-time",
             "title": "Created At",
+            "type": "string"
+          },
+          "memory_id": {
+            "format": "uuid",
+            "title": "Memory Id",
+            "type": "string"
+          },
+          "spirit_id": {
+            "title": "Spirit Id",
             "type": "string"
           },
           "summary_text": {
@@ -201,23 +233,27 @@
           }
         },
         "required": [
+          "memory_id",
+          "spirit_id",
           "summary_text",
           "created_at"
         ],
-        "title": "MemoryItem",
+        "title": "MemoryItemResponse",
         "type": "object"
       },
       "MemorySummaryResponse": {
-        "description": "`GET /api/v1/players/me/memory-summary`（#37）。\n\n🔒 只含該玩家自己的記憶（CONTEXT.md「玩家記憶僅屬單一玩家」）。\n世界記憶不含任何玩家輸入，兩者不得混用。\n\nB8 nightly batch（#40）未上線前，這裡回的是既有的 `dialogue_summary`\n來源記錄——那是**預期行為，不是缺陷**。",
         "properties": {
-          "groups": {
+          "memories": {
             "items": {
-              "$ref": "#/components/schemas/MemoryGroup"
+              "$ref": "#/components/schemas/MemoryItemResponse"
             },
-            "title": "Groups",
+            "title": "Memories",
             "type": "array"
           }
         },
+        "required": [
+          "memories"
+        ],
         "title": "MemorySummaryResponse",
         "type": "object"
       },
@@ -280,57 +316,38 @@
         "title": "PlayerResponse",
         "type": "object"
       },
-      "ProfileResonanceItem": {
-        "description": "Profile 裡的單一靈魂共鳴。\n\n刻意**沒有** `next_threshold`：Profile 是總覽，要看下一個門檻就去\n`GET /resonance/{spiritId}`。多回一個欄位不痛，但它會變成第二個必須跟\n單一查詢保持一致的地方。",
-        "properties": {
-          "resonance_value": {
-            "title": "Resonance Value",
-            "type": "integer"
-          },
-          "spirit_id": {
-            "title": "Spirit Id",
-            "type": "string"
-          },
-          "stage": {
-            "title": "Stage",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "spirit_id",
-          "resonance_value",
-          "stage"
-        ],
-        "title": "ProfileResonanceItem",
-        "type": "object"
-      },
       "ProfileResponse": {
-        "description": "`GET /api/v1/profile`（SDD v1 §8.10）。\n\n⚠️ v2.1 §10.3 的端點清單**漏列了這支**，已確認為漏列而非移除。\n\n兩個陣列的長度**不必相同**：一個靈魂可以有共鳴值但沒有任務進度（例如只\n收藏過紀念照片）。",
         "properties": {
           "quests": {
             "items": {
-              "$ref": "#/components/schemas/QuestListItem"
+              "$ref": "#/components/schemas/QuestItemResponse"
             },
             "title": "Quests",
             "type": "array"
           },
           "resonance": {
             "items": {
-              "$ref": "#/components/schemas/ProfileResonanceItem"
+              "$ref": "#/components/schemas/ResonanceItemResponse"
             },
             "title": "Resonance",
             "type": "array"
           }
         },
+        "required": [
+          "quests",
+          "resonance"
+        ],
         "title": "ProfileResponse",
         "type": "object"
       },
-      "PushRegisterRequest": {
-        "description": "`POST /api/v1/push/register`（S11／#39）。\n\n只收 token。**不收位置、不收裝置型號**——推播是通知不是內容，這條路徑不\n需要知道玩家在哪裡或用什麼手機。",
+      "PushSubscriptionRequest": {
         "properties": {
+          "is_subscribed": {
+            "default": true,
+            "title": "Is Subscribed",
+            "type": "boolean"
+          },
           "push_token": {
-            "maxLength": 256,
-            "minLength": 1,
             "title": "Push Token",
             "type": "string"
           }
@@ -338,25 +355,40 @@
         "required": [
           "push_token"
         ],
-        "title": "PushRegisterRequest",
+        "title": "PushSubscriptionRequest",
         "type": "object"
       },
       "PushSubscriptionResponse": {
-        "description": "訂閱狀態。\n\n刻意**不回傳 `push_token`**：客戶端本來就知道自己送了什麼，回傳它只是讓\n這個值多存在於一個地方（log、快取、錯誤回報）。",
         "properties": {
           "is_subscribed": {
             "title": "Is Subscribed",
             "type": "boolean"
+          },
+          "player_id": {
+            "format": "uuid",
+            "title": "Player Id",
+            "type": "string"
+          },
+          "push_token": {
+            "title": "Push Token",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
           }
         },
         "required": [
-          "is_subscribed"
+          "player_id",
+          "push_token",
+          "is_subscribed",
+          "updated_at"
         ],
         "title": "PushSubscriptionResponse",
         "type": "object"
       },
       "QuestCompleteRequest": {
-        "description": "`POST /api/v1/quests/{questId}/complete` 的請求。\n\n`completion_evidence` 目前**不參與判定**——SDD 尚未定義它的結構。仍然收下來，\n是因為之後加規則時 API 形狀不該跟著變（那會是破壞性變更，見 §11.2.1）。",
         "properties": {
           "completion_evidence": {
             "title": "Completion Evidence",
@@ -367,15 +399,7 @@
         "type": "object"
       },
       "QuestCompleteResponse": {
-        "description": "SDD §7.5 的完成回應。\n\n## 為什麼有 `unlock_story` **和** `unlock_stories`\n\n§7.5 定義的是**單數** `unlock_story`，但 `newly_unlocked_stages` 是 list\n——一次入帳理論上可能跨過多個門檻（#16 刻意的設計）。單數欄位表達不了那件事。\n\n所以兩個都有，各有明確職責：\n\n- `unlock_story`：**第一個**新解鎖的階段，維持 §7.5 的形狀與客戶端相容。\n- `unlock_stories`：**完整清單**，這是真相。\n\nMVP 的 +10／+20 跨不過兩個門檻，所以清單目前最多一個元素，兩者實質相同。\n但呼叫端不該假設這件事——每個新解鎖的 stage 都該有自己的一段敘事，漏掉中間\n那段是靜默的內容缺漏，不會有任何錯誤訊息提醒。\n\n`stage` 與 `newly_unlocked_stages` 不在 §7.5 的範例 body 裡，是 #34 的 AC\n要求「跨門檻時回應標示新達成 stage」才補上的。",
         "properties": {
-          "newly_unlocked_stages": {
-            "items": {
-              "type": "integer"
-            },
-            "title": "Newly Unlocked Stages",
-            "type": "array"
-          },
           "quest_wrapper_text": {
             "anyOf": [
               {
@@ -395,22 +419,16 @@
             "title": "Stage",
             "type": "integer"
           },
-          "unlock_stories": {
-            "items": {
-              "$ref": "#/components/schemas/UnlockStoryResponse"
-            },
-            "title": "Unlock Stories",
-            "type": "array"
-          },
           "unlock_story": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/UnlockStoryResponse"
+                "type": "string"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Unlock Story"
           }
         },
         "required": [
@@ -420,8 +438,7 @@
         "title": "QuestCompleteResponse",
         "type": "object"
       },
-      "QuestListItem": {
-        "description": "`GET /api/v1/quests/daily` 的單一任務（SDD v1 §8.7）。\n\n`spirit_id` **不在 `quest_progress` 表裡**，是從 `quest_id` 的命名慣例\n反推的（見 `queries.quest_view`）。客戶端仍然需要它才知道這個任務屬於哪個\n地標，所以它是對外契約的一部分。",
+      "QuestItemResponse": {
         "properties": {
           "attempts_today": {
             "title": "Attempts Today",
@@ -436,13 +453,7 @@
             "type": "string"
           },
           "status": {
-            "enum": [
-              "in_progress",
-              "completed",
-              "daily_limit_reached"
-            ],
-            "title": "Status",
-            "type": "string"
+            "$ref": "#/components/schemas/QuestStatusEnum"
           }
         },
         "required": [
@@ -451,11 +462,11 @@
           "status",
           "attempts_today"
         ],
-        "title": "QuestListItem",
+        "title": "QuestItemResponse",
         "type": "object"
       },
       "QuestStateResponse": {
-        "description": "SDD 第8.4節的 `quest` 欄位。\n\n`status` 是 `QuestStatus` 而非裸 `str`，讓客戶端能生出真正的 C# enum，\n任務狀態比對由編譯器把關，不用比對魔術字串。",
+        "description": "SDD 第8.4節的 `quest` 欄位。\n\n`status` 可能是 `in_progress` / `completed` / `daily_limit_reached`，\n最後一個只存在於回應中，不是資料庫狀態（見 models.QuestProgress）。",
         "properties": {
           "attempts_today": {
             "title": "Attempts Today",
@@ -466,13 +477,7 @@
             "type": "string"
           },
           "status": {
-            "enum": [
-              "in_progress",
-              "completed",
-              "daily_limit_reached"
-            ],
-            "title": "Status",
-            "type": "string"
+            "$ref": "#/components/schemas/QuestStatusEnum"
           }
         },
         "required": [
@@ -483,22 +488,39 @@
         "title": "QuestStateResponse",
         "type": "object"
       },
-      "QuestsDailyResponse": {
-        "description": "沒有任何任務時 `quests` 是空陣列，不是 404——冷啟動是正常狀態。",
+      "QuestStatusEnum": {
+        "enum": [
+          "in_progress",
+          "completed",
+          "daily_limit_reached"
+        ],
+        "title": "QuestStatusEnum",
+        "type": "string"
+      },
+      "ResonanceItemResponse": {
         "properties": {
-          "quests": {
-            "items": {
-              "$ref": "#/components/schemas/QuestListItem"
-            },
-            "title": "Quests",
-            "type": "array"
+          "resonance_value": {
+            "title": "Resonance Value",
+            "type": "integer"
+          },
+          "spirit_id": {
+            "title": "Spirit Id",
+            "type": "string"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "integer"
           }
         },
-        "title": "QuestsDailyResponse",
+        "required": [
+          "spirit_id",
+          "resonance_value",
+          "stage"
+        ],
+        "title": "ResonanceItemResponse",
         "type": "object"
       },
       "ResonanceProgressResponse": {
-        "description": "`GET /api/v1/resonance/{spiritId}` 的回應（SDD v1 §8.9）。\n\n`stage` 與 `next_threshold` 一律由 `resonance_value` 重算。\n已滿階時 `next_threshold` 為 null。",
         "properties": {
           "next_threshold": {
             "anyOf": [
@@ -580,23 +602,20 @@
         "title": "SenseResponse",
         "type": "object"
       },
-      "SpiritOrientation": {
-        "description": "靈魂方位設定（SDD v2.1 §10.2），供客戶端 S14 的 3DoF 定向服務使用。\n\n做成巢狀物件而不是兩個平鋪欄位，是為了對齊 SDD v2.1 §10.2 的回應範例，\n也讓客戶端能把「方位設定」當成一個可整包傳給 `OrientationService` 的值，\n而不是每次都得手動把兩個散落的欄位湊起來。",
+      "SpiritOrientationResponse": {
         "properties": {
           "bearing_deg": {
+            "default": 0.0,
             "title": "Bearing Deg",
             "type": "number"
           },
           "height_offset_m": {
+            "default": 0.0,
             "title": "Height Offset M",
             "type": "number"
           }
         },
-        "required": [
-          "bearing_deg",
-          "height_offset_m"
-        ],
-        "title": "SpiritOrientation",
+        "title": "SpiritOrientationResponse",
         "type": "object"
       },
       "SpiritResponse": {
@@ -619,7 +638,7 @@
             "type": "string"
           },
           "orientation": {
-            "$ref": "#/components/schemas/SpiritOrientation"
+            "$ref": "#/components/schemas/SpiritOrientationResponse"
           },
           "place_id": {
             "title": "Place Id",
@@ -641,8 +660,7 @@
           "longitude",
           "summon_radius_m",
           "sense_radius_m",
-          "is_active",
-          "orientation"
+          "is_active"
         ],
         "title": "SpiritResponse",
         "type": "object"
@@ -722,9 +740,10 @@
         "type": "object"
       },
       "TTSResult": {
-        "description": "語音合成結果（SDD v2.1 §10.1）。欄位恰為 audio_url。",
+        "description": "TTS 合成結果（v2.1 §10.1）。\n只含 audio_url，不含 viseme / phoneme 欄位。",
         "properties": {
           "audio_url": {
+            "description": "可播放的語音音檔 URL",
             "title": "Audio Url",
             "type": "string"
           }
@@ -733,25 +752,6 @@
           "audio_url"
         ],
         "title": "TTSResult",
-        "type": "object"
-      },
-      "UnlockStoryResponse": {
-        "description": "一段解鎖敘事（SDD §7.5 的 `unlock_story` 物件）。",
-        "properties": {
-          "stage": {
-            "title": "Stage",
-            "type": "integer"
-          },
-          "story_text": {
-            "title": "Story Text",
-            "type": "string"
-          }
-        },
-        "required": [
-          "stage",
-          "story_text"
-        ],
-        "title": "UnlockStoryResponse",
         "type": "object"
       },
       "ValidationError": {
@@ -803,8 +803,8 @@
   "paths": {
     "/api/v1/assets/{avatar_id}": {
       "get": {
-        "description": "F7．Addressables catalog 與版本查詢（#38）。\n\n**無需驗證**——資產位置不是玩家資料。\n\n`version` 直接回傳資料表裡明確寫入的值，**不從 `updated_at` 或內容 hash\n算**：那樣的話一次無關的資料列更新就會讓所有客戶端重抓整包。\n\n開發期指向本機或測試 bucket 只需要改資料，不用改程式碼也不用等 CDN 佈建好\n——那正是把它放進資料表的理由。",
-        "operationId": "get_avatar_asset_api_v1_assets__avatar_id__get",
+        "description": "GET /api/v1/assets/{avatarId} 素材 Catalog 與版本端點（BE#38）。\n\n1. 公開端點（免 Token 驗證）。\n2. 驗證地標/靈魂存在性，無效及非 is_active 靈魂回傳 404。\n3. 回傳 Unity Addressables 遠端 Catalog URL、Bundle URL 與穩定版本識別號。",
+        "operationId": "get_asset_catalog_api_v1_assets__avatar_id__get",
         "parameters": [
           {
             "in": "path",
@@ -821,7 +821,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AvatarAssetResponse"
+                  "$ref": "#/components/schemas/AssetCatalogResponse"
                 }
               }
             },
@@ -831,11 +831,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "avatar 不存在"
+            "description": "Not Found"
           },
           "422": {
             "content": {
@@ -848,7 +848,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Get Avatar Asset",
+        "summary": "Get Asset Catalog",
         "tags": [
           "body"
         ]
@@ -879,6 +879,16 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -898,8 +908,8 @@
     },
     "/api/v1/players/me/memory-summary": {
       "get": {
-        "description": "記憶摘要查詢（#37）。\n\n🔒 **只回傳該玩家自己的記憶**（CONTEXT.md「玩家記憶僅屬單一玩家」）。\n過濾條件是 `player_id` 而不是 `spirit_id`——同一個靈魂底下有很多玩家的記憶。\n\n回應**不含 embedding 向量**：那是內部實作，對玩家沒有意義，而且 768 維\n浮點數會讓回應暴增數十 KB。\n\nB8 nightly batch（#40）未上線前，這裡回的是既有的 `dialogue_summary`\n來源記錄——**預期行為，不是缺陷**。",
-        "operationId": "get_memory_summary_api_v1_players_me_memory_summary_get",
+        "description": "GET /api/v1/players/me/memory-summary 記憶摘要查詢（BE#37）。\n\n1. 需 Session Token 驗證 (401)。\n2. 嚴格過濾 player_id = session_player_id (隱私隔離)。\n3. 不含 768 維 Embedding 向量欄位，節省頻寬與防止數據外洩。\n4. 冷啟動回傳 {\"memories\": []} (HTTP 200)。",
+        "operationId": "get_player_memory_summary_api_v1_players_me_memory_summary_get",
         "responses": {
           "200": {
             "content": {
@@ -915,11 +925,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "Session token 無效或未提供"
+            "description": "Unauthorized"
           }
         },
         "security": [
@@ -927,22 +937,22 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Get Memory Summary",
+        "summary": "Get Player Memory Summary",
         "tags": [
           "body"
         ]
       }
     },
-    "/api/v1/profile": {
-      "get": {
-        "description": "S8．玩家彙總查詢（#36）。\n\nProfile 畫面一次拿齊資料，避免前端發多次請求。**純身體自己的表直查，\n不呼叫腦袋。**\n\n🔒 `stage` 與 `GET /resonance/{spiritId}` 走**同一支** `stage_for_value()`\n（見 `queries.py` 的模組註解）。各自重算的話，哪天有人改了門檻規則卻只改到\n一邊，玩家會在兩個畫面看到不同的階段，而且不會有任何錯誤。",
-        "operationId": "get_profile_api_v1_profile_get",
+    "/api/v1/players/me/push-subscription": {
+      "delete": {
+        "description": "DELETE /api/v1/players/me/push-subscription 退訂推播（BE#39）。\n\n1. 需 Session Token 驗證 (401)。\n2. 將 is_subscribed 標記為 False，退訂後絕不安裝/送出推播。",
+        "operationId": "unsubscribe_push_api_v1_players_me_push_subscription_delete",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProfileResponse"
+                  "$ref": "#/components/schemas/PushSubscriptionResponse"
                 }
               }
             },
@@ -952,11 +962,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "Session token 無效或未提供"
+            "description": "Unauthorized"
           }
         },
         "security": [
@@ -964,21 +974,19 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Get Profile",
+        "summary": "Unsubscribe Push",
         "tags": [
           "body"
         ]
-      }
-    },
-    "/api/v1/push/register": {
+      },
       "post": {
-        "description": "S11．註冊或更新推播 token（#39）。\n\n**重複註冊是更新，不是新增列**——主鍵是 `player_id`，換手機或 token 輪替時\n舊的直接被覆蓋。累積失效 token 的話，群發時得自己挑「最新的那個」，而那個\n判斷遲早會出錯然後把推播送到別人的舊裝置上。\n\n重新註冊視為重新訂閱：玩家會這樣做通常就是因為想再收到通知。",
-        "operationId": "register_push_api_v1_push_register_post",
+        "description": "POST /api/v1/players/me/push-subscription 註冊/更新推播訂閱（BE#39）。\n\n1. 需 Session Token 驗證 (401)。\n2. 主鍵為 player_id，重複註冊更新 push_token 與 is_subscribed，避免重複列。",
+        "operationId": "upsert_push_subscription_api_v1_players_me_push_subscription_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/PushRegisterRequest"
+                "$ref": "#/components/schemas/PushSubscriptionRequest"
               }
             }
           },
@@ -999,11 +1007,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "Session token 無效或未提供"
+            "description": "Unauthorized"
           },
           "422": {
             "content": {
@@ -1021,22 +1029,22 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Register Push",
+        "summary": "Upsert Push Subscription",
         "tags": [
           "body"
         ]
       }
     },
-    "/api/v1/push/unsubscribe": {
-      "post": {
-        "description": "S11．退訂（#39）。\n\n用 `is_subscribed=false` 而不是刪列：token 還有用，重新訂閱時不需要重新\n註冊裝置。\n\n沒註冊過的玩家也回 200——「我不想收推播」對一個從沒註冊過的人來說已經成立，\n回 404 只會讓客戶端要為一個不是問題的狀況寫處理分支。",
-        "operationId": "unsubscribe_push_api_v1_push_unsubscribe_post",
+    "/api/v1/profile": {
+      "get": {
+        "description": "GET /api/v1/profile 玩家個人頁彙總查詢（BE#36）。\n\n1. 需 Session Token (未帶或無效回傳 401)。\n2. 純身體資料表直查，不呼叫 Brain 腦袋模組。\n3. 一次回傳所有任務與所有靈魂的共鳴進度。\n4. 全新玩家回傳空陣列 {\"quests\":[], \"resonance\":[]} (HTTP 200)。",
+        "operationId": "get_profile_api_v1_profile_get",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PushSubscriptionResponse"
+                  "$ref": "#/components/schemas/ProfileResponse"
                 }
               }
             },
@@ -1046,11 +1054,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "Session token 無效或未提供"
+            "description": "Unauthorized"
           }
         },
         "security": [
@@ -1058,7 +1066,7 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Unsubscribe Push",
+        "summary": "Get Profile",
         "tags": [
           "body"
         ]
@@ -1066,14 +1074,14 @@
     },
     "/api/v1/quests/daily": {
       "get": {
-        "description": "S8．任務列表查詢（#33）。\n\n⚠️ **唯讀，不推進狀態機。** 跨日的 `attempts_today` 歸零是**算出來的**，\n不寫回資料庫——查詢端點如果順手做了狀態轉移，玩家只要打開任務列表就等於\n推進了一次任務，那是很難追查的副作用。真正的歸零由下一次 `/summon` 寫入。\n\n`daily_limit_reached` 同理：它取決於「今天」是哪一天，存進資料庫隔天就是\n錯的，所以只存在於回應。",
+        "description": "S4 / GET /api/v1/quests/daily 任務列表查詢（BE#33）。\n\n回傳該玩家目前的任務清單。\n- 依 Asia/Taipei 午夜日期自動處理次數重置。\n- 若當天嘗試已滿 3 次，status 標示為 daily_limit_reached。\n- 冷啟動（無任何列）回傳空陣列 []。",
         "operationId": "get_daily_quests_api_v1_quests_daily_get",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/QuestsDailyResponse"
+                  "$ref": "#/components/schemas/DailyQuestsResponse"
                 }
               }
             },
@@ -1083,11 +1091,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "Session token 無效或未提供"
+            "description": "Unauthorized"
           }
         },
         "security": [
@@ -1103,8 +1111,8 @@
     },
     "/api/v1/quests/{quest_id}/complete": {
       "post": {
-        "description": "S4＋S5．任務完成、共鳴入帳與解鎖敘事（SDD §7.5，#34 ＋ #43）。\n\n    確定性規則判定 → quest_progress.status = 'completed'\n      → resonance += 20 → 門檻判定\n      → 回傳（unlock_story 與 quest_wrapper_text 皆為 null）\n\n## 不呼叫腦袋，一次都不\n\nCONTEXT.md 明訂「可驗證微任務由**後端確定性規則**判定，不由 LLM 判定」。\n這支端點因此完全不 import 任何腦袋模組——判定只看資料庫裡的狀態。\n\n## 呼叫順序硬規則（v2.1 §6.4）\n\n身體必須「先寫完自己的表、再呼叫腦袋」，不可顛倒。本票只做前半，正好\n符合此順序；#43 接上敘事生成時，那一段要加在所有寫入**之後**。\n\n## 只收 Encounter Token\n\nSDD §6：持 Sense Token 者**不可**呼叫這支端點。感應憑證代表「你在 150m\n內」，而任務完成需要「你真的到了現場」。兩者用不同金鑰簽章，所以把\nsense token 塞進 `X-Encounter-Token` 會在驗章就失敗——這不是靠我們記得\n檢查 purpose，是兩套憑證本來就換不過來。",
-        "operationId": "complete_quest_endpoint_api_v1_quests__quest_id__complete_post",
+        "description": "S4 / S5 / POST /api/v1/quests/{quest_id}/complete 任務完成與共鸣入帳（BE#34/BE#43）。\n\n1. 需 Session Token ＋ Encounter Token (Sense Token 遭拒)。\n2. 驗證 Encounter Token 之持有人與地標符合。\n3. 標記 quest_progress.status = 'completed'。\n4. 呼叫 apply_resonance 入帳 +20 分。\n5. 硬規則 (v2.1 §6.4)：先完成 DB 寫入與點數結算，後呼叫腦袋生成敘事。\n6. 跨過門檻時生成並回傳 unlock_story，其餘時間為 null。",
+        "operationId": "complete_quest_api_v1_quests__quest_id__complete_post",
         "parameters": [
           {
             "in": "path",
@@ -1157,31 +1165,31 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "Session token 無效或未提供"
+            "description": "Unauthorized"
           },
           "403": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "Encounter token 屬於別的靈魂，或兩張憑證不屬於同一個玩家"
+            "description": "Forbidden"
           },
           "404": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "任務不存在，或玩家還沒有這筆進度"
+            "description": "Not Found"
           },
           "422": {
             "content": {
@@ -1199,7 +1207,7 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Complete Quest Endpoint",
+        "summary": "Complete Quest",
         "tags": [
           "body"
         ]
@@ -1207,8 +1215,8 @@
     },
     "/api/v1/quests/{quest_id}/landmark-photo": {
       "post": {
-        "description": "S12．紀念照片（後端側，#44）。\n\n    Session ＋ Encounter → 辨識配額（#32）→ 讀進記憶體 → B13（#22）\n      → 立即捨棄影像 → 相遇收藏入帳\n\n## 隱私是核心約束（SDD §7.7）\n\n照片**只在記憶體處理，辨識完立即捨棄**：不寫檔、不上傳 Cloud Storage、\n不留作訓練資料，`encounter_collections` 也不存原始照片、GPS 座標或影像雜湊。\n\n`image_bytes` 是區域變數，函式結束就沒了。這裡刻意**不**把它存進任何\n地方——連「最近一次辨識失敗的照片」都不留（見 `brain/landmark_recognition.py`\n的模組註解）。\n\n## 只收 Encounter Token\n\nSDD §6：持 Sense Token 者不可觸發相機疊圖相關動作。感應憑證代表「你在 150m\n內」，拍紀念照需要「你真的到了現場」。\n\n## 辨識失敗不是錯誤\n\n回 `landmark_recognized: false`，任務仍可完成——玩家只是拿不到特別徽章\n（CONTEXT.md）。",
-        "operationId": "landmark_photo_api_v1_quests__quest_id__landmark_photo_post",
+        "description": "S12 / POST /api/v1/quests/{quest_id}/landmark-photo 紀念照片地標辨識與相遇收藏（BE#44）。\n\n1. 需 Session Token ＋ Encounter Token (Sense Token 遭拒)。\n2. 先檢查並扣減地標辨識配額 (landmark_recognition_calls)；超額拋出 HTTP 429 且不呼叫辨識。\n3. 照片位元組僅於記憶體中讀取並過渡給辨識器，辨識完畢立即釋放，不落地儲存。\n4. 寫入 encounter_collections 表（含 UNIQUEConstraint 防重複加分），首度相遇收藏加值 +10 分。\n5. 辨識失敗時回傳 false，不拋出例外亦不阻擋任務完成。",
+        "operationId": "upload_landmark_photo_api_v1_quests__quest_id__landmark_photo_post",
         "parameters": [
           {
             "in": "path",
@@ -1240,7 +1248,7 @@
           "content": {
             "multipart/form-data": {
               "schema": {
-                "$ref": "#/components/schemas/Body_landmark_photo_api_v1_quests__quest_id__landmark_photo_post"
+                "$ref": "#/components/schemas/Body_upload_landmark_photo_api_v1_quests__quest_id__landmark_photo_post"
               }
             }
           },
@@ -1261,31 +1269,31 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "Session token 無效或未提供"
+            "description": "Unauthorized"
           },
           "403": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "Encounter token 屬於別的靈魂，或兩張憑證不屬於同一個玩家"
+            "description": "Forbidden"
           },
           "404": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "任務或地標不存在"
+            "description": "Not Found"
           },
           "422": {
             "content": {
@@ -1301,11 +1309,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "今日地標辨識配額已用完"
+            "description": "Too Many Requests"
           }
         },
         "security": [
@@ -1313,7 +1321,7 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Landmark Photo",
+        "summary": "Upload Landmark Photo",
         "tags": [
           "body"
         ]
@@ -1321,7 +1329,7 @@
     },
     "/api/v1/resonance/{spirit_id}": {
       "get": {
-        "description": "S8．共鳴進度查詢（#35）。\n\n「還沒開始」回 0 而不是 404——前端要能直接畫一條 0/10 的進度條。\n地標不存在或已下架才是 404。",
+        "description": "S5 / GET /api/v1/resonance/{spirit_id} 共鳴進度查詢（BE#35）。\n\n1. 驗證 Session Token。\n2. 驗證 spirit 存在且 is_active=True (否則 404)。\n3. 動態依 resonance_value 計算 stage (0~3) 與 next_threshold (10/40/100)。\n4. 未曾互動的玩家回傳 0 點（HTTP 200）。",
         "operationId": "get_resonance_api_v1_resonance__spirit_id__get",
         "parameters": [
           {
@@ -1349,21 +1357,21 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "Session token 無效或未提供"
+            "description": "Unauthorized"
           },
           "404": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "靈魂不存在，或已下架（is_active=false）"
+            "description": "Not Found"
           },
           "422": {
             "content": {
@@ -1416,31 +1424,31 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "Session token 無效或未提供"
+            "description": "Unauthorized"
           },
           "403": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "不在感應範圍內"
+            "description": "Forbidden"
           },
           "404": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "靈魂不存在，或已下架（is_active=false）"
+            "description": "Not Found"
           },
           "422": {
             "content": {
@@ -1466,7 +1474,7 @@
     },
     "/api/v1/spirits/{place_id}": {
       "get": {
-        "description": "對應對外 API 清單：GET /api/v1/spirits/{placeId}。\n\n回應含 `orientation`（SDD v2.1 §10.2）：客戶端 S14 的 3DoF 定向服務靠它\n決定把角色固定在哪個方位，少了它城市靈魂只能永遠黏在螢幕正中央。",
+        "description": "對應對外 API 清單：GET /api/v1/spirits/{placeId}（Sprint1 先只回基本資料）。",
         "operationId": "get_spirit_api_v1_spirits__place_id__get",
         "parameters": [
           {
@@ -1494,11 +1502,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "靈魂不存在，或已下架（is_active=false）"
+            "description": "Not Found"
           },
           "422": {
             "content": {
@@ -1519,8 +1527,8 @@
     },
     "/api/v1/spirits/{place_id}/daily-event": {
       "get": {
-        "description": "S10．當日情境查詢（#26）。\n\n**無需驗證**——這是公開的世界狀態，不含任何玩家資料。\n\n## 永遠不回空畫面\n\n    今天的快取 → 沒有就回最近一次的（通常是昨天）→ 再沒有就回人工預寫保底\n\n排程延遲、排程失敗、新地標剛上線都會讓今天的快取不存在，而它們全都是會發生\n的事。玩家不該因為我們的排程打嗝而看到空白。\n\n⚠️ 注意跟 404 的分界：**地標不存在 → 404**；**地標存在但沒內容 → 200 ＋\n保底**。前者是玩家問錯了東西，後者是我們還沒準備好。",
-        "operationId": "get_daily_event_endpoint_api_v1_spirits__place_id__daily_event_get",
+        "description": "S10 / GET /api/v1/spirits/{placeId}/daily-event 當日情境查詢（BE#26）。\n\n1. 公開世界狀態端點，無需 Token 驗證。\n2. 驗證地標存在且 is_active=True (否則回傳 404)。\n3. 優先回傳當日快取；若無則回傳昨日快取；若皆無則回傳人工保底內容（均回傳 HTTP 200）。",
+        "operationId": "get_daily_event_api_v1_spirits__place_id__daily_event_get",
         "parameters": [
           {
             "in": "path",
@@ -1547,11 +1555,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "靈魂不存在，或已下架（is_active=false）"
+            "description": "Not Found"
           },
           "422": {
             "content": {
@@ -1564,7 +1572,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Get Daily Event Endpoint",
+        "summary": "Get Daily Event",
         "tags": [
           "body"
         ]
@@ -1572,7 +1580,7 @@
     },
     "/api/v1/spirits/{place_id}/dialogue": {
       "post": {
-        "description": "對話端點（**Phase 2 可用版**，#42）。\n\n    Session ＋（Encounter 或 Sense）\n      → 配額（#32）\n      → B12 招呼比對（命中就直接回，不呼叫 Gemini）\n      → B2 組裝（#12）→ B1 生成（#8）→ B10 語音（#21）\n      → B7 短期記憶寫入\n\n**B4 安全邊界不在這條路徑上**——那是 Phase 3（#45）。目前 Prompt 用 B2 的\n最小可用組裝（沒有 embedding，所以沒有長期記憶；沒有當日情境）。\n\n## 順序不是隨意的\n\n配額是**第一道關卡**（SDD v1 §3）。它排在最前面的理由跟 B4 排在 B2 之前\n一樣：被擋下的請求不該讓下游付出任何成本。B12 排在生成之前，是因為命中\n預寫台詞時完全不需要模型——那是 B12 的全部價值（零成本、零延遲）。\n\n## 三種 token 的驗證邏輯不共用（SDD 第6節）\n\nSession ＋ Encounter 或 Session ＋ Sense 都可以。Encounter 代表「你真的\n到了現場（50m）」，Sense 代表「你在感應範圍內（150m），可以隔空聊天」。\n兩者換到的對話能力相同，差別在別的端點。",
+        "description": "對話端點（完整版，v2.1 §13.5 Phase 3）。\n\n配額 (BE#32) -> B12 固定招呼 -> B4 安全檢查 (BE#11) -> B2 Prompt 組裝 (BE#12)\n-> B1 Gemini -> B10 TTS -> B7 短期記憶寫入",
         "operationId": "dialogue_api_v1_spirits__place_id__dialogue_post",
         "parameters": [
           {
@@ -1642,31 +1650,31 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "Session token 無效或未提供"
+            "description": "Unauthorized"
           },
           "403": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "憑證屬於別的靈魂，或兩張憑證不屬於同一個玩家"
+            "description": "Forbidden"
           },
           "404": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "靈魂不存在，或已下架（is_active=false）"
+            "description": "Not Found"
           },
           "422": {
             "content": {
@@ -1682,11 +1690,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "今日對話配額已用完"
+            "description": "Too Many Requests"
           }
         },
         "security": [
@@ -1729,31 +1737,31 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "Session token 無效或未提供"
+            "description": "Unauthorized"
           },
           "403": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "不在召喚半徑內"
+            "description": "Forbidden"
           },
           "404": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/HTTPErrorResponse"
                 }
               }
             },
-            "description": "靈魂不存在，或已下架（is_active=false）"
+            "description": "Not Found"
           },
           "422": {
             "content": {

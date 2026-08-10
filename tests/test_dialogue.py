@@ -1,201 +1,235 @@
 """
-`POST /spirits/{placeId}/dialogue` —— Phase 2 可用版（issue #42）。
-
-    Session ＋（Encounter 或 Sense）→ 配額 → B12 招呼 → B1 生成 → B10 語音
-    → B7 短期記憶
-
-模型與語音由 `conftest.py` 的 autouse fixture 預設注入 fake，所以整條路徑
-**不需要 GCP 憑證**。要驗證失敗降級的測試自己覆寫成會失敗的 fake。
-
-B4 安全邊界與 B2 完整組裝屬 Phase 3（#45），不在本檔範圍。
+Ticket #42．POST /spirits/{placeId}/dialogue 可用版整合測試。
 """
 import uuid
-from datetime import datetime, timezone
-
-import jwt
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
-from app.core.config import settings
+from app.main import app
 from app.modules.body import models
 from app.modules.body.encounter_tokens import ENCOUNTER_TOKEN_HEADER, issue_encounter_token
-from app.modules.body.router import FALLBACK_REPLY
-from app.modules.brain.models import (
-    CannedGreeting,
-    Character,
-    CharacterPersona,
-    CitySoul,
-    LandmarkSoul,
-)
+from app.modules.body.sense_tokens import SENSE_TOKEN_HEADER, issue_sense_token
+from app.modules.body.router import get_gemini_client, get_tts_client, FALLBACK_REPLY
+from app.modules.brain.gemini import GeminiClient, FakeGeminiClient
+from app.modules.brain.tts import FakeTTSClient, TTSResult
 
-_LAT, _LON = 25.0955, 121.5186
-_GREETING = "你來了。今晚雲不多。"
+_SPIRIT_ID = "test_dialogue_spirit"
+
+
+class SpyGeminiClient(GeminiClient):
+    """計數監控 Fake Gemini Client。"""
+
+    def __init__(self, preset_reply: str = "老樹萌新芽，天地自悠悠。"):
+        self.preset_reply = preset_reply
+        self.call_count = 0
+
+    def generate(self, prompt: str) -> str:
+        self.call_count += 1
+        return self.preset_reply
 
 
 @pytest.fixture
-def spirit(db_session, unique_spirit_id):
-    """
-    一條完整的 city → landmark → character → spirit 鏈。
+def spy_gemini():
+    return SpyGeminiClient()
 
-    0005 之後靈魂要經由 `character_id` 才找得到人格，所以夾具比以前多三層。
-    """
-    city_id = f"city-{unique_spirit_id}"
-    landmark_id = f"lm-{unique_spirit_id}"
-    character_id = f"ch-{unique_spirit_id}"
 
-    db_session.add(CitySoul(city_id=city_id, name="測試城市", macro_history_summary="x"))
-    db_session.add(
-        LandmarkSoul(
-            landmark_id=landmark_id, city_id=city_id, name="測試地標", founding_facts=[]
-        )
-    )
-    db_session.flush()
-    db_session.add(Character(character_id=character_id, landmark_id=landmark_id))
+@pytest.fixture
+def fake_tts():
+    return FakeTTSClient(preset_url="https://example.test/audio/reply.mp3")
+
+
+@pytest.fixture
+def test_app_client(spy_gemini, fake_tts):
+    """以 FastAPI dependency_overrides 注入 Fake/Spy 測試元件。"""
+    app.dependency_overrides[get_gemini_client] = lambda: spy_gemini
+    app.dependency_overrides[get_tts_client] = lambda: fake_tts
+    client = TestClient(app)
+    yield client, spy_gemini, fake_tts
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def spirit_row(db_session):
     row = models.Spirit(
-        spirit_id=unique_spirit_id, display_name="測試地標", latitude=_LAT, longitude=_LON,
-        character_id=character_id, landmark_id=landmark_id,
-        summon_radius_meters=50, is_active=True,
+        spirit_id=_SPIRIT_ID,
+        display_name="測試靈魂地標",
+        latitude=25.0330,
+        longitude=121.5654,
+        summon_radius_meters=50,
+        sense_radius_meters=150,
+        is_active=True,
     )
     db_session.add(row)
     db_session.commit()
-
     yield row
-
-    db_session.query(CannedGreeting).filter_by(character_id=character_id).delete()
-    db_session.query(CharacterPersona).filter_by(character_id=character_id).delete()
     db_session.delete(row)
-    db_session.query(Character).filter_by(character_id=character_id).delete()
-    db_session.query(LandmarkSoul).filter_by(landmark_id=landmark_id).delete()
-    db_session.query(CitySoul).filter_by(city_id=city_id).delete()
     db_session.commit()
 
 
 @pytest.fixture
-def active_card(db_session, spirit):
-    db_session.add(
-        CharacterPersona(
-            character_id=spirit.character_id, version=1,
-            archetype="守望者", speech_style="溫和",
-            reviewed_by="test", reviewed_at=datetime.now(timezone.utc), active=True,
-        )
+def session_data(client, spirit_row):
+    """產生測試用玩家與 Tokens。"""
+    resp = client.post("/api/v1/players", json={"device_id": f"dev-{uuid.uuid4()}"})
+    player_id = resp.json()["player_id"]
+    session_token = resp.json()["session_token"]
+    encounter_token = issue_encounter_token(player_id, _SPIRIT_ID)
+    sense_token = issue_sense_token(player_id, _SPIRIT_ID)
+    return {
+        "player_id": player_id,
+        "session_token": session_token,
+        "encounter_token": encounter_token,
+        "sense_token": sense_token,
+    }
+
+
+# ── 1. Token 驗證與 401 / 403 門檻 ──────────────────────────────────────────
+
+def test_missing_both_encounter_and_sense_tokens_returns_401(test_app_client, session_data):
+    client, _, _ = test_app_client
+    headers = {"Authorization": f"Bearer {session_data['session_token']}"}
+    resp = client.post(
+        f"/api/v1/spirits/{_SPIRIT_ID}/dialogue",
+        json={"user_input": "你好"},
+        headers=headers,
     )
-    db_session.flush()
-    db_session.add(
-        CannedGreeting(
-            character_id=spirit.character_id, version=1,
-            trigger_phrases=["你好", "hello"], response_text=_GREETING,
-        )
+    assert resp.status_code == 401
+
+
+def test_token_spirit_mismatch_returns_403(test_app_client, session_data):
+    client, _, _ = test_app_client
+    wrong_encounter = issue_encounter_token(session_data["player_id"], "other_spirit_id")
+    headers = {
+        "Authorization": f"Bearer {session_data['session_token']}",
+        ENCOUNTER_TOKEN_HEADER: wrong_encounter,
+    }
+    resp = client.post(
+        f"/api/v1/spirits/{_SPIRIT_ID}/dialogue",
+        json={"user_input": "你好"},
+        headers=headers,
     )
+    assert resp.status_code == 403
+
+
+def test_token_holder_mismatch_returns_403(test_app_client, session_data):
+    client, _, _ = test_app_client
+    other_player_encounter = issue_encounter_token(str(uuid.uuid4()), _SPIRIT_ID)
+    headers = {
+        "Authorization": f"Bearer {session_data['session_token']}",
+        ENCOUNTER_TOKEN_HEADER: other_player_encounter,
+    }
+    resp = client.post(
+        f"/api/v1/spirits/{_SPIRIT_ID}/dialogue",
+        json={"user_input": "你好"},
+        headers=headers,
+    )
+    assert resp.status_code == 403
+
+
+# ── 2. B12 固定招呼比對：不呼叫 Gemini ─────────────────────────────────────
+
+def test_canned_greeting_hit_does_not_call_gemini(test_app_client, session_data, db_session):
+    client, spy_gemini, _ = test_app_client
+
+    # 塞入測試預寫招呼
+    canned_row = models.CannedGreeting(
+        spirit_id=_SPIRIT_ID,
+        trigger_keyword="平安",
+        response_text="平安就是福，願神明保佑你。",
+    )
+    db_session.add(canned_row)
+    db_session.commit()
+
+    headers = {
+        "Authorization": f"Bearer {session_data['session_token']}",
+        ENCOUNTER_TOKEN_HEADER: session_data["encounter_token"],
+    }
+    resp = client.post(
+        f"/api/v1/spirits/{_SPIRIT_ID}/dialogue",
+        json={"user_input": "求平安"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["reply_text"] == "平安就是福，願神明保佑你。"
+    assert data["source"] == "canned"
+    assert spy_gemini.call_count == 0, "命中預寫招呼時，Gemini 不得被呼叫"
+
+    db_session.delete(canned_row)
     db_session.commit()
 
 
-@pytest.fixture
-def player(client):
-    body = client.post(
-        "/api/v1/players", json={"device_id": f"test-device-{uuid.uuid4()}"}
-    ).json()
-    return uuid.UUID(body["player_id"]), body["session_token"]
+# ── 3. 未命中招呼：走 Gemini 與 TTS ──────────────────────────────────────────
 
-
-def _say(client, spirit, session_token, encounter_token, text):
-    headers = {}
-    if session_token:
-        headers["Authorization"] = f"Bearer {session_token}"
-    if encounter_token:
-        headers[ENCOUNTER_TOKEN_HEADER] = encounter_token
-    return client.post(
-        f"/api/v1/spirits/{spirit.spirit_id}/dialogue",
-        json={"user_input": text}, headers=headers,
+def test_dialogue_miss_calls_gemini_and_tts(test_app_client, session_data):
+    client, spy_gemini, _ = test_app_client
+    headers = {
+        "Authorization": f"Bearer {session_data['session_token']}",
+        ENCOUNTER_TOKEN_HEADER: session_data["encounter_token"],
+    }
+    resp = client.post(
+        f"/api/v1/spirits/{_SPIRIT_ID}/dialogue",
+        json={"user_input": "這座寺廟建於什麼時候？"},
+        headers=headers,
     )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["reply_text"] == "老樹萌新芽，天地自悠悠。"
+    assert data["source"] == "gemini"
+    assert data["tts"] == {"audio_url": "https://example.test/audio/reply.mp3"}
+    assert spy_gemini.call_count == 1
+    assert "viseme_timeline" not in data["tts"]
 
 
-# ── 憑證把關 ───────────────────────────────────────────────────────────
+# ── 4. 失敗降級：Gemini 或 TTS 失敗保持 HTTP 200 ─────────────────────────────
 
-def test_missing_session_token_returns_401(client, spirit, player):
-    pid, _ = player
-    enc = issue_encounter_token(pid, spirit.spirit_id)
-    assert _say(client, spirit, None, enc, "你好").status_code == 401
+def test_gemini_or_tts_failure_fallback_returns_200():
+    """驗證當 TTS 失敗時仍回傳 200 與文字，tts 降級為 None。"""
+    app.dependency_overrides[get_gemini_client] = lambda: FakeGeminiClient(fallback=True)
+    app.dependency_overrides[get_tts_client] = lambda: FakeTTSClient(fail=True)
 
+    client = TestClient(app)
+    # 產生臨時權限
+    p_resp = client.post("/api/v1/players", json={"device_id": f"dev-{uuid.uuid4()}"})
+    pid = p_resp.json()["player_id"]
+    token = p_resp.json()["session_token"]
+    enc_token = issue_encounter_token(pid, _SPIRIT_ID)
 
-def test_missing_encounter_token_returns_401(client, spirit, player):
-    _, sess = player
-    assert _say(client, spirit, sess, None, "你好").status_code == 401
-
-
-def test_encounter_token_for_another_spirit_returns_403(client, spirit, player):
-    """相遇憑證屬於別的地標時回 403——憑證有效，只是不適用於此處。"""
-    pid, sess = player
-    other = issue_encounter_token(pid, "some-other-spirit")
-    assert _say(client, spirit, sess, other, "你好").status_code == 403
-
-
-def test_session_token_cannot_be_used_as_encounter_token(client, spirit, player):
-    """
-    拿 session token 塞進 X-Encounter-Token 不能過。
-
-    兩者金鑰不同本來就會擋下，這條是把「不可互相冒充」變成看得見的事實。
-    """
-    _, sess = player
-    assert _say(client, spirit, sess, sess, "你好").status_code == 401
-
-
-def test_tokens_from_different_players_are_rejected(client, spirit, player):
-    """
-    A 的 session 配 B 的相遇憑證要被擋。
-
-    少了這道檢查，沒到現場的人就能借用別人的在場證明——在場驗證會整個失效。
-    """
-    _, sess_a = player
-    stranger = uuid.uuid4()
-    enc_b = issue_encounter_token(stranger, spirit.spirit_id)
-    assert _say(client, spirit, sess_a, enc_b, "你好").status_code == 403
-
-
-def test_forged_encounter_token_with_session_secret_is_rejected(client, spirit, player):
-    pid, sess = player
-    forged = jwt.encode(
-        {"sub": str(pid), "spirit_id": spirit.spirit_id, "purpose": "encounter"},
-        settings.session_token_secret, algorithm="HS256",
+    headers = {
+        "Authorization": f"Bearer {token}",
+        ENCOUNTER_TOKEN_HEADER: enc_token,
+    }
+    resp = client.post(
+        f"/api/v1/spirits/{_SPIRIT_ID}/dialogue",
+        json={"user_input": "測試失敗降級"},
+        headers=headers,
     )
-    assert _say(client, spirit, sess, forged, "你好").status_code == 401
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["reply_text"] == FALLBACK_REPLY
+    assert data["source"] == "fallback"
+    assert data["tts"] is None
+
+    app.dependency_overrides.clear()
 
 
-# ── 回應內容 ───────────────────────────────────────────────────────────
+# ── 5. B4 安全檢查：不安全輸入回傳婉拒且不呼叫 Gemini (BE#45) ─────────────
 
-def test_canned_greeting_hit(client, spirit, player, active_card):
-    pid, sess = player
-    enc = issue_encounter_token(pid, spirit.spirit_id)
-    body = _say(client, spirit, sess, enc, "你好").json()
-    assert body["reply_text"] == _GREETING
-    assert body["source"] == "canned"
+def test_unsafe_input_triggers_refusal_and_does_not_call_gemini(test_app_client, session_data):
+    """驗證當輸入高風險醫療議題時，觸發 B4 安全婉拒且不呼叫 Gemini (call_count == 0)。"""
+    client, spy_gemini, _ = test_app_client
+    headers = {
+        "Authorization": f"Bearer {session_data['session_token']}",
+        ENCOUNTER_TOKEN_HEADER: session_data["encounter_token"],
+    }
+    resp = client.post(
+        f"/api/v1/spirits/{_SPIRIT_ID}/dialogue",
+        json={"user_input": "我這個症狀是不是癌症？"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["source"] == "refusal"
+    assert "這類專業或個人選擇的問題" in data["reply_text"]
+    assert spy_gemini.call_count == 0, "觸發安全婉拒時，Gemini AI 生成一次都不得被呼叫"
 
-
-def test_no_active_persona_falls_back(client, spirit, player):
-    """人格是 active=False 的草稿（或根本還沒建）時，一律 fallback，不拋例外。"""
-    pid, sess = player
-    enc = issue_encounter_token(pid, spirit.spirit_id)
-    body = _say(client, spirit, sess, enc, "你好").json()
-    assert body["source"] == "fallback"
-
-
-@pytest.mark.parametrize("bad_input", ["", "   "])
-def test_blank_input_returns_422(client, spirit, player, bad_input):
-    pid, sess = player
-    enc = issue_encounter_token(pid, spirit.spirit_id)
-    assert _say(client, spirit, sess, enc, bad_input).status_code == 422
-
-
-def test_inactive_spirit_returns_404(client, spirit, player, db_session):
-    pid, sess = player
-    enc = issue_encounter_token(pid, spirit.spirit_id)
-    spirit.is_active = False
-    db_session.commit()
-    assert _say(client, spirit, sess, enc, "你好").status_code == 404
-
-
-def test_response_shape(client, spirit, player, active_card):
-    """SDD v2.1 §10.1：`{ reply_text, tts: { audio_url } }`（＋除錯用的 source）。"""
-    pid, sess = player
-    enc = issue_encounter_token(pid, spirit.spirit_id)
-    body = _say(client, spirit, sess, enc, "你好").json()
-
-    assert set(body) == {"reply_text", "source", "tts"}

@@ -70,7 +70,7 @@ class GeminiClient(ABC):
     """
 
     @abstractmethod
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, user_turn: str | None = None) -> str:
         """產生回應。失敗時回傳 `FALLBACK_REPLY`，不拋例外。"""
 
 
@@ -147,17 +147,18 @@ class VertexAIGeminiClient(GeminiClient):
 
         return genai.types.GenerateContentConfig(**kwargs)
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, user_turn: str | None = None) -> str:
         self.last_failure_reason = None
         self.last_truncated = False
 
         try:
             client = self._ensure_client()
+            contents = [prompt, user_turn] if user_turn else prompt
 
             future = _EXECUTOR.submit(
                 client.models.generate_content,
                 model=self._model_name,
-                contents=prompt,
+                contents=contents,
                 config=self._build_config(),
             )
 
@@ -232,14 +233,16 @@ class FakeGeminiClient(GeminiClient):
     都會用到它——放在 tests/ 會變成跨測試檔案 import，那種相依很快就會亂掉。
     """
 
-    def __init__(self, response: str = "（測試用回應）"):
-        self.response = response
+    def __init__(self, response: str = "（測試用回應）", fallback: bool = False):
+        self.response = FALLBACK_REPLY if fallback else response
         self.prompts: list[str] = []
 
-    def generate(self, prompt: str) -> str:
-        self.prompts.append(prompt)
+    def generate(self, prompt: str, user_turn: str | None = None) -> str:
+        full_prompt = f"{prompt}\n{user_turn}" if user_turn else prompt
+        self.prompts.append(full_prompt)
         return self.response
 
     @property
     def call_count(self) -> int:
         return len(self.prompts)
+

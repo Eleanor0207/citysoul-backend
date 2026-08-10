@@ -1,8 +1,8 @@
 """
 身體模組資料表：players、spirits。
 
-`daily_event_cache` 已於 0008 建立（S10／#26）。`push_subscriptions` 仍未建，
-排在 S11（#39）——不要因為「順手」提早建一張還沒有人寫入的表。
+daily_event_cache／push_subscriptions 排在後面的 Sprint（對應 S10/S11），
+現在先不建，避免一次生太多還沒用到的表。
 
 刻意不存在的表：任何形式的「玩家移動軌跡 / 位置歷史」表。
 這是 CONTEXT.md「在場紀錄」與「前景即時情境反應」兩條定義疊加後的硬限制，
@@ -121,17 +121,9 @@ class Spirit(Base):
     longitude = Column(Numeric(9, 6, asdecimal=False), nullable=False)
     summon_radius_meters = Column(Integer, nullable=False, default=50)
     sense_radius_meters = Column(Integer, nullable=False, default=150, server_default="150")
-    is_active = Column(Boolean, nullable=False, default=True)
-
-    # 靈魂方位（SDD v2.1 §10.2），供客戶端 S14 的 3DoF 定向使用。
-    # `bearing_deg` 是相對召喚點的方位角（真北 0°、順時針），
-    # `height_offset_m` 是相對玩家視線高度的垂直偏移。
-    #
-    # 用浮點數而非隔壁經緯度的 NUMERIC 是刻意的：經緯度是遊戲規則的輸入
-    # （50m 內才算在場），不該帶浮點誤差；方位只是渲染參數，差 0.0001 度
-    # 沒有玩家察覺得到，也不改變任何判定結果。
     bearing_deg = Column(Float, nullable=False, default=0.0, server_default="0")
     height_offset_m = Column(Float, nullable=False, default=0.0, server_default="0")
+    is_active = Column(Boolean, nullable=False, default=True)
 
     __table_args__ = (
         UniqueConstraint("character_id", name="uq_spirits_character_id"),
@@ -310,16 +302,7 @@ class EncounterCollection(Base):
     collection_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     player_id = Column(UUID(as_uuid=True), ForeignKey("players.player_id"), nullable=False)
     place_id = Column(String(64), ForeignKey("spirits.spirit_id"), nullable=False)
-    # 裝置端本機辨識出來的標籤字串（0004 的設計），不是位置。
     recognized_label = Column(String(128), nullable=True)
-    # 雲端 B13（#22）的判定結果，決定要不要給特別徽章。
-    landmark_recognized = Column(Boolean, nullable=False, server_default="false", default=False)
-    # 這次收藏**有沒有真的入帳**共鳴值。
-    #
-    # UNIQUE(player_id, place_id) 保證一個地標只加一次，所以「有這一列」不等於
-    # 「這次加了值」——重複收藏時列還在，但沒有入帳。少了這個欄位，就沒辦法從
-    # 資料本身分辨那兩種情況。
-    resonance_awarded = Column(Boolean, nullable=False, server_default="false", default=False)
     collected_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     __table_args__ = (
@@ -329,74 +312,33 @@ class EncounterCollection(Base):
 
 class DailyEventCache(Base):
     """
-    S10．當日情境快取（SDD §3.1／#26）。
-
-    內容由 B9 生成（#20），這張表只管「什麼時候生成的、放在哪」——生成與快取
-    刻意分屬不同模組（v2.1 §6.4）。
-
-    PK `(place_id, event_date)` 保證「一個地標一天一筆」。排程重複觸發是正常的
-    （重試、多實例、手動補跑），所以去重在資料庫層級，不靠排程自己記得。
+    S10．當日情境快取表（SDD 第3.1節）。
+    主鍵為 (place_id, event_date)，用來快取由 B9 生成的當日情境內容。
     """
 
     __tablename__ = "daily_event_cache"
 
     place_id = Column(String(64), ForeignKey("spirits.spirit_id"), primary_key=True)
-    # 台北日期。存 DATE 而不是帶時區的時間點——後者會逼每個讀取端自己再算一次
-    # 「這是台北的哪一天」，而那正是 #15 踩過的坑。
     event_date = Column(Date, primary_key=True)
     content = Column(JSONB, nullable=False)
     generated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    # 給清理工作用的訊號，**不是讀取時的過濾條件**：保底策略是「今天沒有就回
-    # 昨天」，所以過期的內容仍然有用——它比空畫面好。
     expires_at = Column(DateTime(timezone=True), nullable=True)
-
-
-class AvatarAsset(Base):
-    """
-    Unity Addressables 的 remote catalog／bundle 位置與版本（#38）。
-
-    ## 版本是這張表存在的理由
-
-    客戶端要能問「我快取的這版還是最新的嗎」，而不是每次啟動都重抓整包。
-    所以 `version` 必須**改了要變、沒改要穩定不變**——它是一個明確寫入的欄位，
-    刻意**不從** `updated_at` 或內容 hash 算出來：那樣的話一次無關的資料列更新
-    就會讓所有客戶端重抓。
-
-    catalog 與 bundle 分成兩個欄位，因為 Addressables 的索引與實際內容可能放在
-    不同路徑甚至不同 bucket。合成一個欄位的話，之後要分開就是破壞性變更。
-    """
-
-    __tablename__ = "avatar_assets"
-
-    avatar_id = Column(String(64), primary_key=True)
-    catalog_url = Column(Text, nullable=False)
-    bundle_url = Column(Text, nullable=False)
-    version = Column(String(64), nullable=False)
-    updated_at = Column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
-    )
 
 
 class PushSubscription(Base):
     """
-    S11．推播訂閱（SDD v1 §3.1／#39）。
-
-    主鍵是 `player_id`——換手機、token 輪替時是**覆蓋**而不是累積。用代理鍵的話，
-    一個玩家會慢慢長出十幾列失效的 token，而群發時得自己挑「最新的那個」，
-    那個判斷遲早會出錯然後推播送到別人的舊裝置上。
-
-    退訂用 `is_subscribed=false` 而不是刪列：token 還有用，玩家重新訂閱時不需要
-    重新註冊裝置。
-
-    ⚠️ **沒有任何位置欄位。** 推播是通知不是內容——玩家點進來後才呼叫既有端點
-    取內容，所以這張表不需要知道他在哪裡。
+    S11．訊號推播訂閱表（SDD 第3.1節）。
+    `player_id` 為主鍵（PK, FK players），換手機/token 輪替時進行覆蓋。
+    `is_subscribed` 控制退訂狀態，退訂後絕不發送推播。
     """
 
     __tablename__ = "push_subscriptions"
 
     player_id = Column(UUID(as_uuid=True), ForeignKey("players.player_id"), primary_key=True)
     push_token = Column(String(256), nullable=False)
-    is_subscribed = Column(Boolean, nullable=False, server_default="true", default=True)
+    is_subscribed = Column(Boolean, nullable=False, default=True)
     updated_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
+

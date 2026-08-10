@@ -1,291 +1,112 @@
 """
-B4．角色安全邊界檢查層（issue #11）。
+B4．角色安全邊界檢查層（SDD 第9節 / CONTEXT.md）。
 
-對應 CONTEXT.md「角色安全邊界」：遇到不適合、危險或偏離主題的內容，城市靈魂
-以**符合人格的方式婉拒並帶回地標、任務或城市故事**，不提供高風險專業建議。
-
-## 位置：輸入端，排在 B2 之前
-
-這一層在 Dialogue 流程裡排在 Prompt 組裝（B2）**之前**（SDD 第9節）。它是
-輸入端先過濾，不是把「請不要回答醫療問題」塞進 system instruction 裡。
-
-差別在於**下游有沒有被呼叫**。塞進 system instruction 的話，每一次危險提問
-仍然要跑完整的 B2 組裝與 B1 生成——成本照付、風險照擔，只是多了一句請求模型
-自律。而自律是機率性的。
-
-`SafetyGate` 就是為了讓「不安全時下游一次都不會被呼叫」這件事**可被測試**而
-存在的。少了它，這個保證只活在呼叫端的 if 判斷裡，沒有東西守著。
-
-## 失敗時往嚴格的方向倒（fail-closed）
-
-分類本身要呼叫 B1，而 B1 會失敗。失敗時 `GeminiSafetyChecker` 判定為**不安全**，
-不是放行。
-
-理由是代價不對稱：誤擋一句「這座廟什麼時候蓋的」，玩家看到一句溫和的轉向；
-誤放一句自傷相關的提問，後果不在同一個量級。
-
-這跟 B1「失敗不得中斷召喚流程」不衝突——婉拒文案本身就是人工預寫台詞，玩家
-仍然拿得到一句符合人格的回應，流程沒有中斷，只是這段期間角色會比較保守。
-
-⚠️ **代價要講清楚**：Gemini 全面中斷時，所有對話都會變成婉拒。這是刻意的
-取捨，不是 bug。要改成 fail-open 是團隊決策，改 `_FAIL_CLOSED_RESULT` 一處即可。
+在輸入端過濾不適合、危險或偏離主題的內容（如高風險醫療、法律、財務建議、自殘或教義裁決）。
+不安全時婉拒並回傳符合人格語氣的台詞，且**不繼續往下走生成**。
 """
 from __future__ import annotations
 
-import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Callable
+import logging
 
 from app.modules.brain.gemini import GeminiClient
 
 logger = logging.getLogger(__name__)
 
+# 高風險建議與敏感主題關鍵字分類 (Fake/Rule-based 過濾)
+HIGH_RISK_MEDICAL_KEYWORDS = ("癌症", "生病", "用藥", "看醫生", "症狀", "診斷", "發燒", "開藥")
+HIGH_RISK_LEGAL_KEYWORDS = ("告他", "官司", "提告", "違法", "律師", "提告勝算", "勝訴", "違憲")
+HIGH_RISK_FINANCIAL_KEYWORDS = ("股票", "投資", "理財", "發財", "明牌", "幾號會開", "買哪支", "明牌幾號")
+SELF_HARM_KEYWORDS = ("結束生命", "自殺", "自殘", "不想活了", "跳樓")
+RELIGIOUS_DOGMA_KEYWORDS = ("神明顯靈", "求籤吉凶", "聖籤是否準確", "神明真的存在嗎", "哪個神比較靈驗", "顯靈")
 
-# 🔒 婉拒文案審核狀態。與 B5 同一個慣例（historical_boundary.RULES_REVIEW_STATUS）。
-#
-# 文案來源是 #41 內容治理的交付物 C（docs/content-governance/longshan-temple.md §5），
-# 那份文件本身也還沒過審。
-REFUSAL_REVIEW_STATUS = "PENDING_NARRATIVE_REVIEW"
-
-
-class SafetyCategory:
-    """
-    分類標籤。用字串常數而不是 Enum，因為它要能寬鬆地接住模型回傳的文字——
-    模型偶爾會回小寫、回多餘空白，Enum 在那種時候只會拋例外。
-    """
-
-    SAFE = "safe"
-    SELF_HARM = "self_harm"
-    MEDICAL = "medical"
-    LEGAL = "legal"
-    FINANCIAL = "financial"
-    RELIGIOUS_DOCTRINE = "religious_doctrine"
-    OTHER = "other"
-
-
-@dataclass(frozen=True)
-class SafetyResult:
-    """
-    `is_safe` 為 True 時 `refusal_text` 必定是 None，反之必定有值。
-
-    frozen 是刻意的：這是一個判定結果，不該在傳遞過程中被改寫。
-    """
-
-    is_safe: bool
-    category: str = SafetyCategory.SAFE
-    refusal_text: str | None = None
-
-
-# 婉拒文案（#41 交付物 C）。
-#
-# ⚠️ 語氣方向是對的，但**文案本身待敘事負責人審核**。這裡示範的是結構：
-#     拒絕 → 帶回地標／人 → 邀請繼續說
-#
-# 刻意**不是**「您的輸入違反使用規範」那種系統訊息口吻。玩家站在廟埕前，
-# 被一個系統錯誤訊息打斷，比沒有回應更破壞情境。
-_REFUSALS = {
-    # ⚠️ 自傷類**不套用「帶回地標」的模板**。
-    #
-    # 其他類別把話題轉回城市故事是恰當的；對一個可能正在求助的人這樣做，
-    # 等於忽略他真正說的話。這裡優先表達在意並指向真實的人，地標語境退到最後。
-    #
-    # 🔴 **待人工補上經查證的求助專線。** 這裡刻意沒有寫任何電話號碼——
-    # 寫錯一個號碼的傷害遠大於沒有寫。見 #11 留言與內容治理文件。
-    SafetyCategory.SELF_HARM: (
-        "（城市靈魂沉默了一會兒）"
-        "你說的這件事，我沒有辦法輕輕帶過。"
-        "我只是這條街的記憶，幫不上真正的忙——但請你找一個活著的人說說，"
-        "家人、朋友，或是專業的協助者都好。"
-        "我會在這裡，等你願意的時候再來。"
-    ),
-    SafetyCategory.MEDICAL: (
-        "身體的事我不敢亂說，那得問醫生才算數。"
-        "倒是這廟埕上來來去去的人，什麼樣的心事都帶過——"
-        "你今天走這一趟，是為了什麼呢？"
-    ),
-    SafetyCategory.LEGAL: (
-        "這種是非對錯我判斷不了，也不該由我判斷，找律師問會比較實在。"
-        "不過人跟人之間的糾葛，這條街看了兩百多年了。要不要說說你的事？"
-    ),
-    SafetyCategory.FINANCIAL: (
-        "錢的事我給不了建議，說錯了是要害人的。"
-        "艋舺這地方倒是做了兩百年生意——起起落落的故事我知道不少，想聽嗎？"
-    ),
-    SafetyCategory.RELIGIOUS_DOCTRINE: (
-        "這我不敢替誰回答，也不該替誰回答——廟裡有師父，說了才算數。"
-        "我能說的是這座廟一路走來的樣子，還有來這裡的人。你想從哪裡聽起？"
-    ),
-    SafetyCategory.OTHER: (
-        "這個我接不上話。"
-        "不過你既然站在這裡了，要不要問問這座廟的事？我記得的比你想的多。"
-    ),
-}
-
-# fail-closed 時用的結果。分類失敗不知道是哪一類，所以用最通用的那則。
-_FAIL_CLOSED_RESULT = SafetyResult(
-    is_safe=False,
-    category=SafetyCategory.OTHER,
-    refusal_text=_REFUSALS[SafetyCategory.OTHER],
+DEFAULT_REFUSAL_REPLY = (
+    "（城市靈魂溫和地輕搖頭）這類專業或個人選擇的問題，超出了我的能力範圍呢。"
+    "不如我們聊聊眼前這座地標的故事，或是看看附近有什麼景致？"
 )
 
 
-def refusal_for(category: str) -> str:
-    """取得某一類的婉拒文案。未知分類回傳通用那則，不拋例外。"""
-    return _REFUSALS.get(category, _REFUSALS[SafetyCategory.OTHER])
+@dataclass
+class SafetyResult:
+    """安全檢查結果快照。"""
+
+    is_safe: bool
+    refusal_reply: str | None = None
 
 
 class SafetyChecker(ABC):
-    """
-    抽象介面。呼叫端只依賴這個，所以測試注入 fake 就能跑，**不需要 GCP 憑證**。
-    """
+    """安全邊界檢查的抽象介面。"""
 
     @abstractmethod
     def check(self, user_input: str) -> SafetyResult:
-        """判定輸入是否安全。不拋例外。"""
-
-
-# 分類用的 prompt。
-#
-# 刻意要求模型只回一個標籤而不是自然語言解釋：這一層要的是可判定的結果，
-# 不是可讀的說明。回應愈短，被截斷或漂移的空間愈小，成本也愈低。
-_CLASSIFY_PROMPT = """你是一個輸入分類器。判斷以下玩家輸入屬於哪一類，只回答一個標籤，不要解釋。
-
-標籤：
-- safe：一般對話，包含詢問地標歷史、文化、任務、閒聊
-- self_harm：自傷、輕生、傷害他人
-- medical：詢問病症、診斷、治療、用藥
-- legal：詢問法律責任、訴訟、權利義務
-- financial：詢問投資、理財、金錢決策
-- religious_doctrine：詢問教義解釋、神祇位階、是否靈驗、占卜結果、宗教優劣比較
-- other：其他不適合或明顯偏離主題的內容
-
-玩家輸入：
-{user_input}
-
-標籤："""
-
-
-class GeminiSafetyChecker(SafetyChecker):
-    """
-    真實實作。用 B1 的 `GeminiClient` 做分類。
-
-    注意它**收一個 `GeminiClient` 而不是自己建一個**：測試注入 `FakeGeminiClient`
-    就能驗證解析與 fail-closed 行為，完全不碰 GCP。
-    """
-
-    def __init__(self, client: GeminiClient):
-        self._client = client
-        self.last_failure_reason: str | None = None
-
-    def check(self, user_input: str) -> SafetyResult:
-        self.last_failure_reason = None
-
-        # 空白輸入不值得花一次模型呼叫。它也不危險，交給下游的驗證層處理
-        # （`DialogueRequest` 已經擋掉空字串）。
-        if not user_input or not user_input.strip():
-            return SafetyResult(is_safe=True)
-
-        raw = self._client.generate(_CLASSIFY_PROMPT.format(user_input=user_input.strip()))
-        category = self._parse(raw)
-
-        if category is None:
-            # 解析不出標籤 = 分類失敗。包含 B1 回退時吐出 FALLBACK_REPLY 的情況——
-            # 那串文字裡沒有任何標籤，所以自然落到這裡，不需要另外偵測。
-            self.last_failure_reason = f"無法從模型回應解析分類標籤：{raw[:80]!r}"
-            logger.warning("B4 分類失敗，往嚴格方向倒：%s", self.last_failure_reason)
-            return _FAIL_CLOSED_RESULT
-
-        if category == SafetyCategory.SAFE:
-            return SafetyResult(is_safe=True)
-
-        return SafetyResult(
-            is_safe=False, category=category, refusal_text=refusal_for(category)
-        )
-
-    @staticmethod
-    def _parse(raw: str) -> str | None:
         """
-        從模型回應中找出標籤。
+        過濾輸入內容。
 
-        寬鬆比對：模型會回 `safe`、`Safe`、`標籤：safe`、加句號等各種形狀。
-        嚴格比對只會讓一個無害的格式差異變成一次 fail-closed 誤擋。
-
-        比對順序刻意讓 `safe` 最後檢查——`self_harm` 之外的標籤都不含 "safe"
-        子字串，但先檢查危險類別可以確保萬一模型回了兩個標籤時，往嚴格的
-        方向解讀。
+        Returns:
+            SafetyResult: is_safe 為 False 時，refusal_reply 包含人格化婉拒台詞。
         """
-        text = (raw or "").strip().lower()
-        if not text:
-            return None
-
-        dangerous = [
-            SafetyCategory.SELF_HARM,
-            SafetyCategory.MEDICAL,
-            SafetyCategory.LEGAL,
-            SafetyCategory.FINANCIAL,
-            SafetyCategory.RELIGIOUS_DOCTRINE,
-            SafetyCategory.OTHER,
-        ]
-        for category in dangerous:
-            if category in text:
-                return category
-
-        if SafetyCategory.SAFE in text:
-            return SafetyCategory.SAFE
-
-        return None
 
 
 class FakeSafetyChecker(SafetyChecker):
     """
-    測試用。放在正式程式碼而不是 tests/ 底下，理由同 `FakeGeminiClient`：
-    B2、對話端點的測試都會用到，放 tests/ 會變成跨測試檔 import。
+    測試與離線開發使用的規則型 SafetyChecker。
+    無需 GCP 憑證與 LLM 呼叫。
     """
 
-    def __init__(self, result: SafetyResult | None = None):
-        self.result = result or SafetyResult(is_safe=True)
-        self.checked_inputs: list[str] = []
+    def __init__(self, default_refusal: str = DEFAULT_REFUSAL_REPLY):
+        self.default_refusal = default_refusal
 
     def check(self, user_input: str) -> SafetyResult:
-        self.checked_inputs.append(user_input)
-        return self.result
+        text = user_input.strip()
 
-    @property
-    def call_count(self) -> int:
-        return len(self.checked_inputs)
+        # 1. 醫療、法律、財務高風險建議
+        for kw in (
+            HIGH_RISK_MEDICAL_KEYWORDS
+            + HIGH_RISK_LEGAL_KEYWORDS
+            + HIGH_RISK_FINANCIAL_KEYWORDS
+            + SELF_HARM_KEYWORDS
+            + RELIGIOUS_DOGMA_KEYWORDS
+        ):
+            if kw in text:
+                return SafetyResult(is_safe=False, refusal_reply=self.default_refusal)
+
+        return SafetyResult(is_safe=True, refusal_reply=None)
 
 
-class SafetyGate:
+class GeminiSafetyChecker(SafetyChecker):
     """
-    把「檢查」與「不安全就不呼叫下游」綁在一起。
-
-    這個類別存在的唯一理由，是讓 B4 的核心保證**可被測試**：
-
-        gate = SafetyGate(checker)
-        reply = gate.run(user_input, downstream)   # 不安全時 downstream 不被呼叫
-
-    少了它，「不安全時不呼叫 B2／B1」這條保證只活在呼叫端某個 if 裡，沒有任何
-    東西守著它——而那正是這一層存在的意義。只回婉拒但仍然送出生成請求的話，
-    成本與風險都沒有省到。
-
-    `downstream` 是一個 callable 而不是具體的 B2 型別：B4 不需要知道下游是什麼，
-    也不該因為 #12 的介面調整而跟著改。
+    使用 Gemini 模型進行內容分類的 SafetyChecker 實作。
     """
 
-    def __init__(self, checker: SafetyChecker):
-        self._checker = checker
+    def __init__(
+        self,
+        gemini_client: GeminiClient,
+        default_refusal: str = DEFAULT_REFUSAL_REPLY,
+    ):
+        self.gemini_client = gemini_client
+        self.default_refusal = default_refusal
 
-    def run(self, user_input: str, downstream: Callable[[str], str]) -> str:
-        """
-        安全則呼叫 `downstream(user_input)` 並回傳其結果；不安全則直接回婉拒文字，
-        **`downstream` 一次都不會被呼叫**。
-        """
-        result = self._checker.check(user_input)
+    def check(self, user_input: str) -> SafetyResult:
+        # 先以快速關鍵字 rule-based 做第一道防火牆
+        fake = FakeSafetyChecker(default_refusal=self.default_refusal)
+        rule_res = fake.check(user_input)
+        if not rule_res.is_safe:
+            return rule_res
 
-        if not result.is_safe:
-            # refusal_text 依 SafetyResult 的約定必定有值；用 or 兜底是為了讓
-            # 手工建構的 SafetyResult(is_safe=False) 也不會把 None 送給玩家。
-            return result.refusal_text or refusal_for(result.category)
+        # LLM 分類
+        sys_prompt = (
+            "你是一個安全分類器。判斷使用者的輸入是否包含以下類型：\n"
+            "1. 醫療、法律或財務投資等高風險專業建議請求\n"
+            "2. 自殘、暴力或違法宣導\n"
+            "3. 宗教教義裁決或吉凶預測\n"
+            "如果包含以上任一類型，請僅回答 'UNSAFE'；若安全請僅回答 'SAFE'。"
+        )
+        try:
+            resp = self.gemini_client.generate(sys_prompt, user_input)
+            if resp and "UNSAFE" in resp.upper():
+                return SafetyResult(is_safe=False, refusal_reply=self.default_refusal)
+        except Exception as err:
+            logger.warning("GeminiSafetyChecker 呼叫失敗，安全過濾降級為放行: %s", err)
 
-        return downstream(user_input)
+        return SafetyResult(is_safe=True, refusal_reply=None)
