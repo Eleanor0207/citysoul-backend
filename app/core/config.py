@@ -53,34 +53,21 @@ class Settings(BaseSettings):
     gemini_max_output_tokens: int = 256
     gemini_timeout_seconds: float = 8.0
 
-    # B2 Prompt 組裝（#12）。SDD §10 標明這兩個數字**待實測調整**，所以它們是
-    # 設定而不是常數——組裝邏輯裡不該出現任何字面量，否則調整就要改程式碼。
+    # B10 Google Cloud TTS（issue #21）。同樣走 ADC，沒有憑證欄位。
     #
-    # 兩者都直接決定每輪的 prompt 長度，也就是成本與延遲（🔴 高風險項）。
-    prompt_memory_top_k: int = 3
-    prompt_recent_turns: int = 6
-
-    # B10 TTS（#21）。MVP 語言固定台灣繁體中文。
-    #
-    # ⚠️ **語言是設定，不是從文字自動偵測。** 自動偵測會讓一句混了英文地名的
-    # 台詞被判成英文，然後用英文腔唸出整句中文。玩家聽到的是角色破音，而我們
-    # 在 log 上看不到任何錯誤。
-    tts_language_code: str = "zh-TW"
-
-    # 留空表示讓 Google 依語言挑預設嗓音。要指定的話用完整名稱
-    # （例如 cmn-TW-Wavenet-A）——嗓音是角色的一部分，換嗓音等於換角色，
-    # 應該是一次明確的決定而不是預設值漂移的結果。
-    tts_voice_name: str | None = None
+    # MVP 語言固定台灣繁體中文（CONTEXT.md）——語言／語音代碼是設定值、不是
+    # 從文字內容自動偵測，這樣「角色說什麼腔調」是一個看得見、可審核的決定，
+    # 不是模型猜出來的副作用。
+    tts_language_code: str = "cmn-TW"
+    tts_voice_name: str = "cmn-TW-Wavenet-A"
     tts_timeout_seconds: float = 8.0
 
-    # 音檔存放的 GCS bucket。留空時真實實作會直接降級成「沒有語音」——
-    # 本機開發不該為了跑起來而被迫先開一個 bucket。
-    tts_audio_bucket: str | None = None
-
-    # 音檔的存活時間。對話語音是一次性的，沒有理由永久保存——那只會累積成本，
-    # 而且錄下了玩家聽過什麼。實際的清除靠 bucket 的 lifecycle rule，這個值
-    # 是簽章 URL 的有效期。
-    tts_audio_url_ttl_seconds: int = 3600
+    # 合成出來的音檔要有地方放才能回傳 URL（SDD：TTS 的媒體層是
+    #「Google Cloud TTS + Cloud Storage」）。跟 `app/config.py`（Secret
+    # Manager 版本，尚未接上任何程式碼）的 `citysoul-images` 是不同的桶——
+    # 那個放的是玩家拍照收藏，這個放的是系統合成的語音檔，權限與生命週期
+    # 沒有理由綁在一起管理。
+    gcs_tts_bucket: str = "citysoul-tts-audio"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

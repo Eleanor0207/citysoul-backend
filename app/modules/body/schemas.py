@@ -1,20 +1,24 @@
 import uuid
-from datetime import date, datetime
-from enum import Enum
-from typing import Any
+from datetime import datetime
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.modules.brain.tts import TTSResult
+from app.modules.brain.unlock_story import UnlockStory
 
 
-class HTTPErrorDetail(BaseModel):
-    code: str
-    message: str
+class ErrorResponse(BaseModel):
+    """
+    統一錯誤回應模型（issue #30）。
 
+    形狀對齊 FastAPI `HTTPException` 既有的 `{"detail": ...}`——**不改變任何
+    現有錯誤的實際 JSON 形狀**，只是讓契約描述它，讓 codegen 產出單一錯誤
+    DTO。`detail` 用 `Any`：多數端點是字串，配額超限（429）是物件
+    （`resource`／`limit`／`reset_at`），契約要能同時涵蓋兩種而不失真。
+    """
 
-class HTTPErrorResponse(BaseModel):
-    detail: HTTPErrorDetail
+    detail: Any
 
 
 class PlayerCreateRequest(BaseModel):
@@ -89,22 +93,22 @@ class SenseResponse(BaseModel):
     spirit_id: str
 
 
-class QuestStatusEnum(str, Enum):
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
-    DAILY_LIMIT_REACHED = "daily_limit_reached"
+QuestStatus = Literal["in_progress", "completed", "daily_limit_reached"]
 
 
 class QuestStateResponse(BaseModel):
     """
     SDD 第8.4節的 `quest` 欄位。
 
-    `status` 可能是 `in_progress` / `completed` / `daily_limit_reached`，
-    最後一個只存在於回應中，不是資料庫狀態（見 models.QuestProgress）。
+    `status` 是 `Literal`（issue #30）而不是裸 `str`——OpenAPI 因此產出真正
+    的 `enum`，Unity 端才有 enum 可解析（SDD v2.1 §11.2.1 硬規則5）。三個值
+    的語意分界不變：`in_progress`／`completed` 是資料庫狀態，
+    `daily_limit_reached` **只存在於 API 回應**，是查詢當下依 `attempts_date`
+    算出來的結果（見 `quests.effective_state`），不落地。
     """
 
     quest_id: str
-    status: QuestStatusEnum
+    status: QuestStatus
     attempts_today: int
 
 
@@ -134,22 +138,34 @@ class DialogueRequest(BaseModel):
 
 class DialogueResponse(BaseModel):
     """
-    對話回應（v2.1 §10.1）。
+    對話回應（issue #42 可用版）。
 
-    包含對話文字 `reply_text`、來源 `source`（'canned' | 'gemini' | 'fallback'）
-    以及語音 `tts`（含 `audio_url`，合成失敗時為 null，不含 viseme 時間軸）。
+    `tts` 為 `None` 時，路由層會用 `response_model_exclude_none=True` 把這個
+    欄位整個從 JSON 拿掉，不會序列化成 `"tts": null`——TTS 合成失敗時是「這輪
+    沒有語音」，不是「有一個空的語音物件」，兩者對客戶端的處理分支意義不同
+    （同 B10 `tts.py` 模組說明）。安全邊界（B4）與完整 Prompt 組裝（B2）見
+    issue #45。
     """
 
     reply_text: str
-    # 'canned' = 命中預寫招呼；'gemini' = AI 生成；'fallback' = 模型/TTS 失敗回退。
+    # 'canned' = 命中預寫招呼；'generated' = 未命中，交給 Gemini 生成
+    # （B1 呼叫失敗時的降級台詞也算在 'generated' 裡——那是 B1 自己的責任，
+    # 見 gemini.py 模組說明；這一層看不出、也不需要看出兩者的差別）。
     source: str
     tts: TTSResult | None = None
 
 
+class OrientationInfo(BaseModel):
+    """
+    SDD v2.1 §10.2：3DoF 定向用的靈魂方位設定（issue #30）。
 
-class SpiritOrientationResponse(BaseModel):
-    bearing_deg: float = Field(default=0.0)
-    height_offset_m: float = Field(default=0.0)
+    `bearing_deg`：相對召喚點的方位角，真北 0°、順時針。`height_offset_m`：
+    垂直偏移。兩者包成巢狀物件（不是攤平兩個欄位），對齊 SDD 的回應範例，
+    也讓客戶端能把「方位設定」整包傳給 `OrientationService`。
+    """
+
+    bearing_deg: float
+    height_offset_m: float
 
 
 class SpiritResponse(BaseModel):
@@ -177,96 +193,155 @@ class SpiritResponse(BaseModel):
     # 少了它，客戶端只能把 150 寫死在自己這邊——那條路一旦走了，之後調整半徑
     # 就得同時改後端與發版客戶端。
     sense_radius_m: int = Field(validation_alias="sense_radius_meters")
-    orientation: SpiritOrientationResponse = Field(default_factory=SpiritOrientationResponse)
     is_active: bool
+    orientation: OrientationInfo
+
+    @model_validator(mode="before")
+    @classmethod
+    def _nest_orientation(cls, data: Any) -> Any:
+        """
+        `bearing_deg`／`height_offset_m` 在 `Spirit` ORM 是攤平欄位（issue
+        #30：SDD 的回應範例要巢狀 `orientation`，但底層資料表沒有理由跟著
+        巢狀化——那兩個值只在這支 API 才需要包成一包）。這裡在驗證前把
+        ORM 物件轉成 dict、組出 `orientation`，其餘欄位名維持原樣讓既有的
+        `validation_alias` 映射繼續生效。
+        """
+        if isinstance(data, dict):
+            if "orientation" in data:
+                return data
+            return {
+                **data,
+                "orientation": {
+                    "bearing_deg": data.get("bearing_deg", 0.0),
+                    "height_offset_m": data.get("height_offset_m", 0.0),
+                },
+            }
+
+        return {
+            "spirit_id": data.spirit_id,
+            "display_name": data.display_name,
+            "latitude": data.latitude,
+            "longitude": data.longitude,
+            "summon_radius_meters": data.summon_radius_meters,
+            "sense_radius_meters": data.sense_radius_meters,
+            "is_active": data.is_active,
+            "orientation": {
+                "bearing_deg": data.bearing_deg,
+                "height_offset_m": data.height_offset_m,
+            },
+        }
 
 
-class QuestItemResponse(BaseModel):
+class QuestListItem(BaseModel):
+    """
+    `GET /quests/daily` 的單筆任務（issue #33 SDD v1 §8.7）。
+
+    `spirit_id` 不是資料庫欄位，是從 `quest_id` 反推的（見
+    `quests.spirit_id_for_quest`）——`quest_progress` 表本身沒有這一欄。
+    """
+
     quest_id: str
     spirit_id: str
-    status: QuestStatusEnum
+    status: QuestStatus  # 同 QuestStateResponse.status（issue #30），同一個 enum
     attempts_today: int
 
 
-class DailyQuestsResponse(BaseModel):
-    quests: list[QuestItemResponse]
+class QuestListResponse(BaseModel):
+    quests: list[QuestListItem]
 
 
 class QuestCompleteRequest(BaseModel):
-    completion_evidence: dict[str, Any] = Field(default_factory=dict)
+    """
+    `POST /quests/{questId}/complete`（issue #34）。
+
+    `completion_evidence` 刻意是不驗證內容的 dict：後端確定性規則判定完成
+    與否是由呼叫端（客戶端的可驗證微任務邏輯）自己保證的前提，這裡不重新
+    驗一次任務內容——CONTEXT.md「可驗證微任務」的定義是「以後端確定性規則
+    驗證完成與否」，而完成條件本身屬於任務設計，不是這支端點的職責。
+    """
+
+    completion_evidence: dict = Field(default_factory=dict)
 
 
 class QuestCompleteResponse(BaseModel):
+    """
+    issue #34（前半：確定性規則判定完成 ＋ 共鳴入帳）／#43（後半：接上敘事
+    包裝與解鎖故事）。
+
+    `unlock_stories` 是 **list**，不是單一 `unlock_story | null`——issue #34
+    的原始回應範例只想到「跨一個門檻」的情況，但 #43 AC3 明訂一次入帳跨過
+    多個門檻時每個 stage 都要各有一段故事（`resonance.ResonanceResult
+    .newly_unlocked_stages` 本身也是 list，同一個理由：只取最後一個會讓
+    中間那段靜默消失）。空 list 就是「沒跨門檻」，不需要另外一個
+    `newly_unlocked_stages` 欄位重複同一件事——每個 `UnlockStory.stage`
+    已經帶著這個資訊。
+    """
+
     quest_wrapper_text: str | None = None
     resonance_value: int
-    stage: int
-    unlock_story: str | None = None
+    unlock_stories: list[UnlockStory] = Field(default_factory=list)
 
 
-class ResonanceProgressResponse(BaseModel):
+class ResonanceQueryResponse(BaseModel):
+    """`GET /resonance/{spiritId}`（issue #35 SDD v1 §8.9）。"""
+
     spirit_id: str
     resonance_value: int
     stage: int
-    next_threshold: int | None = None
+    next_threshold: int | None
 
 
-class ResonanceItemResponse(BaseModel):
+class ProfileResonanceItem(BaseModel):
     spirit_id: str
     resonance_value: int
     stage: int
 
 
 class ProfileResponse(BaseModel):
-    quests: list[QuestItemResponse]
-    resonance: list[ResonanceItemResponse]
+    """
+    `GET /profile`（issue #36，v2.1 §10.3 漏列，補回；SDD v1 §8.10）。
+
+    純身體自己的表直查，不呼叫腦袋——`quests`／`resonance` 兩個陣列長度不必
+    相同（玩家可能對某靈魂有共鳴但沒有任務進度列，反之亦然）。
+    """
+
+    quests: list[QuestListItem]
+    resonance: list[ProfileResonanceItem]
 
 
-class LandmarkPhotoResponse(BaseModel):
-    landmark_recognized: bool
-    resonance_value: int
-    stage: int
+class MemorySummaryItem(BaseModel):
+    """
+    `GET /players/me/memory-summary` 的單筆記憶（issue #37）。
 
+    刻意不含 `embedding`——向量是內部實作，對玩家無意義，回應會因此暴增
+    數十 KB（AC 明訂檢查）。
+    """
 
-class DailyEventResponse(BaseModel):
-    place_id: str
-    event_date: date
-    narrative_text: str
-    theme_title: str | None = None
-
-
-class MemoryItemResponse(BaseModel):
-    memory_id: uuid.UUID
-    spirit_id: str
     summary_text: str
     created_at: datetime
 
 
 class MemorySummaryResponse(BaseModel):
-    memories: list[MemoryItemResponse]
+    """依 `spirit_id` 分組（issue #37 AC2）。"""
+
+    memories_by_spirit: dict[str, list[MemorySummaryItem]]
 
 
-class AssetCatalogResponse(BaseModel):
+class AvatarAssetResponse(BaseModel):
+    """`GET /assets/{avatarId}`（issue #38，v2.1 §7.4）。"""
+
     avatar_id: str
-    catalog_url: str
     bundle_url: str
     version: str
-    updated_at: datetime
 
 
-class PushSubscriptionRequest(BaseModel):
-    push_token: str
-    is_subscribed: bool = True
+class DailyEventResponse(BaseModel):
+    """
+    `GET /spirits/{placeId}/daily-event`（issue #26）。
 
+    公開世界狀態，不需要任何 token。永遠回傳 `200` 加內容——今天沒快取回
+    昨天的，連昨天都沒有回人工預寫保底，不回 `404` 空畫面（見 router.py
+    的說明）。
+    """
 
-class PushSubscriptionResponse(BaseModel):
-    player_id: uuid.UUID
-    push_token: str
-    is_subscribed: bool
-    updated_at: datetime
-
-
-
-
-
-
-
+    narrative_text: str

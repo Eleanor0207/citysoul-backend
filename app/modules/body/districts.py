@@ -1,48 +1,42 @@
 """
-地理圍欄查詢（`brain.districts` 的前置）。
+PostGIS 地理圍欄判斷（issue #46 前置驗證）。
 
-目前只有一支通用的多邊形內含判定。`districts` 表本身還沒建（見 #46 被擋住的
-清單），所以這裡刻意不寫 `check_player_in_district()`——那需要先有表和真實的
-萬華區邊界資料。
+這支檔案**不是** `brain.districts` 功能本身——那張表、`story_arcs`、
+`landmark_souls.district_id` 都還沒開票（見 #46「被擋住的東西」清單）。
+這裡只證明 PostGIS extension 真的可用，並先把「判斷一個座標是否落在某個
+地理圍欄內」這個查詢寫成可重用的函式，供未來的 `check_player_in_district()`
+直接呼叫，不用重寫這段 SQL。
 
-## 為什麼不用 geo.py 那種純 Python 實作
+## 座標不落地
 
-`haversine_distance_m` 是純函式，因為那是「點到點的距離」，數學很短。多邊形
-內含判定不一樣：真實的行政區邊界是帶洞、可能跨經度換日線的複雜多邊形，而
-PostGIS 已經把這些邊界情況處理完了。自己刻一份射線法，等於在重寫一個會在真實
-資料上出錯的 PostGIS。
-
-代價是這支函式需要 DB session，不能像 `geo.py` 那樣單獨驗證——這是刻意的取捨。
+`latitude`／`longitude` 只當作這次查詢的參數，**不寫入任何資料表、不進
+log**（issue #46 AC）。CONTEXT.md「在場紀錄」：原始 GPS 座標用完即丟；
+「玩家曾在某時刻進入某區域」未來只會以 arc 信件這種結果性資料表示，
+不會是座標本身留存。
 """
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 
-def is_point_in_polygon(
-    session: Session, latitude: float, longitude: float, polygon_wkt: str
-) -> bool:
+def is_point_in_polygon(db: Session, *, latitude: float, longitude: float, polygon_wkt: str) -> bool:
     """
-    判定一個經緯度點是否落在多邊形「內部」。
+    `ST_Contains`：座標是否落在給定多邊形內。
 
-    `polygon_wkt` 是 WGS84（SRID 4326）的 WKT 多邊形，例如
-    `POLYGON((121.49 25.03, 121.51 25.03, 121.51 25.05, 121.49 25.05, 121.49 25.03))`。
+    `polygon_wkt` 是 WKT 格式的多邊形字串（例如
+    `"POLYGON((121.0 25.0, 121.0 25.1, 121.1 25.1, 121.1 25.0, 121.0 25.0))"`），
+    SRID 固定 4326（WGS84，跟 `spirits.latitude/longitude` 用的座標系一致）。
 
-    ⚠️ **邊界上的點回傳 False。** 這是 OGC 對 `ST_Contains` 的定義——邊界屬於
-    多邊形的 boundary 而不是 interior，所以「包含」不成立。這不是 bug，但它跟
-    直覺相反，之後畫行政區圍欄時要記得：剛好站在區界線上的玩家會被判定成不在
-    區內。如果哪天需要把邊界算進去，要換成 `ST_Covers` 而不是加 buffer。
-
-    座標順序是 PostGIS 的 `(經度, 緯度)`，跟我們 API 慣用的 `(緯度, 經度)`
-    相反，所以下面 `ST_MakePoint` 的參數是先 lon 後 lat。這裡是唯一需要轉換的
-    地方，函式簽章對外維持專案慣用的 lat/lon 順序。
+    這支函式本身**也是** extension 真的可用的證明（issue #46 AC）：如果
+    PostGIS 沒裝好，這裡會直接拋 `UndefinedFunction`，不會是「建立 extension
+    沒報錯，但函式其實不能用」這種安靜的假成功。
     """
-    result = session.execute(
+    result = db.execute(
         text(
             "SELECT ST_Contains("
-            "  ST_GeomFromText(:polygon_wkt, 4326),"
-            "  ST_SetSRID(ST_MakePoint(:longitude, :latitude), 4326)"
+            "ST_GeomFromText(:polygon, 4326), "
+            "ST_SetSRID(ST_MakePoint(:longitude, :latitude), 4326)"
             ")"
         ),
-        {"polygon_wkt": polygon_wkt, "longitude": longitude, "latitude": latitude},
+        {"polygon": polygon_wkt, "longitude": longitude, "latitude": latitude},
     ).scalar()
     return bool(result)

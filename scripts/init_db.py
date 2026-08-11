@@ -40,6 +40,11 @@ def main():
     finally:
         db.close()
 
+    # 純 ASCII，不用 emoji：cp950（Windows 繁體中文主控台）印 emoji 會
+    # UnicodeEncodeError，而且是發生在 schema／seed 都已經成功寫入之後，
+    # 只看 traceback 很容易誤以為是初始化失敗。
+    print("[OK] DB schema 建立完成，垂直切片 seed data 已寫入。")
+
 
 if __name__ == "__main__":
     main()

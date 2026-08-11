@@ -1,138 +1,188 @@
 """
-B10．Google Cloud TTS 串接與失敗回退（v2.1 §6.1 / §10.1）。
+B10．Google Cloud TTS 串接（issue #21）。
 
-## 這個模組的核心性質
+⚠️ **v2.1 §6.1 已縮減本工作包**：原設計要求這裡順便產出 viseme 時間軸，供
+客戶端對嘴使用。那個設計不可實作——Google Cloud TTS 不提供 viseme／phoneme
+時間軸。對嘴改由客戶端 uLipSync 對音檔做即時 MFCC 分析（v2.1 §8，屬 F5，在
+citysoul-client repo）。這裡因此**只做**「文字進、音檔 URL 出」，`TTSResult`
+刻意只有 `audio_url` 一個欄位。
 
-1. **`synthesize()` 在合成失敗、網路逾時或缺少憑證時回傳 `None`，不拋例外。**
-   對應 SDD §8.5 與 F5（客戶端）：TTS 失敗時對話以純文字呈現，召喚流程不得中斷。
-2. **`TTSResult` 只含 `audio_url`，不含 `viseme_timeline`。**
-   Google Cloud TTS 不提供 viseme 時間軸，對嘴由 Unity 客戶端 `uLipSync` 處理。
-3. **語音語言固定台灣繁體中文（`zh-TW`）。**
+## 為什麼合成失敗回傳 `None`，不像 `GeminiClient` 回傳固定的 fallback 字串
+
+`GeminiClient.generate()` 失敗時有「人工預寫台詞」這個安全的替代內容可以
+回退（CONTEXT.md：「無合格輸入或生成失敗時使用人工預寫台詞」）。TTS 沒有
+等價的東西——不存在一句「預錄語音」可以頂替任意一段 `reply_text` 的語音。
+唯一站得住腳的降級是「這一輪沒有語音，純文字照常顯示」，而「有沒有語音」
+是呼叫端（dialogue 端點）該決定要不要把 `tts` 欄位放進回應的事，不該由這支
+模組偽造一個指向不存在音檔的假 URL 來假裝成功。
+
+## 語音合成之後去哪裡
+
+Google Cloud TTS 的 API 回傳的是音檔位元組，不是 URL——「回傳可播放的音檔
+URL」這件事需要有個地方存放它。SDD 把 TTS 的媒體層定義為「Google Cloud TTS
++ Cloud Storage」，所以真實實作內含一次上傳到 GCS 的動作，不是只包一層
+TTS SDK。
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 from abc import ABC, abstractmethod
-import google.auth
-import google.auth.transport.requests
-from pydantic import BaseModel, Field
-import requests
+from typing import Any, Callable
+
+from pydantic import BaseModel
+
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
-
-TTS_API_URL = "https://texttospeech.googleapis.com/v1/text:synthesize"
-DEFAULT_LANGUAGE_CODE = "zh-TW"
-DEFAULT_VOICE_NAME = "zh-TW-Neural2-A"
 
 
 class TTSResult(BaseModel):
     """
-    TTS 合成結果（v2.1 §10.1）。
-    只含 audio_url，不含 viseme / phoneme 欄位。
+    v2.1 §10.1：`DialogueResponse.tts` 的形狀，**只有** `audio_url`。用
+    pydantic model（不是 dataclass）是因為它會直接嵌進 API response 序列化
+    出去，跟其他 response model 用同一種宣告方式。
+
+    不含任何 viseme／phoneme 欄位是刻意的契約——見模組開頭說明；#30 的契約
+    快照會固定住這個形狀，之後想加欄位要走那邊的流程，不是在這裡隨手加。
     """
 
-    audio_url: str = Field(description="可播放的語音音檔 URL")
+    audio_url: str
 
 
 class TTSClient(ABC):
     """
-    語音合成的抽象介面。
-    測試與離線開發注入 `FakeTTSClient`，無需 GCP 憑證。
+    語音合成的抽象介面。呼叫端只依賴這個介面，測試可以注入 `FakeTTSClient`
+    而完全不需要 GCP 憑證。
     """
 
     @abstractmethod
     def synthesize(self, text: str) -> TTSResult | None:
-        """將文字合成語音。失敗時回傳 None 進行純文字降級，不拋例外。"""
+        """合成語音。失敗時回傳 `None`，不拋例外——理由見模組開頭說明。"""
 
 
 class GoogleCloudTTSClient(TTSClient):
     """
-    Google Cloud Text-to-Speech 真實實作。
-    使用 Application Default Credentials (ADC) 存取 REST API。
+    真實實作。憑證走 ADC（ADR-0003），跟 B1 同一套路徑，沒有金鑰檔。
+
+    兩個 SDK client（TTS、Storage）都延遲建立、延遲 import：沒裝對應套件的
+    環境仍然可以 import 這個模組並使用 fake，跟 `gemini.py` 的做法一致。
     """
 
     def __init__(
         self,
-        language_code: str = DEFAULT_LANGUAGE_CODE,
-        voice_name: str = DEFAULT_VOICE_NAME,
-        timeout_seconds: float = 5.0,
-    ):
-        self.language_code = language_code
-        self.voice_name = voice_name
-        self.timeout_seconds = timeout_seconds
+        *,
+        language_code: str | None = None,
+        voice_name: str | None = None,
+        bucket_name: str | None = None,
+        timeout_seconds: float | None = None,
+        tts_client_factory: Callable[[], Any] | None = None,
+        storage_client_factory: Callable[[], Any] | None = None,
+    ) -> None:
+        """
+        `tts_client_factory`／`storage_client_factory` 讓測試注入會拋例外的
+        假 client，藉此驗證**這個類別的**降級邏輯——用一個自己就回傳結果的
+        假 client 測不到「呼叫失敗時怎麼辦」這條路徑（同 `VertexAIGeminiClient`
+        的說明）。
+        """
+        # 語言／語音代碼是設定值，不是從文字內容自動偵測（issue #21 AC）：
+        # MVP 語言固定台灣繁體中文，這是一個看得見、可審核的決定。
+        self._language_code = language_code or settings.tts_language_code
+        self._voice_name = voice_name or settings.tts_voice_name
+        self._bucket_name = bucket_name or settings.gcs_tts_bucket
+        self._timeout_seconds = timeout_seconds or settings.tts_timeout_seconds
+        self._tts_client_factory = tts_client_factory or self._create_tts_client
+        self._storage_client_factory = storage_client_factory or self._create_storage_client
+        self._tts_client = None
+        self._storage_client = None
+
+        self.last_failure_reason: str | None = None
+
+    def _create_tts_client(self):
+        from google.cloud import texttospeech
+
+        return texttospeech.TextToSpeechClient()
+
+    def _create_storage_client(self):
+        from google.cloud import storage
+
+        return storage.Client(project=settings.gcp_project_id)
+
+    def _ensure_tts_client(self):
+        if self._tts_client is None:
+            self._tts_client = self._tts_client_factory()
+        return self._tts_client
+
+    def _ensure_storage_client(self):
+        if self._storage_client is None:
+            self._storage_client = self._storage_client_factory()
+        return self._storage_client
 
     def synthesize(self, text: str) -> TTSResult | None:
-        if not text or not text.strip():
-            return None
+        self.last_failure_reason = None
 
         try:
-            credentials, _ = google.auth.default(
-                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            from google.cloud import texttospeech
+
+            client = self._ensure_tts_client()
+            response = client.synthesize_speech(
+                input=texttospeech.SynthesisInput(text=text),
+                voice=texttospeech.VoiceSelectionParams(
+                    language_code=self._language_code, name=self._voice_name
+                ),
+                audio_config=texttospeech.AudioConfig(
+                    audio_encoding=texttospeech.AudioEncoding.MP3
+                ),
+                timeout=self._timeout_seconds,
             )
-            auth_request = google.auth.transport.requests.Request()
-            credentials.refresh(auth_request)
-            token = credentials.token
-        except Exception as err:
-            logger.warning("Google Cloud TTS Credentials 不可用或取得失敗，進行純文字降級: %s", err)
-            return None
-
-        payload = {
-            "input": {"text": text},
-            "voice": {
-                "languageCode": self.language_code,
-                "name": self.voice_name,
-            },
-            "audioConfig": {
-                "audioEncoding": "MP3",
-            },
-        }
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        }
-
-        try:
-            resp = requests.post(
-                TTS_API_URL,
-                json=payload,
-                headers=headers,
-                timeout=self.timeout_seconds,
-            )
-            if resp.status_code != 200:
-                logger.warning("TTS API 呼叫失敗 [%d]: %s", resp.status_code, resp.text)
-                return None
-
-            data = resp.json()
-            # GCP REST 回傳 audioContent (base64)，此處在展示/實作中可對接 GCP Storage
-            # 或直接產生可用 URL。為了端到端相容，示範為產出音效服務連結。
-            # 若包含 base64 audioContent 或音檔儲存 URL:
-            audio_content = data.get("audioContent")
-            if not audio_content:
-                logger.warning("TTS API 回傳缺乏 audioContent")
-                return None
-
-            # 成功取得音訊 base64 後，封裝為 Data URL 或存儲 URL
-            audio_url = f"data:audio/mp3;base64,{audio_content}"
+            audio_url = self._upload(text, response.audio_content)
             return TTSResult(audio_url=audio_url)
-        except Exception as err:
-            logger.warning("TTS 合成過程發生異常，進行純文字降級: %s", err)
+        except Exception as exc:  # noqa: BLE001
+            # 跟 GeminiClient 同樣的理由：任何未預期的例外都不該讓對話流程
+            # 中斷，這裡不列「哪些例外算預期」的清單，那種清單一定會漏。
+            self.last_failure_reason = f"{type(exc).__name__}: {exc}"
+            logger.warning("TTS 合成失敗，降級為純文字：%s", self.last_failure_reason)
             return None
+
+    def _upload(self, text: str, audio_bytes: bytes) -> str:
+        """
+        物件名取文字內容的 hash，不取隨機值：同一句話（例如某個常見問句的
+        Gemini 回覆剛好重複）重複合成時直接命中既有物件，省一次合成與一次
+        上傳。這不是正確性要求，只是幾乎不花額外程式碼就拿到的效能。
+
+        桶要設定成可公開讀取（或前面掛 CDN，見 SDD 的「Cloud Storage +
+        CDN」）才能讓 `public_url` 直接可播放——那是部署設定，不是這裡的
+        程式碼能保證的事。
+        """
+        object_name = f"tts/{hashlib.sha256(text.encode('utf-8')).hexdigest()}.mp3"
+        bucket = self._ensure_storage_client().bucket(self._bucket_name)
+        blob = bucket.blob(object_name)
+        if not blob.exists():
+            blob.upload_from_string(audio_bytes, content_type="audio/mpeg")
+        return blob.public_url
 
 
 class FakeTTSClient(TTSClient):
     """
-    測試用 Fake 實作。
+    測試用。放在正式程式碼而不是 tests/ 底下，理由同 `gemini.FakeGeminiClient`
+    ——dialogue 端點（#42／#45）的測試也會用到它。
+
+    預設合成成功；建構時傳 `fail=True` 模擬「合成失敗，降級為純文字」那條路徑
+    （對應連線錯誤／逾時，issue #21 AC 沒有要求區分失敗原因，呼叫端只在乎
+    成功或 `None` 這兩種結果）。
     """
 
-    def __init__(
-        self,
-        preset_url: str | None = "https://example.test/audio/fake_reply.mp3",
-        fail: bool = False,
-    ):
-        self.preset_url = preset_url
+    def __init__(self, result: TTSResult | None = None, *, fail: bool = False) -> None:
+        self.result = result or TTSResult(audio_url="https://example.test/audio/fake.mp3")
         self.fail = fail
+        self.texts: list[str] = []
 
     def synthesize(self, text: str) -> TTSResult | None:
-        if self.fail or not self.preset_url:
+        self.texts.append(text)
+        if self.fail:
             return None
-        return TTSResult(audio_url=self.preset_url)
+        return self.result
+
+    @property
+    def call_count(self) -> int:
+        return len(self.texts)

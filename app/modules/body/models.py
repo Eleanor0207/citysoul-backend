@@ -1,8 +1,8 @@
 """
 身體模組資料表：players、spirits。
 
-daily_event_cache／push_subscriptions 排在後面的 Sprint（對應 S10/S11），
-現在先不建，避免一次生太多還沒用到的表。
+`daily_event_cache` 已於 0008 建立（S10／#26）。`push_subscriptions` 仍未建，
+排在 S11（#39）——不要因為「順手」提早建一張還沒有人寫入的表。
 
 刻意不存在的表：任何形式的「玩家移動軌跡 / 位置歷史」表。
 這是 CONTEXT.md「在場紀錄」與「前景即時情境反應」兩條定義疊加後的硬限制，
@@ -121,9 +121,26 @@ class Spirit(Base):
     longitude = Column(Numeric(9, 6, asdecimal=False), nullable=False)
     summon_radius_meters = Column(Integer, nullable=False, default=50)
     sense_radius_meters = Column(Integer, nullable=False, default=150, server_default="150")
+    is_active = Column(Boolean, nullable=False, default=True)
+    # SDD v2.1 §10.2：3DoF 定向用的方位設定（issue #30）。真北 0°、順時針；
+    # 預設 0 表示「還沒特別設定過」，不是「這個靈魂沒有方位」——3DoF 服務
+    # 收到 0 一樣會用，只是角色會固定朝向正北，不是缺角度資料的錯誤狀態。
+    #
+    # 型別刻意用 DOUBLE PRECISION（issue #30 明訂），不是 lat/lon 那種
+    # NUMERIC——這兩個值驅動的是視覺呈現，不是像 haversine 那樣拿來做
+    # 「50m 內才算在場」的規則判斷，浮點誤差在這裡不影響任何遊戲規則。
+    bearing_deg = Column(Float, nullable=False, default=0, server_default="0")
+    height_offset_m = Column(Float, nullable=False, default=0, server_default="0")
+
+    # 靈魂方位（SDD v2.1 §10.2），供客戶端 S14 的 3DoF 定向使用。
+    # `bearing_deg` 是相對召喚點的方位角（真北 0°、順時針），
+    # `height_offset_m` 是相對玩家視線高度的垂直偏移。
+    #
+    # 用浮點數而非隔壁經緯度的 NUMERIC 是刻意的：經緯度是遊戲規則的輸入
+    # （50m 內才算在場），不該帶浮點誤差；方位只是渲染參數，差 0.0001 度
+    # 沒有玩家察覺得到，也不改變任何判定結果。
     bearing_deg = Column(Float, nullable=False, default=0.0, server_default="0")
     height_offset_m = Column(Float, nullable=False, default=0.0, server_default="0")
-    is_active = Column(Boolean, nullable=False, default=True)
 
     __table_args__ = (
         UniqueConstraint("character_id", name="uq_spirits_character_id"),
@@ -302,7 +319,16 @@ class EncounterCollection(Base):
     collection_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     player_id = Column(UUID(as_uuid=True), ForeignKey("players.player_id"), nullable=False)
     place_id = Column(String(64), ForeignKey("spirits.spirit_id"), nullable=False)
+    # 裝置端本機辨識出來的標籤字串（0004 的設計），不是位置。
     recognized_label = Column(String(128), nullable=True)
+    # 雲端 B13（#22）的判定結果，決定要不要給特別徽章。
+    landmark_recognized = Column(Boolean, nullable=False, server_default="false", default=False)
+    # 這次收藏**有沒有真的入帳**共鳴值。
+    #
+    # UNIQUE(player_id, place_id) 保證一個地標只加一次，所以「有這一列」不等於
+    # 「這次加了值」——重複收藏時列還在，但沒有入帳。少了這個欄位，就沒辦法從
+    # 資料本身分辨那兩種情況。
+    resonance_awarded = Column(Boolean, nullable=False, server_default="false", default=False)
     collected_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     __table_args__ = (
@@ -310,10 +336,44 @@ class EncounterCollection(Base):
     )
 
 
+class AvatarAsset(Base):
+    """
+    Unity Addressables remote catalog／bundle 的版本紀錄（issue #38，v2.1 §7.4）。
+
+    只存「目前指到哪個版本、URL 是什麼」，不存資產本身——資產打包（F6）跟
+    上傳都是客戶端／CI 的工作，這張表只是版本比對的單一真相來源，讓 F7
+    （下載與快取）能問「我快取的這版還是最新的嗎」而不用每次啟動都重抓整包。
+
+    `version` 是字串不是遞增整數：版本號的格式（時間戳、語意化版本、hash）
+    是資產產線的決定，不該被這張表的型別綁死。
+    """
+
+    __tablename__ = "avatar_assets"
+
+    avatar_id = Column(String(64), primary_key=True)
+    bundle_url = Column(Text, nullable=False)
+    version = Column(String(32), nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class DailyEventCache(Base):
     """
-    S10．當日情境快取表（SDD 第3.1節）。
-    主鍵為 (place_id, event_date)，用來快取由 B9 生成的當日情境內容。
+    S10．當日情境快取（issue #26；SDD §3.1）。
+
+    刻意跟 B9（`app.modules.brain.daily_event`，issue #20）的內容生成分開
+    ——那支模組只負責「怎麼生成」，這張表跟讀寫它的排程／端點負責「什麼時候
+    觸發、存哪裡、對外怎麼保底」（v2.1 §6.4 的腦袋／身體分工原則）。
+
+    PK 是 `(place_id, event_date)`，不是代理鍵：同一天同一地標的內容本來
+    就該只有一列，讓資料庫的主鍵約束直接擋住重複，排程重複觸發時「先寫、
+    撞到主鍵衝突就當作已經生成過」（同 #16 共鳴事件帳本的做法），不用先查
+    再判斷。
+
+    `content` 是 JSONB 而不是單一 `narrative_text` 欄位：B9 的
+    `DailyEventContent` 之後如果加欄位（例如情境相關的視覺提示），這張表
+    不需要跟著改 schema。
     """
 
     __tablename__ = "daily_event_cache"
@@ -322,23 +382,4 @@ class DailyEventCache(Base):
     event_date = Column(Date, primary_key=True)
     content = Column(JSONB, nullable=False)
     generated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    expires_at = Column(DateTime(timezone=True), nullable=True)
-
-
-class PushSubscription(Base):
-    """
-    S11．訊號推播訂閱表（SDD 第3.1節）。
-    `player_id` 為主鍵（PK, FK players），換手機/token 輪替時進行覆蓋。
-    `is_subscribed` 控制退訂狀態，退訂後絕不發送推播。
-    """
-
-    __tablename__ = "push_subscriptions"
-
-    player_id = Column(UUID(as_uuid=True), ForeignKey("players.player_id"), primary_key=True)
-    push_token = Column(String(256), nullable=False)
-    is_subscribed = Column(Boolean, nullable=False, default=True)
-    updated_at = Column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
-    )
-
-
+    expires_at = Column(DateTime(timezone=True), nullable=False)

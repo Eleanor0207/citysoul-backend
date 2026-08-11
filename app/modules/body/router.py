@@ -1,7 +1,7 @@
-from datetime import datetime, timedelta, timezone
 import uuid
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -16,18 +16,15 @@ from app.modules.body.encounter_tokens import (
 )
 from app.modules.body.geo import haversine_distance_m
 from app.modules.body.quests import (
-    MAX_DAILY_ATTEMPTS,
     STATUS_COMPLETED,
-    STATUS_DAILY_LIMIT_REACHED,
-    STATUS_IN_PROGRESS,
+    effective_state,
     evaluate_on_summon,
+    spirit_id_for_quest,
     taipei_today,
 )
-from app.modules.body.quota import consume_quota, default_tier_id
+from app.modules.body.quota import QuotaExceededError, consume, default_tier_id
 from app.modules.body.resonance import (
-    AMOUNT_ENCOUNTER_COLLECTION,
     AMOUNT_QUEST,
-    SOURCE_ENCOUNTER_COLLECTION,
     SOURCE_QUEST,
     apply_resonance,
     next_threshold,
@@ -35,44 +32,88 @@ from app.modules.body.resonance import (
 )
 from app.modules.body.sense_tokens import SENSE_TOKEN_HEADER, issue_sense_token, require_sense_token
 from app.modules.body.tokens import issue_session_token
-import os
-
-from app.modules.brain import models as brain_models
-from app.modules.brain.daily_event import DEFAULT_DAILY_EVENT
+from app.modules.brain.daily_event import DAILY_EVENT_FALLBACK
 from app.modules.brain.gemini import GeminiClient, VertexAIGeminiClient
 from app.modules.brain.greetings import match_canned_greeting
-from app.modules.brain.prompt_builder import assemble_prompt
-from app.modules.brain.safety import FakeSafetyChecker, SafetyChecker
-from app.modules.brain.tts import TTSClient, GoogleCloudTTSClient
-from app.modules.brain.unlock_story import generate_quest_wrapper, generate_unlock_story
-from app.modules.brain.vision import FakeLandmarkRecognizer, LandmarkRecognizer
+from app.modules.brain.models import MemoryEmbedding
+from app.modules.brain.prompt_builder import assemble_dialogue_prompt
+from app.modules.brain.quest_wrapper import FALLBACK_WRAPPER_TEXT as _QUEST_WRAPPER_FALLBACK
+from app.modules.brain.quest_wrapper import generate_quest_wrapper
+from app.modules.brain.safety import GeminiSafetyChecker, SafetyChecker, enforce_safety_boundary
+from app.modules.brain.tts import GoogleCloudTTSClient, TTSClient
+from app.modules.brain.unlock_story import FALLBACK_STORY_TEXT as _UNLOCK_STORY_FALLBACK
+from app.modules.brain.unlock_story import UnlockStory, generate_unlock_story
 
-# 未命中快速問候或模型失敗時的人工預寫台詞。
-FALLBACK_REPLY = "（城市靈魂安靜地看著你）……這件事我還沒想清楚。要不要先跟我說說你眼前看到的？"
+# usage_tier_limits 已種好的 resource_type（migration 0004）。只在這裡出現
+# 一次——呼叫端不重複寫這個字串，改資源名稱只需要改這裡。
+DIALOGUE_QUOTA_RESOURCE = "dialogue_calls_daily"
 
-_safety_checker_instance: SafetyChecker = FakeSafetyChecker()
-_landmark_recognizer_instance: LandmarkRecognizer = FakeLandmarkRecognizer()
-
-
-def get_safety_checker() -> SafetyChecker:
-    return _safety_checker_instance
-
-
-def get_landmark_recognizer() -> LandmarkRecognizer:
-    return _landmark_recognizer_instance
+# 路由宣告實際會回傳的錯誤碼（issue #30）：讓 OpenAPI 契約看得到 401／403／
+# 404／429，而不是只有 SDD 散文裡才查得到。每支路由依自己實際會拋的組合
+# `{**_ERROR_401, **_ERROR_403, ...}`——集中定義成常數，逐支路由手key會漏，
+# 而且描述文字容易在不同端點之間不小心寫得不一致。
+_ERROR_401 = {401: {"model": schemas.ErrorResponse, "description": "缺少或無效的憑證"}}
+_ERROR_403 = {403: {"model": schemas.ErrorResponse, "description": "憑證有效，但不適用於這個資源"}}
+_ERROR_404 = {404: {"model": schemas.ErrorResponse, "description": "資源不存在或已下架"}}
+_ERROR_429 = {429: {"model": schemas.ErrorResponse, "description": "配額已用滿"}}
 
 router = APIRouter(prefix="/api/v1", tags=["body"])
 
 
 def get_gemini_client() -> GeminiClient:
+    """
+    FastAPI dependency，讓測試可以用 `app.dependency_overrides` 換成
+    `FakeGeminiClient`，完全不需要 GCP 憑證——跟 `get_db` 是同一種用法。
+    """
     return VertexAIGeminiClient()
 
 
 def get_tts_client() -> TTSClient:
+    """同上，測試換成 `FakeTTSClient`。"""
     return GoogleCloudTTSClient()
 
 
-@router.post("/players", response_model=schemas.PlayerResponse, responses={400: {"model": schemas.HTTPErrorResponse}})
+def get_safety_classifier_client() -> GeminiClient:
+    """
+    B4（安全邊界檢查，issue #11）分類專用的 Gemini client——**刻意跟**
+    `get_gemini_client()`（用來生成實際回覆）**是不同的 dependency**，即使
+    正式環境兩者背後可能是同一個 Vertex AI 專案。
+
+    分開的理由是可測試性，不是效能：如果兩者共用同一個 fake，測試就沒辦法
+    只針對「安全分類」或只針對「回覆生成」個別下 spy——issue #45 AC1 明訂
+    「不安全時 B1 一次都沒被呼叫」，這裡的「B1」指的是**生成回覆**那次呼叫，
+    不包含分類本身用掉的那一次（分類是 B4 自己的實作細節，不算在「下游」
+    裡）。合成一個 dependency 會讓這兩種呼叫的次數混在同一個計數器上，
+    測試就無法分開驗證。
+    """
+    return VertexAIGeminiClient()
+
+
+def get_safety_checker(
+    client: GeminiClient = Depends(get_safety_classifier_client),
+) -> SafetyChecker:
+    return GeminiSafetyChecker(client)
+
+
+def _require_presence_token(
+    spirit_id: str, encounter_token: str | None, sense_token: str | None
+) -> uuid.UUID:
+    """
+    SDD 第6節：Session Token 必要，再加 Encounter 或 Sense 至少一張。
+
+    兩張都沒帶才是「缺憑證」；帶了其中一張就用那一張的驗證邏輯（各自獨立，
+    不共用，見 `encounter_tokens.py`／`sense_tokens.py` 的模組說明），驗證
+    失敗時直接讓那張憑證自己的錯誤往外拋，不嘗試退而驗證另一張——玩家帶哪張
+    憑證來，就該對那張憑證負責，兩張憑證的失敗原因混在一起只會讓除錯更難。
+    """
+    if encounter_token is not None:
+        return require_encounter_token(spirit_id, encounter_token)
+    if sense_token is not None:
+        return require_sense_token(spirit_id, sense_token)
+    raise HTTPException(status_code=401, detail="missing encounter or sense token")
+
+
+@router.post("/players", response_model=schemas.PlayerResponse)
 def create_or_get_player(payload: schemas.PlayerCreateRequest, db: Session = Depends(get_db)):
     """
     S6．匿名玩家身分系統。
@@ -111,11 +152,7 @@ def create_or_get_player(payload: schemas.PlayerCreateRequest, db: Session = Dep
 @router.post(
     "/sense",
     response_model=schemas.SenseResponse,
-    responses={
-        401: {"model": schemas.HTTPErrorResponse},
-        403: {"model": schemas.HTTPErrorResponse},
-        404: {"model": schemas.HTTPErrorResponse},
-    },
+    responses={**_ERROR_401, **_ERROR_403, **_ERROR_404},
 )
 def sense(
     payload: schemas.SenseRequest,
@@ -161,11 +198,7 @@ def sense(
 @router.post(
     "/summon",
     response_model=schemas.SummonResponse,
-    responses={
-        401: {"model": schemas.HTTPErrorResponse},
-        403: {"model": schemas.HTTPErrorResponse},
-        404: {"model": schemas.HTTPErrorResponse},
-    },
+    responses={**_ERROR_401, **_ERROR_403, **_ERROR_404},
 )
 def summon(
     payload: schemas.SummonRequest,
@@ -219,191 +252,86 @@ def summon(
     )
 
 
-@router.post(
-    "/spirits/{place_id}/dialogue",
-    response_model=schemas.DialogueResponse,
-    responses={
-        401: {"model": schemas.HTTPErrorResponse},
-        403: {"model": schemas.HTTPErrorResponse},
-        404: {"model": schemas.HTTPErrorResponse},
-        429: {"model": schemas.HTTPErrorResponse},
-    },
-)
-def dialogue(
-    place_id: str,
-    payload: schemas.DialogueRequest,
-    session_player_id: uuid.UUID = Depends(require_session_token),
-    encounter_token: str | None = Header(default=None, alias=ENCOUNTER_TOKEN_HEADER),
-    sense_token: str | None = Header(default=None, alias=SENSE_TOKEN_HEADER),
-    db: Session = Depends(get_db),
-    gemini_client: GeminiClient = Depends(get_gemini_client),
-    tts_client: TTSClient = Depends(get_tts_client),
-    safety_checker: SafetyChecker = Depends(get_safety_checker),
-):
-    """
-    對話端點（完整版，v2.1 §13.5 Phase 3）。
-
-    配額 (BE#32) -> B12 固定招呼 -> B4 安全檢查 (BE#11) -> B2 Prompt 組裝 (BE#12)
-    -> B1 Gemini -> B10 TTS -> B7 短期記憶寫入
-    """
-    if not encounter_token and not sense_token:
-        raise HTTPException(status_code=401, detail="missing token")
-
-    token_player_id: uuid.UUID | None = None
-    if encounter_token:
-        token_player_id = require_encounter_token(place_id, encounter_token)
-    elif sense_token:
-        token_player_id = require_sense_token(place_id, sense_token)
-
-    if token_player_id != session_player_id:
-        raise HTTPException(status_code=403, detail="token holder mismatch")
-
-    spirit = db.query(models.Spirit).filter_by(spirit_id=place_id).first()
-    if spirit is None or not spirit.is_active:
-        raise HTTPException(status_code=404, detail="spirit not found")
-
-    # 1. 檢查並扣減每日對話配額 (BE#32)
-    consume_quota(db, session_player_id, "dialogue_turns", 1)
-
-    # 2. 快速問候語比對 (B12)
-    canned = match_canned_greeting(db, place_id, payload.user_input)
-    if canned is not None:
-        tts_res = tts_client.synthesize(canned)
-        try:
-            append_session_turn(str(session_player_id), place_id, {"role": "user", "text": payload.user_input})
-            append_session_turn(str(session_player_id), place_id, {"role": "assistant", "text": canned})
-        except Exception:
-            pass
-        return schemas.DialogueResponse(reply_text=canned, source="canned", tts=tts_res)
-
-    # 3. B4 角色安全邊界過濾 (BE#11)
-    safety_res = safety_checker.check(payload.user_input)
-    if not safety_res.is_safe:
-        refusal = safety_res.refusal_reply or FALLBACK_REPLY
-        tts_res = tts_client.synthesize(refusal)
-        try:
-            append_session_turn(str(session_player_id), place_id, {"role": "user", "text": payload.user_input})
-            append_session_turn(str(session_player_id), place_id, {"role": "assistant", "text": refusal})
-        except Exception:
-            pass
-        return schemas.DialogueResponse(reply_text=refusal, source="refusal", tts=tts_res)
-
-    # 4. B2 Prompt 結構化組裝 (BE#12)
-    sys_inst, user_turn = assemble_prompt(
-        db,
-        player_id=str(session_player_id),
-        spirit_id=place_id,
-        user_input=payload.user_input,
+def _quest_list_item(row: models.QuestProgress) -> schemas.QuestListItem:
+    """`QuestProgress` 列 → API 回應形狀，唯讀重算（見 `quests.effective_state`）。"""
+    state = effective_state(row)
+    return schemas.QuestListItem(
+        quest_id=row.quest_id,
+        spirit_id=spirit_id_for_quest(row.quest_id),
+        status=state.status,
+        attempts_today=state.attempts_today,
     )
 
-    # 5. 呼叫 Gemini AI 模型生成 (B1)
-    reply_text = gemini_client.generate(sys_inst, user_turn)
-    source = "gemini" if reply_text != FALLBACK_REPLY else "fallback"
 
-    # 6. 呼叫 TTS 語音合成 (B10)
-    tts_res = tts_client.synthesize(reply_text)
-
-    # 7. 寫入 Redis 短期對話紀錄 (B7)
-    try:
-        append_session_turn(str(session_player_id), place_id, {"role": "user", "text": payload.user_input})
-        append_session_turn(str(session_player_id), place_id, {"role": "assistant", "text": reply_text})
-    except Exception:
-        pass
-
-    return schemas.DialogueResponse(reply_text=reply_text, source=source, tts=tts_res)
-
-
-@router.get(
-    "/spirits/{place_id}",
-    response_model=schemas.SpiritResponse,
-    responses={404: {"model": schemas.HTTPErrorResponse}},
-)
-def get_spirit(place_id: str, db: Session = Depends(get_db)):
-    """對應對外 API 清單：GET /api/v1/spirits/{placeId}（Sprint1 先只回基本資料）。"""
-    spirit = db.query(models.Spirit).filter_by(spirit_id=place_id).first()
-    if not spirit:
-        raise HTTPException(status_code=404, detail="spirit not found")
-    return spirit
-
-
-@router.get(
-    "/quests/daily",
-    response_model=schemas.DailyQuestsResponse,
-    responses={401: {"model": schemas.HTTPErrorResponse}},
-)
-def get_daily_quests(
+@router.get("/quests/daily", response_model=schemas.QuestListResponse, responses={**_ERROR_401})
+def list_daily_quests(
     player_id: uuid.UUID = Depends(require_session_token),
     db: Session = Depends(get_db),
 ):
     """
-    S4 / GET /api/v1/quests/daily 任務列表查詢（BE#33）。
+    S4．玩家任務列表查詢（issue #33，SDD v1 §8.7）。
 
-    回傳該玩家目前的任務清單。
-    - 依 Asia/Taipei 午夜日期自動處理次數重置。
-    - 若當天嘗試已滿 3 次，status 標示為 daily_limit_reached。
-    - 冷啟動（無任何列）回傳空陣列 []。
+    只查詢，不寫入——`daily_limit_reached` 與跨日後的 `attempts_today=0` 都是
+    查詢當下用 `quests.effective_state` 重算出來的，資料庫裡的 `status` 可能
+    仍是 `in_progress`（那是對的，見該函式的說明）。
     """
-    now = datetime.now(timezone.utc)
-    today = taipei_today(now)
-
-    progresses = db.query(models.QuestProgress).filter_by(player_id=player_id).all()
-    results = []
-
-    for p in progresses:
-        if p.attempts_date != today:
-            p.attempts_today = 0
-            p.attempts_date = today
-            db.commit()
-
-        spirit_id = p.quest_id.split(":")[0] if ":" in p.quest_id else p.quest_id
-
-        status = p.status
-        if p.attempts_today >= MAX_DAILY_ATTEMPTS and p.status != STATUS_COMPLETED:
-            status = STATUS_DAILY_LIMIT_REACHED
-
-        results.append(
-            schemas.QuestItemResponse(
-                quest_id=p.quest_id,
-                spirit_id=spirit_id,
-                status=status,
-                attempts_today=p.attempts_today,
-            )
-        )
-
-    return schemas.DailyQuestsResponse(quests=results)
+    rows = db.query(models.QuestProgress).filter_by(player_id=player_id).all()
+    return schemas.QuestListResponse(quests=[_quest_list_item(row) for row in rows])
 
 
 @router.post(
     "/quests/{quest_id}/complete",
     response_model=schemas.QuestCompleteResponse,
-    responses={
-        401: {"model": schemas.HTTPErrorResponse},
-        403: {"model": schemas.HTTPErrorResponse},
-        404: {"model": schemas.HTTPErrorResponse},
-    },
+    responses={**_ERROR_401, **_ERROR_403, **_ERROR_404},
 )
 def complete_quest(
     quest_id: str,
     payload: schemas.QuestCompleteRequest,
     session_player_id: uuid.UUID = Depends(require_session_token),
     encounter_token: str | None = Header(default=None, alias=ENCOUNTER_TOKEN_HEADER),
-    db: Session = Depends(get_db),
     gemini_client: GeminiClient = Depends(get_gemini_client),
+    db: Session = Depends(get_db),
 ):
     """
-    S4 / S5 / POST /api/v1/quests/{quest_id}/complete 任務完成與共鸣入帳（BE#34/BE#43）。
+    S4／S5／B11／B2．任務完成，含敘事包裝（issue #34 前半 ＋ #43 後半，
+    SDD §7.5）。
 
-    1. 需 Session Token ＋ Encounter Token (Sense Token 遭拒)。
-    2. 驗證 Encounter Token 之持有人與地標符合。
-    3. 標記 quest_progress.status = 'completed'。
-    4. 呼叫 apply_resonance 入帳 +20 分。
-    5. 硬規則 (v2.1 §6.4)：先完成 DB 寫入與點數結算，後呼叫腦袋生成敘事。
-    6. 跨過門檻時生成並回傳 unlock_story，其餘時間為 null。
+    ```
+    驗完成（後端確定性規則，不是 LLM）→ 寫 quest_progress → 共鳴入帳
+      → 若跨過門檻：B11 generate_unlock_story（可能多次，見下方）
+      → B2 generate_quest_wrapper
+    ```
+
+    只接受 Encounter Token（**不接受 Sense**，SDD 第6節）：完成任務需要「真的
+    在場」，感應範圍不夠格。刻意不比照 dialogue 端點呼叫
+    `_require_presence_token`——那支函式會接受 Sense 當替代，這裡不行，用
+    共用邏輯反而會不小心放寬這條規則。
+
+    `payload.completion_evidence` 不驗證內容：完成條件由前端的可驗證微任務
+    邏輯保證，這支端點只負責記帳，不重新判定任務有沒有完成。
+
+    **v2.1 §6.4 硬規則**：身體先寫完自己的表、再呼叫腦袋——`quest_progress`
+    與 `resonance` 的寫入（含 commit）全部發生在下面任何一次 `gemini_client`
+    呼叫之前。順序顛倒的話，腦袋看到的 stage 可能跟資料庫最終落地的值不
+    一致（issue #43 AC：資料庫寫入一定發生在腦袋呼叫之前）。
+
+    敘事生成（`generate_unlock_story`／`generate_quest_wrapper`）包在
+    `try/except` 裡：任務已經完成、共鳴已經入帳，這兩個呼叫只是「把結果講
+    成故事」，講失敗了不能讓玩家的進度消失（issue #43）。`GeminiClient`
+    本身的契約是「呼叫失敗也不拋例外」，但這裡仍然多包一層——敘事生成的
+    測試需要能注入「真的會拋例外」的 fake 來驗證這個防線本身有效，不能
+    只靠信任下游永遠遵守契約。
     """
-    if not encounter_token:
+    if encounter_token is None:
         raise HTTPException(status_code=401, detail="missing encounter token")
 
-    spirit_id = quest_id.split(":")[0] if ":" in quest_id else quest_id
+    try:
+        spirit_id = spirit_id_for_quest(quest_id)
+    except ValueError:
+        # 格式不符的 quest_id 沒有對應的任務可以完成——跟真的查不到那一列
+        # quest_progress 是同一種情況，都是 404，不該讓 ValueError 一路
+        # 往外拋變成 500（issue #30：路由宣告的錯誤碼要跟實作一致）。
+        raise HTTPException(status_code=404, detail="quest not found")
 
     encounter_player_id = require_encounter_token(spirit_id, encounter_token)
     if encounter_player_id != session_player_id:
@@ -415,23 +343,19 @@ def complete_quest(
         .first()
     )
     if progress is None:
-        progress = models.QuestProgress(
-            player_id=session_player_id,
-            quest_id=quest_id,
-            status=STATUS_COMPLETED,
-            attempts_today=0,
-            attempts_date=taipei_today(datetime.now(timezone.utc)),
-            completed_at=datetime.now(timezone.utc),
-        )
-        db.add(progress)
-    else:
+        raise HTTPException(status_code=404, detail="quest not found")
+
+    # 重複提交是正常使用者行為（網路重試、連點兩下）：狀態已是 completed 時
+    # 不重新蓋一次 completed_at，維持第一次完成的時間戳才是事實。
+    if progress.status != STATUS_COMPLETED:
         progress.status = STATUS_COMPLETED
-        if progress.completed_at is None:
-            progress.completed_at = datetime.now(timezone.utc)
+        progress.completed_at = datetime.now(timezone.utc)
+        db.commit()
 
-    db.commit()
-
-    res_result = apply_resonance(
+    # 共鳴入帳去重靠 S5 既有的 `resonance_events` UNIQUE 約束（先寫、撞到才
+    # 當重複），不是這裡再查一次「有沒有完成過」——兩邊各自防重複，任何一邊
+    # 出錯都還有另一邊擋著。
+    result = apply_resonance(
         db,
         player_id=session_player_id,
         spirit_id=spirit_id,
@@ -440,420 +364,303 @@ def complete_quest(
         amount=AMOUNT_QUEST,
     )
 
-    # 腦袋生成 (v2.1 §6.4 硬規則：必須在 DB 寫入後執行)
-    wrapper_text = generate_quest_wrapper(str(session_player_id), quest_id, gemini_client)
+    unlock_stories: list[UnlockStory] = []
+    for stage in result.newly_unlocked_stages:
+        try:
+            unlock_stories.append(
+                generate_unlock_story(str(session_player_id), spirit_id, stage, gemini_client)
+            )
+        except Exception:  # noqa: BLE001
+            # 敘事失敗不能讓已經跨過的門檻在回應裡消失——用回退文字頂替，
+            # 不是整段拿掉。玩家的共鳴值已經是真的跨過去了。
+            unlock_stories.append(UnlockStory(stage=stage, story_text=_UNLOCK_STORY_FALLBACK))
 
-    unlock_story_dict = None
-    if res_result.newly_unlocked_stages:
-        stories = [
-            generate_unlock_story(str(session_player_id), spirit_id, stg, gemini_client)
-            for stg in res_result.newly_unlocked_stages
-        ]
-        latest = stories[-1]
-        unlock_story_dict = {"stage": latest.stage, "story_text": latest.story_text}
+    try:
+        wrapper_text = generate_quest_wrapper(str(session_player_id), quest_id, gemini_client)
+    except Exception:  # noqa: BLE001
+        wrapper_text = _QUEST_WRAPPER_FALLBACK
 
     return schemas.QuestCompleteResponse(
         quest_wrapper_text=wrapper_text,
-        resonance_value=res_result.resonance_value,
-        stage=res_result.stage,
-        unlock_story=unlock_story_dict,
+        resonance_value=result.resonance_value,
+        unlock_stories=unlock_stories,
     )
 
 
 @router.get(
     "/resonance/{spirit_id}",
-    response_model=schemas.ResonanceProgressResponse,
-    responses={
-        401: {"model": schemas.HTTPErrorResponse},
-        404: {"model": schemas.HTTPErrorResponse},
-    },
+    response_model=schemas.ResonanceQueryResponse,
+    responses={**_ERROR_401, **_ERROR_404},
 )
 def get_resonance(
     spirit_id: str,
-    session_player_id: uuid.UUID = Depends(require_session_token),
+    player_id: uuid.UUID = Depends(require_session_token),
     db: Session = Depends(get_db),
 ):
     """
-    S5 / GET /api/v1/resonance/{spirit_id} 共鳴進度查詢（BE#35）。
+    S5．單一靈魂共鳴進度查詢（issue #35，SDD v1 §8.9）。
 
-    1. 驗證 Session Token。
-    2. 驗證 spirit 存在且 is_active=True (否則 404)。
-    3. 動態依 resonance_value 計算 stage (0~3) 與 next_threshold (10/40/100)。
-    4. 未曾互動的玩家回傳 0 點（HTTP 200）。
+    `stage`／`next_threshold` 一律由 `resonance_value` 重算（`resonance.stage_for_value`
+    ／`next_threshold`），不信任任何快取欄位——`resonance_value` 才是事實來源
+    （見 `models.Resonance` 的說明）。
     """
     spirit = db.query(models.Spirit).filter_by(spirit_id=spirit_id).first()
     if spirit is None or not spirit.is_active:
         raise HTTPException(status_code=404, detail="spirit not found")
 
-    row = (
-        db.query(models.Resonance)
-        .filter_by(player_id=session_player_id, spirit_id=spirit_id)
-        .first()
-    )
-    val = row.resonance_value if row else 0
+    row = db.query(models.Resonance).filter_by(player_id=player_id, spirit_id=spirit_id).first()
+    # 還沒開始不是錯誤——玩家可能連召喚都沒召喚過這個靈魂。
+    value = row.resonance_value if row is not None else 0
 
-    return schemas.ResonanceProgressResponse(
+    return schemas.ResonanceQueryResponse(
         spirit_id=spirit_id,
-        resonance_value=val,
-        stage=stage_for_value(val),
-        next_threshold=next_threshold(val),
+        resonance_value=value,
+        stage=stage_for_value(value),
+        next_threshold=next_threshold(value),
     )
 
 
-@router.get(
-    "/profile",
-    response_model=schemas.ProfileResponse,
-    responses={401: {"model": schemas.HTTPErrorResponse}},
-)
+@router.get("/profile", response_model=schemas.ProfileResponse, responses={**_ERROR_401})
 def get_profile(
-    session_player_id: uuid.UUID = Depends(require_session_token),
+    player_id: uuid.UUID = Depends(require_session_token),
     db: Session = Depends(get_db),
 ):
     """
-    GET /api/v1/profile 玩家個人頁彙總查詢（BE#36）。
+    玩家個人頁彙總（issue #36，v2.1 §10.3 漏列補回；SDD v1 §8.10）。
 
-    1. 需 Session Token (未帶或無效回傳 401)。
-    2. 純身體資料表直查，不呼叫 Brain 腦袋模組。
-    3. 一次回傳所有任務與所有靈魂的共鳴進度。
-    4. 全新玩家回傳空陣列 {"quests":[], "resonance":[]} (HTTP 200)。
+    純身體自己的表直查，不呼叫腦袋。`stage` 用跟 `get_resonance` 完全同一支
+    `stage_for_value`——兩支端點不得各自重算門檻邏輯，那會製造「同一個玩家
+    在 Profile 頁跟共鳴頁看到不同 stage」這種只能靠巧合才不會發生的 bug。
     """
-    now = datetime.now(timezone.utc)
-    today = taipei_today(now)
+    quest_rows = db.query(models.QuestProgress).filter_by(player_id=player_id).all()
+    resonance_rows = db.query(models.Resonance).filter_by(player_id=player_id).all()
 
-    progresses = db.query(models.QuestProgress).filter_by(player_id=session_player_id).all()
-    quest_results = []
-    for p in progresses:
-        if p.attempts_date != today:
-            p.attempts_today = 0
-            p.attempts_date = today
-            db.commit()
-
-        spirit_id = p.quest_id.split(":")[0] if ":" in p.quest_id else p.quest_id
-
-        status = p.status
-        if p.attempts_today >= MAX_DAILY_ATTEMPTS and p.status != STATUS_COMPLETED:
-            status = STATUS_DAILY_LIMIT_REACHED
-
-        quest_results.append(
-            schemas.QuestItemResponse(
-                quest_id=p.quest_id,
-                spirit_id=spirit_id,
-                status=status,
-                attempts_today=p.attempts_today,
+    return schemas.ProfileResponse(
+        quests=[_quest_list_item(row) for row in quest_rows],
+        resonance=[
+            schemas.ProfileResonanceItem(
+                spirit_id=row.spirit_id,
+                resonance_value=row.resonance_value,
+                stage=stage_for_value(row.resonance_value),
             )
-        )
-
-    resonances = db.query(models.Resonance).filter_by(player_id=session_player_id).all()
-    resonance_results = [
-        schemas.ResonanceItemResponse(
-            spirit_id=r.spirit_id,
-            resonance_value=r.resonance_value,
-            stage=stage_for_value(r.resonance_value),
-        )
-        for r in resonances
-    ]
-
-    return schemas.ProfileResponse(quests=quest_results, resonance=resonance_results)
-
-
-@router.post(
-    "/quests/{quest_id}/landmark-photo",
-    response_model=schemas.LandmarkPhotoResponse,
-    responses={
-        401: {"model": schemas.HTTPErrorResponse},
-        403: {"model": schemas.HTTPErrorResponse},
-        404: {"model": schemas.HTTPErrorResponse},
-        429: {"model": schemas.HTTPErrorResponse},
-    },
-)
-def upload_landmark_photo(
-    quest_id: str,
-    file: UploadFile = File(...),
-    session_player_id: uuid.UUID = Depends(require_session_token),
-    encounter_token: str | None = Header(default=None, alias=ENCOUNTER_TOKEN_HEADER),
-    db: Session = Depends(get_db),
-    landmark_recognizer: LandmarkRecognizer = Depends(get_landmark_recognizer),
-):
-    """
-    S12 / POST /api/v1/quests/{quest_id}/landmark-photo 紀念照片地標辨識與相遇收藏（BE#44）。
-
-    1. 需 Session Token ＋ Encounter Token (Sense Token 遭拒)。
-    2. 先檢查並扣減地標辨識配額 (landmark_recognition_calls)；超額拋出 HTTP 429 且不呼叫辨識。
-    3. 照片位元組僅於記憶體中讀取並過渡給辨識器，辨識完畢立即釋放，不落地儲存。
-    4. 寫入 encounter_collections 表（含 UNIQUEConstraint 防重複加分），首度相遇收藏加值 +10 分。
-    5. 辨識失敗時回傳 false，不拋出例外亦不阻擋任務完成。
-    """
-    if not encounter_token:
-        raise HTTPException(status_code=401, detail="missing encounter token")
-
-    spirit_id = quest_id.split(":")[0] if ":" in quest_id else quest_id
-
-    encounter_player_id = require_encounter_token(spirit_id, encounter_token)
-    if encounter_player_id != session_player_id:
-        raise HTTPException(status_code=403, detail="token holder mismatch")
-
-    # 1. 檢查地標辨識配額 (BE#32/BE#44)
-    consume_quota(db, session_player_id, "landmark_recognition_calls", 1)
-
-    # 2. 記憶體中讀取照片 bytes 並交給辨識器
-    image_bytes = file.file.read()
-    recognized = False
-    try:
-        recognized = landmark_recognizer.recognize(image_bytes, spirit_id)
-    finally:
-        del image_bytes  # 立即拋棄位元組
-
-    # 3. 相遇收藏與共鳴加值 (+10 分)
-    collection = (
-        db.query(models.EncounterCollection)
-        .filter_by(player_id=session_player_id, place_id=spirit_id)
-        .first()
-    )
-    if collection is None:
-        collection = models.EncounterCollection(
-            player_id=session_player_id,
-            place_id=spirit_id,
-            recognized_label=spirit_id if recognized else None,
-        )
-        db.add(collection)
-        db.commit()
-
-    res_result = apply_resonance(
-        db,
-        player_id=session_player_id,
-        spirit_id=spirit_id,
-        source_type=SOURCE_ENCOUNTER_COLLECTION,
-        source_id=f"collection:{spirit_id}",
-        amount=AMOUNT_ENCOUNTER_COLLECTION,
-    )
-
-    return schemas.LandmarkPhotoResponse(
-        landmark_recognized=recognized,
-        resonance_value=res_result.resonance_value,
-        stage=res_result.stage,
-    )
-
-
-@router.get(
-    "/spirits/{place_id}/daily-event",
-    response_model=schemas.DailyEventResponse,
-    responses={404: {"model": schemas.HTTPErrorResponse}},
-)
-def get_daily_event(place_id: str, db: Session = Depends(get_db)):
-    """
-    S10 / GET /api/v1/spirits/{placeId}/daily-event 當日情境查詢（BE#26）。
-
-    1. 公開世界狀態端點，無需 Token 驗證。
-    2. 驗證地標存在且 is_active=True (否則回傳 404)。
-    3. 優先回傳當日快取；若無則回傳昨日快取；若皆無則回傳人工保底內容（均回傳 HTTP 200）。
-    """
-    spirit = db.query(models.Spirit).filter_by(spirit_id=place_id).first()
-    if spirit is None or not spirit.is_active:
-        raise HTTPException(status_code=404, detail="spirit not found")
-
-    now = datetime.now(timezone.utc)
-    today = taipei_today(now)
-    yesterday = today - timedelta(days=1)
-
-    cache_today = (
-        db.query(models.DailyEventCache)
-        .filter_by(place_id=place_id, event_date=today)
-        .first()
-    )
-    if cache_today and cache_today.content:
-        content = cache_today.content
-        return schemas.DailyEventResponse(
-            place_id=place_id,
-            event_date=today,
-            narrative_text=content.get("narrative_text", DEFAULT_DAILY_EVENT.narrative_text),
-            theme_title=content.get("theme_title", DEFAULT_DAILY_EVENT.theme_title),
-        )
-
-    cache_yesterday = (
-        db.query(models.DailyEventCache)
-        .filter_by(place_id=place_id, event_date=yesterday)
-        .first()
-    )
-    if cache_yesterday and cache_yesterday.content:
-        content = cache_yesterday.content
-        return schemas.DailyEventResponse(
-            place_id=place_id,
-            event_date=today,
-            narrative_text=content.get("narrative_text", DEFAULT_DAILY_EVENT.narrative_text),
-            theme_title=content.get("theme_title", DEFAULT_DAILY_EVENT.theme_title),
-        )
-
-    return schemas.DailyEventResponse(
-        place_id=place_id,
-        event_date=today,
-        narrative_text=DEFAULT_DAILY_EVENT.narrative_text,
-        theme_title=DEFAULT_DAILY_EVENT.theme_title,
+            for row in resonance_rows
+        ],
     )
 
 
 @router.get(
     "/players/me/memory-summary",
     response_model=schemas.MemorySummaryResponse,
-    responses={401: {"model": schemas.HTTPErrorResponse}},
+    responses={**_ERROR_401},
 )
-def get_player_memory_summary(
-    session_player_id: uuid.UUID = Depends(require_session_token),
+def get_memory_summary(
+    player_id: uuid.UUID = Depends(require_session_token),
     db: Session = Depends(get_db),
 ):
     """
-    GET /api/v1/players/me/memory-summary 記憶摘要查詢（BE#37）。
+    B6．玩家記憶摘要查詢（issue #37）。
 
-    1. 需 Session Token 驗證 (401)。
-    2. 嚴格過濾 player_id = session_player_id (隱私隔離)。
-    3. 不含 768 維 Embedding 向量欄位，節省頻寬與防止數據外洩。
-    4. 冷啟動回傳 {"memories": []} (HTTP 200)。
+    只讀取，不生成——摘要生成是 B8 nightly batch（#40）的職責，本端點在
+    #40 上線前只會看到既有的 `dialogue_summary` 來源記錄，這是預期行為。
+
+    隱私邊界（CONTEXT.md「玩家記憶僅屬單一玩家」）：`filter_by(player_id=...)`
+    是唯一的過濾條件，拿掉它會讓別的玩家對同一靈魂的記憶洩漏出來——這正是
+    issue #37 AC3 特別設計成「Q 的記錄比 P 多」來確保測得到的情況。
     """
-    memories = (
-        db.query(brain_models.MemoryEmbedding)
-        .filter_by(player_id=session_player_id)
-        .order_by(brain_models.MemoryEmbedding.created_at.desc())
+    rows = (
+        db.query(MemoryEmbedding)
+        .filter_by(player_id=player_id)
+        .order_by(MemoryEmbedding.spirit_id, MemoryEmbedding.created_at)
         .all()
     )
 
-    items = [
-        schemas.MemoryItemResponse(
-            memory_id=m.memory_id,
-            spirit_id=m.spirit_id,
-            summary_text=m.summary_text,
-            created_at=m.created_at,
+    memories_by_spirit: dict[str, list[schemas.MemorySummaryItem]] = {}
+    for row in rows:
+        memories_by_spirit.setdefault(row.spirit_id, []).append(
+            schemas.MemorySummaryItem(summary_text=row.summary_text, created_at=row.created_at)
         )
-        for m in memories
-    ]
-    return schemas.MemorySummaryResponse(memories=items)
 
-
-@router.get(
-    "/assets/{avatar_id}",
-    response_model=schemas.AssetCatalogResponse,
-    responses={404: {"model": schemas.HTTPErrorResponse}},
-)
-def get_asset_catalog(avatar_id: str, db: Session = Depends(get_db)):
-    """
-    GET /api/v1/assets/{avatarId} 素材 Catalog 與版本端點（BE#38）。
-
-    1. 公開端點（免 Token 驗證）。
-    2. 驗證地標/靈魂存在性，無效及非 is_active 靈魂回傳 404。
-    3. 回傳 Unity Addressables 遠端 Catalog URL、Bundle URL 與穩定版本識別號。
-    """
-    spirit_id = avatar_id.replace("_spirit", "") if avatar_id.endswith("_spirit") else avatar_id
-    spirit = (
-        db.query(models.Spirit)
-        .filter(models.Spirit.spirit_id.in_([avatar_id, spirit_id]))
-        .first()
-    )
-    if spirit is None or not spirit.is_active:
-        raise HTTPException(status_code=404, detail="avatar not found")
-
-    base_cdn = os.getenv("CDN_BASE_URL", "https://cdn.citysoul.taipei/assets")
-    updated_time = spirit.updated_at or datetime.now(timezone.utc)
-    version = f"v1.0.{int(updated_time.timestamp())}"
-
-    return schemas.AssetCatalogResponse(
-        avatar_id=avatar_id,
-        catalog_url=f"{base_cdn}/{avatar_id}/catalog.json",
-        bundle_url=f"{base_cdn}/{avatar_id}/{avatar_id}.bundle",
-        version=version,
-        updated_at=updated_time,
-    )
+    return schemas.MemorySummaryResponse(memories_by_spirit=memories_by_spirit)
 
 
 @router.post(
-    "/players/me/push-subscription",
-    response_model=schemas.PushSubscriptionResponse,
-    responses={401: {"model": schemas.HTTPErrorResponse}},
+    "/spirits/{place_id}/dialogue",
+    response_model=schemas.DialogueResponse,
+    # `tts=None` 時整個欄位從 JSON 消失，不是序列化成 `"tts": null`——
+    # 見 `schemas.DialogueResponse` 的說明。
+    response_model_exclude_none=True,
+    responses={**_ERROR_401, **_ERROR_403, **_ERROR_404, **_ERROR_429},
 )
-def upsert_push_subscription(
-    payload: schemas.PushSubscriptionRequest,
+def dialogue(
+    place_id: str,
+    payload: schemas.DialogueRequest,
     session_player_id: uuid.UUID = Depends(require_session_token),
+    encounter_token: str | None = Header(default=None, alias=ENCOUNTER_TOKEN_HEADER),
+    sense_token: str | None = Header(default=None, alias=SENSE_TOKEN_HEADER),
+    gemini_client: GeminiClient = Depends(get_gemini_client),
+    tts_client: TTSClient = Depends(get_tts_client),
+    safety_checker: SafetyChecker = Depends(get_safety_checker),
     db: Session = Depends(get_db),
 ):
     """
-    POST /api/v1/players/me/push-subscription 註冊/更新推播訂閱（BE#39）。
+    對話端點（issue #45 完整版）。
 
-    1. 需 Session Token 驗證 (401)。
-    2. 主鍵為 player_id，重複註冊更新 push_token 與 is_subscribed，避免重複列。
+    ```
+    驗證 Session Token ＋（Encounter 或 Sense Token）
+      → 配額檢查（#32）
+      → B12 固定招呼比對 → 命中直接回預寫台詞，不呼叫 B4／B2／B1
+      → 未命中 → B4 安全邊界（#11）→ 不安全就婉拒，不繼續往下
+                              → 安全 → B2 Prompt 組裝（#12）→ B1 Gemini（#8）
+      → B10 TTS（#21）
+      → B7 短期記憶寫入
+    ```
+
+    `user_input` 空白或超長由 `DialogueRequest` 的 pydantic 驗證在進到這支
+    函式之前就擋下（422），配額因此不會被消耗——格式錯誤不該扣玩家額度。
     """
-    sub = (
-        db.query(models.PushSubscription)
-        .filter_by(player_id=session_player_id)
-        .first()
-    )
-    now = datetime.now(timezone.utc)
-    if sub is None:
-        sub = models.PushSubscription(
-            player_id=session_player_id,
-            push_token=payload.push_token,
-            is_subscribed=payload.is_subscribed,
-            updated_at=now,
+    presence_player_id = _require_presence_token(place_id, encounter_token, sense_token)
+
+    # 兩張憑證必須屬於同一個玩家。少了這道檢查，A 的 session 配上 B 的相遇／
+    # 感應憑證就能通過——那等於讓沒到現場（或沒進感應範圍）的人借用別人的
+    # 在場證明。
+    if presence_player_id != session_player_id:
+        raise HTTPException(status_code=403, detail="token holder mismatch")
+
+    spirit = db.query(models.Spirit).filter_by(spirit_id=place_id).first()
+    if spirit is None or not spirit.is_active:
+        raise HTTPException(status_code=404, detail="spirit not found")
+
+    # 配額是第一道關卡，排在 B12／B4／B2／B1 之前——被擋下的請求不該產生任何
+    # 生成成本（issue #32）。
+    try:
+        consume(db, player_id=session_player_id, resource=DIALOGUE_QUOTA_RESOURCE)
+    except QuotaExceededError as exc:
+        # detail 只帶這個玩家自己的資訊（`QuotaExceededError` 的設計就是如此），
+        # 不會不小心洩漏其他玩家的用量或內部設定值。
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "resource": exc.resource,
+                "limit": exc.limit,
+                "reset_at": exc.reset_at.isoformat(),
+            },
         )
-        db.add(sub)
+
+    canned = match_canned_greeting(db, place_id, payload.user_input)
+    if canned is not None:
+        reply_text, source = canned, "canned"
     else:
-        sub.push_token = payload.push_token
-        sub.is_subscribed = payload.is_subscribed
-        sub.updated_at = now
+        # `_generated` 用一個可變旗標記錄「有沒有真的走到生成那一步」，而不是
+        # 另外再呼叫一次 `safety_checker.check()` 來判斷 source——安全分類本身
+        # 呼叫 Gemini，多呼叫一次等於讓玩家的每一句話都被分類兩遍、多付一次
+        # 那個成本，`enforce_safety_boundary`（issue #11）已經只呼叫一次
+        # `check()`，這裡跟著遵守同一條規則。
+        generated = {"value": False}
 
-    db.commit()
-    db.refresh(sub)
+        def _generate_reply() -> str:
+            generated["value"] = True
+            assembled = assemble_dialogue_prompt(
+                db,
+                player_id=session_player_id,
+                spirit_id=place_id,
+                player_input=payload.user_input,
+            )
+            # 沒有生效人格卡時 B2 回傳 None（issue #12 AC5）：退回只餵原始
+            # 輸入給 Gemini，跟 #42 可用版對「沒有人格卡」情境的處理一致，
+            # 不是新行為。
+            prompt = assembled.as_prompt() if assembled is not None else payload.user_input
+            # `GeminiClient.generate()` 永遠回傳非空字串、永遠不拋例外（見
+            # gemini.py 模組說明）——這裡不需要 try/except，模型失敗時它自己
+            # 回退到人工預寫台詞，這一層看不出兩者的差別，也不需要看出。
+            return gemini_client.generate(prompt)
 
-    return schemas.PushSubscriptionResponse(
-        player_id=sub.player_id,
-        push_token=sub.push_token,
-        is_subscribed=sub.is_subscribed,
-        updated_at=sub.updated_at,
-    )
+        reply_text = enforce_safety_boundary(safety_checker, payload.user_input, _generate_reply)
+        source = "generated" if generated["value"] else "refused"
+
+    # 同理：TTS 失敗回 None，純文字照常顯示，不拋例外。婉拒台詞也要合成語音
+    # ——玩家聽到的仍然是角色在說話，不是無聲的系統訊息。
+    tts_result = tts_client.synthesize(reply_text)
+
+    # 感應／召喚兩種模式共用同一把 session key（`player_id` + `spirit_id`），
+    # 玩家從 150m 聊到 50m 召喚時對話自然延續（SDD 第7.3節）。
+    session_key_player_id = str(session_player_id)
+    append_session_turn(session_key_player_id, place_id, {"role": "user", "text": payload.user_input})
+    append_session_turn(session_key_player_id, place_id, {"role": "assistant", "text": reply_text})
+
+    return schemas.DialogueResponse(reply_text=reply_text, source=source, tts=tts_result)
 
 
-@router.delete(
-    "/players/me/push-subscription",
-    response_model=schemas.PushSubscriptionResponse,
-    responses={401: {"model": schemas.HTTPErrorResponse}},
+@router.get(
+    "/spirits/{place_id}", response_model=schemas.SpiritResponse, responses={**_ERROR_404}
 )
-def unsubscribe_push(
-    session_player_id: uuid.UUID = Depends(require_session_token),
-    db: Session = Depends(get_db),
-):
+def get_spirit(place_id: str, db: Session = Depends(get_db)):
     """
-    DELETE /api/v1/players/me/push-subscription 退訂推播（BE#39）。
+    對應對外 API 清單：GET /api/v1/spirits/{placeId}（Sprint1 先只回基本資料）。
 
-    1. 需 Session Token 驗證 (401)。
-    2. 將 is_subscribed 標記為 False，退訂後絕不安裝/送出推播。
+    `is_active=false` 也回 404（issue #30 補上，寫專屬測試檔時發現這裡漏了
+    這個檢查）——對齊 `/sense`／`/summon`／`/resonance/{spiritId}` 一致的
+    處理原則：下架的靈魂對玩家來說就是不存在，不該讓這支端點單獨露出一個
+    已下架靈魂的基本資料。
     """
-    sub = (
-        db.query(models.PushSubscription)
-        .filter_by(player_id=session_player_id)
+    spirit = db.query(models.Spirit).filter_by(spirit_id=place_id).first()
+    if spirit is None or not spirit.is_active:
+        raise HTTPException(status_code=404, detail="spirit not found")
+    return spirit
+
+
+@router.get(
+    "/spirits/{place_id}/daily-event",
+    response_model=schemas.DailyEventResponse,
+    responses={**_ERROR_404},
+)
+def get_daily_event(place_id: str, db: Session = Depends(get_db)):
+    """
+    S10．當日情境查詢（issue #26）。**公開世界狀態，不需要任何 token**。
+
+    保底鏈：今天的快取 → 昨天的快取 → 人工預寫保底文字，**永遠回 200**，
+    不回 404 空畫面——排程延遲或失敗時玩家不該看到空白（issue #26 AC，
+    硬要求）。`placeId` 本身不存在才是 404：那是「問了一個不存在的地標」，
+    跟「地標存在但今天還沒有內容」是兩種不同的情況。
+    """
+    spirit = db.query(models.Spirit).filter_by(spirit_id=place_id).first()
+    if spirit is None or not spirit.is_active:
+        raise HTTPException(status_code=404, detail="spirit not found")
+
+    today = taipei_today(datetime.now(timezone.utc))
+    row = (
+        db.query(models.DailyEventCache)
+        .filter_by(place_id=place_id, event_date=today)
         .first()
     )
-    now = datetime.now(timezone.utc)
-    if sub is None:
-        sub = models.PushSubscription(
-            player_id=session_player_id,
-            push_token="",
-            is_subscribed=False,
-            updated_at=now,
+    if row is None:
+        row = (
+            db.query(models.DailyEventCache)
+            .filter_by(place_id=place_id, event_date=today - timedelta(days=1))
+            .first()
         )
-        db.add(sub)
-    else:
-        sub.is_subscribed = False
-        sub.updated_at = now
 
-    db.commit()
-    db.refresh(sub)
+    if row is not None:
+        return schemas.DailyEventResponse(**row.content)
 
-    return schemas.PushSubscriptionResponse(
-        player_id=sub.player_id,
-        push_token=sub.push_token,
-        is_subscribed=sub.is_subscribed,
-        updated_at=sub.updated_at,
+    return schemas.DailyEventResponse(narrative_text=DAILY_EVENT_FALLBACK)
+
+
+@router.get(
+    "/assets/{avatar_id}", response_model=schemas.AvatarAssetResponse, responses={**_ERROR_404}
+)
+def get_avatar_asset(avatar_id: str, db: Session = Depends(get_db)):
+    """
+    Unity Addressables catalog／bundle 版本查詢（issue #38，v2.1 §7.4）。
+
+    不需要任何憑證——這是靜態資產的版本資訊，不是玩家資料。`bundle_url` 指向
+    哪裡（本機路徑、測試 bucket、正式 CDN）完全由 `avatar_assets` 資料列本身
+    決定，這支端點不關心也不驗證那個 URL 是不是真的可用（issue #38 AC4：
+    開發期不該被基礎建設進度卡住）。
+    """
+    asset = db.query(models.AvatarAsset).filter_by(avatar_id=avatar_id).first()
+    if asset is None:
+        raise HTTPException(status_code=404, detail="avatar asset not found")
+
+    return schemas.AvatarAssetResponse(
+        avatar_id=asset.avatar_id, bundle_url=asset.bundle_url, version=asset.version
     )
-
-
-
-
-
-
-

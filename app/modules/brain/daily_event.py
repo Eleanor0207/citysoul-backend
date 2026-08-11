@@ -1,186 +1,115 @@
 """
-B9．當日情境內容生成（issue #20）。
+B9．當日情境內容生成（issue #20；CONTEXT.md「當日情境」）。
 
-「今天這個地標有什麼不一樣」的一小段敘事，讓玩家每天打開都看到新東西。
+**只做生成，不管排程、快取或對外 serve**——那些是 S10（issue #26）的範圍，
+v2.1 §6.4 刻意把「腦袋生成內容」跟「身體排程／快取／serve」拆開兩張票。
+這支模組因此完全不碰資料庫：`generate_daily_event_content()` 沒有 `db`
+參數，也沒有任何寫入操作。
 
-## 只做生成，不碰排程／快取／資料庫
+## 輸入來源限定（issue #20 AC2）
 
-排程、`daily_event_cache` 的讀寫、對外 serve 全部屬 S10（#26），刻意拆開
-（v2.1 §6.4）。所以這個模組**沒有 DB session 參數，也沒有任何寫入操作**——
-不是「還沒做」，是它不該做。
+CONTEXT.md「當日情境」明訂：**只**由日期／節日、地標官方公開活動、人工審核
+資料構成；LLM 只能把這些受控輸入改寫成短敘事。這支模組因此只認得三種輸入：
 
-這條邊界由測試守著：一旦有人在這裡加了 session 參數，模組邊界就開始溶解，
-而「內容生成」與「什麼時候生成、存在哪」會變成同一團東西。
+1. `taiwan_holiday_name(event_date)`——純函式，資料是模組常數，不打任何
+   外部行事曆 API。
+2. `official_event`——地標官方公開活動，呼叫端傳入（未來由 #26 從審核過的
+   資料表讀出）。
+3. `curated_material`——人工審核素材，同上。
 
-## 輸入來源是白名單，不是黑名單
-
-SDD 允許的輸入**只有三類**：
-
-1. 日期／節日
-2. 地標官方公開活動
-3. 人工審核素材
-
-⚠️ **不得**使用即時天氣 API、社群內容，或任何未經審核的外部來源。
-
-這不是假設性的規則。曾有原型（`docs/aistudio-ar`）把天氣／氣溫／空氣品質餵進
-prompt，那超出 SDD 允許的清單。要納入天氣得先修改 SDD，不是在這裡偷渡——
-所以有一條測試直接掃這個模組的原始碼，確認沒有任何對外抓資料的呼叫。
-
-## 無合格輸入不是錯誤
-
-大多數日子既不是節日、也沒有官方活動、也沒有人工素材。那是**常態**，不是缺漏。
-回退人工預寫台詞，讓玩家仍然看到東西——「今天沒素材」不是可接受的畫面。
+**這裡沒有、也絕對不該有天氣、空氣品質或社群內容的呼叫**——`docs/aistudio-ar`
+的舊原型曾把天氣／氣溫餵進 prompt，那超出 SDD 允許的輸入清單。要納入天氣
+得先改 SDD，不是在這支模組裡偷渡一行 API 呼叫。
 """
 from __future__ import annotations
 
-import logging
-from dataclasses import dataclass, field
 from datetime import date
 
-from app.modules.brain.gemini import FALLBACK_REPLY, GeminiClient
-from app.modules.brain.historical_boundary import get_historical_boundary_rules
+from pydantic import BaseModel
 
-logger = logging.getLogger(__name__)
+from app.modules.brain.gemini import FALLBACK_REPLY as _GEMINI_CLIENT_FALLBACK
+from app.modules.brain.gemini import GeminiClient
 
-# 🔒 文案審核狀態，與 B5／B4／B11 同一個慣例。
-CONTENT_REVIEW_STATUS = "PENDING_NARRATIVE_REVIEW"
+# 只涵蓋固定西曆日期的國定假日。農曆假日（春節、端午、中秋等）因年份而異，
+# 需要農曆對照表——這裡故意不做：寫死幾個示例日期換不到正確性，不如清楚
+# 承認目前做不到，等真的要接農曆資料時再處理，不要用錯誤的近似值掩蓋這個缺口。
+_FIXED_DATE_HOLIDAYS: dict[tuple[int, int], str] = {
+    (1, 1): "元旦",
+    (2, 28): "228和平紀念日",
+    (4, 4): "兒童節",
+    (5, 1): "勞動節",
+    (10, 10): "國慶日",
+}
 
-
-@dataclass(frozen=True)
-class DailyEventContent:
-    """
-    當日情境。`narrative_text` 是要注入 B2 User Turn 第一段的那段文字。
-
-    `is_fallback` 供觀察生成成功率用。**不建議**用它改變玩家看到的東西——
-    回退台詞本來就寫得像角色會說的話。
-
-    `sources` 記錄這次用了哪些合格輸入。它存在的理由是**可稽核**：哪天有人
-    懷疑內容摻了不該有的來源，這裡看得出來。
-    """
-
-    place_id: str
-    event_date: date
-    narrative_text: str
-    is_fallback: bool = False
-    sources: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class DailyEventInputs:
-    """
-    合格輸入。**三類，就這三類**（SDD）。
-
-    做成明確的資料結構而不是散落的參數，是為了讓「允許哪些輸入」在型別上就
-    看得見。要加第四類就得改這裡，而那會出現在 code review 的 diff 裡——
-    不像多塞一個字串進 prompt 那樣容易溜過去。
-
-    由呼叫端（S10 / #26）負責填。這個模組**不自己去抓任何資料**。
-    """
-
-    # 1. 日期／節日，例如「中元節」。
-    festival: str | None = None
-    # 2. 地標官方公開活動，例如「安太歲法會」。
-    official_events: list[str] = field(default_factory=list)
-    # 3. 人工審核素材：敘事負責人預先寫好、審核過的片段。
-    curated_notes: list[str] = field(default_factory=list)
-
-    def is_empty(self) -> bool:
-        """三類都沒有東西——這是常態，不是錯誤。"""
-        return not (self.festival or self.official_events or self.curated_notes)
-
-    def describe(self) -> list[str]:
-        """列出這次實際用到的來源，供稽核。"""
-        used = []
-        if self.festival:
-            used.append("festival")
-        if self.official_events:
-            used.append("official_events")
-        if self.curated_notes:
-            used.append("curated_notes")
-        return used
-
-
-# 人工預寫的回退台詞。
+# 無合格輸入、或 Gemini 呼叫失敗時的回退台詞（issue #20 AC3／AC4）。
 #
-# 刻意寫得像「今天很平常」而不是「系統沒有資料」——大多數日子本來就很平常，
-# 而玩家不需要知道我們的內容管線今天是空的。
-_FALLBACK_NARRATIVE = "今天沒什麼特別的。人來人往，香火照舊，跟昨天差不多——不過每天的「差不多」其實都不太一樣。"
+# 刻意**不**重用 `gemini.FALLBACK_REPLY`——那句是對話用的（「城市靈魂安靜地
+# 看著你……要不要先跟我說說你眼前看到的？」），套進「今天的城市發生了什麼」
+# 這個敘述語境會文不對題。跟 `router.py` 原本持有自己的 FALLBACK_REPLY 是
+# 同一個理由：每個模組的回退文字要適合自己的語境，不是共用一句然後在不同
+# 地方讀起來都有點怪。
+DAILY_EVENT_FALLBACK = "今天的城市，一如往常，安靜地繼續著它的故事。"
 
 
-def build_daily_event_prompt(place_id: str, event_date: date, inputs: DailyEventInputs) -> str:
-    """
-    組出生成提示。純函式，方便直接驗證「prompt 裡只有合格輸入」。
-    """
+class DailyEventContent(BaseModel):
+    narrative_text: str
+
+
+def taiwan_holiday_name(event_date: date) -> str | None:
+    """固定西曆日期的國定假日名稱；不是假日或是農曆假日（未涵蓋）則回 None。"""
+    return _FIXED_DATE_HOLIDAYS.get((event_date.month, event_date.day))
+
+
+def _build_prompt(
+    place_id: str, event_date: date, *, holiday: str | None, official_event: str | None,
+    curated_material: str | None,
+) -> str:
     lines = [
-        f"你是地標「{place_id}」的擬人化集體意識。",
-        f"今天是 {event_date.isoformat()}。",
-        "",
-        "以下是今天這個地方的情況：",
+        f"你是「{place_id}」這個地標的城市靈魂，請用兩三句話描述今天（{event_date.isoformat()}）"
+        "的當日情境，語氣要符合角色設定，不要條列，不要加開場白或結語。",
     ]
-
-    if inputs.festival:
-        lines.append(f"- 節日：{inputs.festival}")
-    for event in inputs.official_events:
-        lines.append(f"- 官方活動：{event}")
-    for note in inputs.curated_notes:
-        lines.append(f"- 補充：{note}")
-
-    lines += [
-        "",
-        get_historical_boundary_rules(),
-        "",
-        "用第一人稱寫一段 40 到 80 字的短敘事，描述你今天感受到的氣氛。",
-        "不要標題、不要條列、不要重複上面的條目原文。",
-    ]
-
+    if holiday:
+        lines.append(f"今天是{holiday}。")
+    if official_event:
+        lines.append(f"地標官方公開活動：{official_event}")
+    if curated_material:
+        lines.append(f"參考素材：{curated_material}")
     return "\n".join(lines)
 
 
-def fallback_content(place_id: str, event_date: date) -> DailyEventContent:
-    """無合格輸入或生成失敗時的內容。永遠非空。"""
-    return DailyEventContent(
-        place_id=place_id,
-        event_date=event_date,
-        narrative_text=_FALLBACK_NARRATIVE,
-        is_fallback=True,
-        sources=[],
-    )
-
-
 def generate_daily_event_content(
-    client: GeminiClient,
-    *,
     place_id: str,
     event_date: date,
-    inputs: DailyEventInputs | None = None,
+    client: GeminiClient,
+    *,
+    official_event: str | None = None,
+    curated_material: str | None = None,
 ) -> DailyEventContent:
     """
-    生成當日情境。**永遠回傳非空內容，永遠不拋例外。**
+    產生某地標某天的當日情境敘事（issue #20 AC1）。
 
-    `inputs` 由呼叫端（S10 / #26）提供。這個模組不自己去抓任何資料——那正是
-    §6.4 的模組邊界，也是「輸入來源限定」這條規則唯一守得住的方式：如果生成端
-    自己會去抓資料，白名單就只是一句口號。
+    三種合格輸入（節日／官方活動／人工素材）**全部缺席**時，直接回退，
+    連 Gemini 都不呼叫——沒有東西可以改寫，硬送一個空 prompt 只會讓模型
+    自己編造內容，那正是 CONTEXT.md 明訂要避免的「未審核即時內容」（issue
+    #20 AC3）。
+
+    `client.generate()` 本身永遠不拋例外（見 `gemini.py`），但它失敗時回傳
+    的是**對話**語境的回退句，套進這裡的敘述語境不合適，所以額外判斷一次
+    ——回傳值剛好等於 `gemini.FALLBACK_REPLY` 就換成這支模組自己的回退文字
+    （issue #20 AC4）。
     """
-    inputs = inputs or DailyEventInputs()
+    holiday = taiwan_holiday_name(event_date)
 
-    if inputs.is_empty():
-        # 大多數日子都會走到這裡。這是常態，用 info 而不是 warning。
-        logger.info("%s 在 %s 沒有合格輸入，使用人工預寫台詞", place_id, event_date)
-        return fallback_content(place_id, event_date)
+    if holiday is None and official_event is None and curated_material is None:
+        return DailyEventContent(narrative_text=DAILY_EVENT_FALLBACK)
 
-    prompt = build_daily_event_prompt(place_id, event_date, inputs)
-
-    # B1 的契約是「永遠回非空字串，失敗時回 FALLBACK_REPLY」，所以靠內容判斷
-    # 是否回退，而不是 try/except——B1 不會拋例外給我們。
+    prompt = _build_prompt(
+        place_id, event_date, holiday=holiday, official_event=official_event,
+        curated_material=curated_material,
+    )
     text = client.generate(prompt)
 
-    if not text or text == FALLBACK_REPLY:
-        logger.info("B9 當日情境生成失敗，回退人工預寫台詞（%s %s）", place_id, event_date)
-        return fallback_content(place_id, event_date)
+    if text == _GEMINI_CLIENT_FALLBACK:
+        text = DAILY_EVENT_FALLBACK
 
-    return DailyEventContent(
-        place_id=place_id,
-        event_date=event_date,
-        narrative_text=text,
-        sources=inputs.describe(),
-    )
+    return DailyEventContent(narrative_text=text)
