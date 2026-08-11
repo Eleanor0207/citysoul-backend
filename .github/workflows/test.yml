@@ -166,11 +166,59 @@ jobs:
       # 破壞性變更（刪欄位／改型別／改必填）讓 build 失敗；純新增欄位放行。
       # 「只加不減」是 SDD v2.1 §11.2.1 定的相容原則。
       #
-      # ⚠️ 這個 job 還沒有在真實 PR 上跑過（本機 session 沒有 push 權限），
-      # 語法是照 oasdiff 官方文件寫的。第一次開 PR 時請確認它不會噴。
+      # 版本釘在 v0.1.12，不用 @main：oasdiff-action 自己的文件寫著 @main 是
+      # 「跑未發布的 tip，只適合早期試用，不適合正式使用」。守著契約的東西
+      # 自己隨著上游 tip 漂移，等於閘門可能某天早上自己就變了。
       - name: breaking change check
-        uses: oasdiff/oasdiff-action/breaking@main
+        uses: oasdiff/oasdiff-action/breaking@v0.1.12
         with:
           base: /tmp/base-openapi.json
           revision: contracts/openapi.json
           fail-on: ERR
+
+  # 閘門的自我測試（issue #30）。
+  #
+  # 上面那個 job 只有在「契約真的被改壞」時才會紅——也就是說，如果它哪天靜默
+  # 失效了（action 版本漂移、參數改名、fail-on 沒生效），**沒有任何東西會告訴
+  # 我們**。它會一路綠燈，然後某天客戶端在 runtime 炸掉。
+  #
+  # 所以用兩組固定的 fixture 跑同一組設定（fail-on: ERR），跟這次 PR 的實際
+  # 契約無關——因此也不受 breaking-change 標籤影響，永遠都跑。
+  contract-gate-self-test:
+    name: verify the gate actually catches breaking changes
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # 正控制組：純新增欄位不該被擋（user story 11）。這步驟失敗代表閘門
+      # 誤殺了合法的相容演進。
+      - name: additive-only change must pass
+        uses: oasdiff/oasdiff-action/breaking@v0.1.12
+        with:
+          base: tests/fixtures/contract_gate/safe_base.json
+          revision: tests/fixtures/contract_gate/safe_revision.json
+          fail-on: ERR
+          review: false
+
+      # 負控制組：刪掉必填欄位是教科書等級的破壞性變更，一定要被擋。用
+      # continue-on-error 把「這步驟失敗」轉成一個可以斷言的訊號——這裡
+      # job 該紅的情境是「它沒擋下來」，不是「它擋下來了」。
+      - name: known-breaking change must be caught
+        id: breaking_check
+        continue-on-error: true
+        uses: oasdiff/oasdiff-action/breaking@v0.1.12
+        with:
+          base: tests/fixtures/contract_gate/breaking_base.json
+          revision: tests/fixtures/contract_gate/breaking_revision.json
+          fail-on: ERR
+          review: false
+
+      - name: fail if the gate missed a known breaking change
+        if: steps.breaking_check.outcome != 'failure'
+        run: |
+          echo "::error::閘門對已知的破壞性變更 fixture 沒有擋下來——閘門本身可能靜默失效了。"
+          exit 1
