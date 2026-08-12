@@ -1,0 +1,89 @@
+# Cloud Run 服務定義（`gcloud run services replace scripts/gcp/service.yaml`）。
+#
+# 為什麼是 YAML 而不是一長串 `gcloud run deploy` 參數：這個服務有兩個容器，
+# 而 `gcloud run deploy` 的 `--container` 旗標在多容器情境下會把 `--port`
+# 同時套到兩個容器上，然後以
+# "Revision template should contain exactly one container with an exposed port"
+# 失敗。YAML 可以精確指定「只有 app 開 port」。
+#
+# ## ⚠️ Redis 是 sidecar，不是 Memorystore
+#
+# `redis` 容器跟 `app` 共用同一個 localhost，所以 `REDIS_URL` 指向
+# 127.0.0.1。這是**測試階段的權宜之計**，換來的是省下 Memorystore 每月約
+# US$40 的固定成本。它跟真正的 Memorystore 有三個不能忽略的差別：
+#
+#   1. **資料不持久。** 容器一縮到零，短期對話記憶就沒了。
+#   2. **不跨實例共用。** 所以 maxScale 鎖在 1——第二個實例會有自己的一份
+#      Redis，同一個玩家的對話會依照被路由到哪個實例而看到不同的歷史。
+#   3. **沒有備份、沒有監控。**
+#
+# 要上真實流量就必須換成 Memorystore + Direct VPC egress，並把 maxScale 放開。
+# 在那之前，maxScale: '1' 不是效能設定，是正確性的前提。
+
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: citysoul-backend
+  labels:
+    cloud.googleapis.com/location: asia-east1
+spec:
+  template:
+    metadata:
+      annotations:
+        run.googleapis.com/cloudsql-instances: citysoul:asia-east1:citysoul
+        # 見上方說明：Redis sidecar 不跨實例共用，所以只能有一個實例。
+        autoscaling.knative.dev/maxScale: '1'
+    spec:
+      serviceAccountName: citysoul-run@citysoul.iam.gserviceaccount.com
+      containers:
+        # ── 對外的應用程式容器 ──────────────────────────────────
+        - name: app
+          image: asia-east1-docker.pkg.dev/citysoul/citysoul/backend:latest
+          ports:
+            - name: http1
+              containerPort: 8080
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          env:
+            - name: APP_ENV
+              value: production
+            - name: GCP_PROJECT_ID
+              value: citysoul
+            - name: GCP_LOCATION
+              value: global
+            # sidecar 就在同一個 localhost 上。
+            - name: REDIS_URL
+              value: redis://127.0.0.1:6379/0
+            # 開發測試主控台 `/dev/console`。這是刻意打開的，因為現階段沒有
+            # Unity client 可以驗端到端流程。上真實玩家之前要拿掉這一行。
+            - name: DEV_CONSOLE_ENABLED
+              value: 'true'
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: citysoul-database-url, key: latest }
+            - name: SESSION_TOKEN_SECRET
+              valueFrom:
+                secretKeyRef: { name: session-token-secret, key: latest }
+            - name: ENCOUNTER_TOKEN_SECRET
+              valueFrom:
+                secretKeyRef: { name: encounter-token-secret, key: latest }
+            - name: SENSE_TOKEN_SECRET
+              valueFrom:
+                secretKeyRef: { name: sense-token-secret, key: latest }
+
+        # ── Redis sidecar ───────────────────────────────────────
+        #
+        # 映像檔是 docker.io/redis:7-alpine 鏡射進 Artifact Registry 的副本：
+        # Cloud Run 只吃 Artifact Registry / GCR 的映像檔，直接寫 docker.io
+        # 的位址會被拒絕。
+        - name: redis
+          image: asia-east1-docker.pkg.dev/citysoul/citysoul/redis:7-alpine
+          resources:
+            limits:
+              cpu: 500m
+              memory: 256Mi
+  traffic:
+    - latestRevision: true
+      percent: 100

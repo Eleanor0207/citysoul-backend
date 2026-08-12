@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>城市靈魂 — 開發測試主控台</title>
+<style>
+  :root {
+    --surface-1: #F5F1EA;
+    --surface-2: #FFFFFF;
+    --border: #E5DFD3;
+    --border-strong: #C9BFA9;
+    --text: #2B2418;
+    --text-secondary: #6B6355;
+    --text-muted: #9A9182;
+    --fill-primary: #3A2E22;
+    --accent: #1A56DB;
+    --ok: #1B7F4B;
+    --warn: #B45309;
+    --err: #B42318;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px;
+    background: var(--surface-1);
+    color: var(--text);
+    font: 14px/1.6 "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
+  }
+  .layout { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; }
+  .phone { width: 380px; flex: 0 0 380px; background: var(--surface-1); }
+  .side { flex: 1 1 380px; min-width: 340px; }
+  .card {
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 16px; padding: 14px; margin-bottom: 12px;
+  }
+  h2 { font-size: 14px; margin: 0 0 10px; letter-spacing: .04em; color: var(--text-secondary); }
+  label { display: block; font-size: 12px; color: var(--text-secondary); margin: 10px 0 4px; }
+  select, input, textarea {
+    width: 100%; padding: 8px 10px; font: inherit; color: var(--text);
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong); border-radius: 10px;
+  }
+  button {
+    font: inherit; padding: 8px 14px; border-radius: 10px; cursor: pointer;
+    border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text);
+  }
+  button.primary { background: var(--fill-primary); color: #fff; border-color: var(--fill-primary); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .map {
+    position: relative; height: 320px; border: 1px solid var(--border);
+    border-radius: 12px; overflow: hidden;
+    background-image: linear-gradient(var(--border) 1px, transparent 1px),
+                      linear-gradient(90deg, var(--border) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+  .map .note { position: absolute; top: 8px; left: 10px; font-size: 11px; color: var(--text-muted); }
+  .pin { position: absolute; transform: translate(-50%, -50%); text-align: center; }
+  .pin .dot {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: #E9C46A; border: 2px solid #fff; margin: 0 auto;
+    box-shadow: 0 1px 4px rgba(0,0,0,.25);
+  }
+  .pin .tag {
+    margin-top: 4px; display: inline-block; padding: 2px 8px; border-radius: 6px;
+    background: var(--fill-primary); color: #fff; font-size: 11px; white-space: nowrap;
+  }
+  .chat { height: 260px; overflow-y: auto; padding-right: 4px; }
+  .msg { margin-bottom: 10px; display: flex; }
+  .msg .bubble {
+    max-width: 78%; padding: 8px 12px; border-radius: 14px;
+    background: var(--surface-1); border: 1px solid var(--border);
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .msg.me { justify-content: flex-end; }
+  .msg.me .bubble { background: var(--fill-primary); color: #fff; border-color: var(--fill-primary); }
+  .badge {
+    display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 5px;
+    border: 1px solid var(--border-strong); color: var(--text-secondary); margin-left: 6px;
+  }
+  .status { font-size: 12px; color: var(--text-secondary); margin-top: 8px; min-height: 1.6em; }
+  .status.ok { color: var(--ok); }
+  .status.warn { color: var(--warn); }
+  .status.err { color: var(--err); }
+  pre {
+    margin: 8px 0 0; padding: 10px; max-height: 260px; overflow: auto;
+    background: #1E1B16; color: #E8E2D6; border-radius: 10px;
+    font: 12px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  .hint { font-size: 11px; color: var(--text-muted); margin-top: 6px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+</style>
+</head>
+<body>
+
+<div class="layout">
+
+  <!-- ─────────── 左：模擬 App 畫面 ─────────── -->
+  <div class="phone">
+    <div class="card">
+      <div class="row" style="margin: 0 0 10px;">
+        <input id="input" placeholder="跟城市靈魂聊聊…" style="flex:1" disabled>
+        <button id="send" class="primary" disabled>送出</button>
+      </div>
+      <div id="chat" class="chat"></div>
+      <div id="chatStatus" class="status">先在右邊選身分與地標，然後按「召喚」。</div>
+    </div>
+
+    <div class="card">
+      <div class="map" id="map">
+        <span class="note">地圖區域（示意，網格代表圖磚底圖）</span>
+        <div class="pin" id="pin" style="left:35%; top:55%; display:none">
+          <div class="dot"></div>
+          <div class="tag" id="pinTag">—</div>
+        </div>
+      </div>
+      <div class="row">
+        <button data-call="daily-event">當日情境</button>
+        <button data-call="quests">每日任務</button>
+        <button data-call="resonance">共鳴值</button>
+        <button data-call="profile">個人檔案</button>
+        <button data-call="memory">記憶摘要</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─────────── 右：控制台 ─────────── -->
+  <div class="side">
+    <div class="card">
+      <h2>1 · 登入身分</h2>
+      <select id="playerSelect"></select>
+      <div class="row">
+        <input id="newDevice" placeholder="新 device_id（例如 test-002）" style="flex:1">
+        <button id="createPlayer">建立／登入</button>
+      </div>
+      <div id="playerInfo" class="hint">尚未登入。</div>
+    </div>
+
+    <div class="card">
+      <h2>2 · 地標</h2>
+      <select id="spiritSelect"></select>
+      <div class="grid2" style="margin-top:10px">
+        <div>
+          <label for="lat">緯度</label>
+          <input id="lat" inputmode="decimal">
+        </div>
+        <div>
+          <label for="lon">經度</label>
+          <input id="lon" inputmode="decimal">
+        </div>
+      </div>
+      <p class="hint">
+        選地標會自動填入它自己的座標，也就是「站在正中央」。想測在場驗證失敗，
+        把緯度改成 25.5 之類的值再召喚。
+      </p>
+      <div class="row">
+        <button id="summon" class="primary">召喚（50m 內）</button>
+        <button id="sense">感應（150m 內）</button>
+      </div>
+      <div id="tokenStatus" class="status">尚未取得憑證。</div>
+    </div>
+
+    <div class="card">
+      <h2>後端回應</h2>
+      <div id="lastCall" class="hint">還沒有呼叫。</div>
+      <pre id="out">（這裡會顯示最後一次 API 的原始回應）</pre>
+    </div>
+  </div>
+</div>
+
+<script>
+// 這支頁面刻意不用任何前端框架與 CDN：它是測試工具，多一個相依就多一個
+// 「工具本身壞掉」的可能性，而那會被誤讀成後端壞掉。
+
+const state = {
+  player: null,        // { player_id, device_id, session_token }
+  spirit: null,        // /dev/spirits 的一筆
+  encounterToken: null,
+  senseToken: null,
+};
+
+const $ = (id) => document.getElementById(id);
+
+function show(title, data, level) {
+  $('lastCall').textContent = title;
+  $('out').textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+}
+
+function setStatus(el, text, level) {
+  el.textContent = text;
+  el.className = 'status' + (level ? ' ' + level : '');
+}
+
+// 所有請求都走這裡，這樣「後端回了什麼」永遠有地方看得到——包含錯誤。
+// 測試工具最怕的是把 4xx 吞掉只顯示「失敗」，那等於要人開 devtools 才能工作。
+async function api(method, path, { body, auth, headers } = {}) {
+  const h = Object.assign({}, headers);
+  if (body) h['Content-Type'] = 'application/json';
+  if (auth && state.player) h['Authorization'] = 'Bearer ' + state.player.session_token;
+
+  const res = await fetch(path, {
+    method,
+    headers: h,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+
+  let payload;
+  const text = await res.text();
+  try { payload = JSON.parse(text); } catch { payload = text; }
+
+  show(method + ' ' + path + '  →  ' + res.status, payload);
+  return { ok: res.ok, status: res.status, payload };
+}
+
+/* ── 身分 ───────────────────────────────────────────── */
+
+async function loadPlayers() {
+  const res = await fetch('/dev/players');
+  const rows = await res.json();
+  const sel = $('playerSelect');
+  sel.innerHTML = '<option value="">— 選一個既有玩家 —</option>';
+  for (const p of rows) {
+    const o = document.createElement('option');
+    o.value = p.device_id;
+    o.textContent = p.device_id + '  ·  ' + p.player_id.slice(0, 8);
+    sel.appendChild(o);
+  }
+}
+
+// 切換身分走的是正式端點：同一個 device_id 會拿回同一個玩家與一張新的
+// session token。主控台自己不發 token。
+async function loginAs(deviceId) {
+  const { ok, payload } = await api('POST', '/api/v1/players', {
+    body: { device_id: deviceId },
+  });
+  if (!ok) {
+    $('playerInfo').textContent = '登入失敗，看下方回應。';
+    return;
+  }
+  state.player = payload;
+  state.encounterToken = null;
+  state.senseToken = null;
+  $('playerInfo').textContent = '已登入 ' + payload.device_id + '（' + payload.player_id + '）';
+  setStatus($('tokenStatus'), '換了身分，憑證已清空——舊憑證屬於上一個玩家，帶著它打對話會 403。', 'warn');
+  updateChatEnabled();
+  loadPlayers();
+}
+
+/* ── 地標 ───────────────────────────────────────────── */
+
+async function loadSpirits() {
+  const res = await fetch('/dev/spirits');
+  const rows = await res.json();
+  const sel = $('spiritSelect');
+  sel.innerHTML = '';
+  if (!rows.length) {
+    sel.innerHTML = '<option value="">（資料庫裡沒有地標，seed 還沒跑）</option>';
+    return;
+  }
+  for (const s of rows) {
+    const o = document.createElement('option');
+    o.value = s.spirit_id;
+    o.textContent = s.display_name + '（' + s.spirit_id + '）' + (s.is_active ? '' : ' · 已下架');
+    o.dataset.row = JSON.stringify(s);
+    sel.appendChild(o);
+  }
+  selectSpirit();
+}
+
+function selectSpirit() {
+  const opt = $('spiritSelect').selectedOptions[0];
+  if (!opt || !opt.dataset.row) return;
+  const s = JSON.parse(opt.dataset.row);
+  state.spirit = s;
+  state.encounterToken = null;
+  state.senseToken = null;
+  $('lat').value = s.latitude;
+  $('lon').value = s.longitude;
+  $('pin').style.display = '';
+  $('pinTag').textContent = s.display_name;
+  setStatus($('tokenStatus'), '尚未取得憑證。', '');
+  updateChatEnabled();
+}
+
+/* ── 在場驗證 ───────────────────────────────────────── */
+
+async function summon() {
+  if (!requireLogin()) return;
+  const { ok, payload } = await api('POST', '/api/v1/summon', {
+    auth: true,
+    body: {
+      spirit_id: state.spirit.spirit_id,
+      latitude: parseFloat($('lat').value),
+      longitude: parseFloat($('lon').value),
+    },
+  });
+  if (!ok) {
+    setStatus($('tokenStatus'), '召喚失敗（' + (payload.detail || '見下方回應') + '）', 'err');
+    return;
+  }
+  state.encounterToken = payload.encounter_token;
+  state.senseToken = null;
+  setStatus($('tokenStatus'), '已取得相遇憑證（15 分鐘）。對話會用它。', 'ok');
+  updateChatEnabled();
+}
+
+async function sense() {
+  if (!requireLogin()) return;
+  const { ok, payload } = await api('POST', '/api/v1/sense', {
+    auth: true,
+    body: {
+      spirit_id: state.spirit.spirit_id,
+      latitude: parseFloat($('lat').value),
+      longitude: parseFloat($('lon').value),
+    },
+  });
+  if (!ok) {
+    setStatus($('tokenStatus'), '感應失敗（' + (payload.detail || '見下方回應') + '）', 'err');
+    return;
+  }
+  state.senseToken = payload.sense_token;
+  state.encounterToken = null;
+  setStatus($('tokenStatus'), '已取得感應憑證（30 分鐘）。這是 150m 的隔空聊天模式。', 'ok');
+  updateChatEnabled();
+}
+
+function requireLogin() {
+  if (!state.player) {
+    setStatus($('tokenStatus'), '先選或建立一個玩家。', 'warn');
+    return false;
+  }
+  if (!state.spirit) {
+    setStatus($('tokenStatus'), '先選一個地標。', 'warn');
+    return false;
+  }
+  return true;
+}
+
+/* ── 對話 ───────────────────────────────────────────── */
+
+function updateChatEnabled() {
+  const ready = !!(state.player && state.spirit && (state.encounterToken || state.senseToken));
+  $('input').disabled = !ready;
+  $('send').disabled = !ready;
+  if (ready) setStatus($('chatStatus'), '可以聊天了。', 'ok');
+}
+
+function bubble(text, mine, badge) {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg' + (mine ? ' me' : '');
+  const b = document.createElement('div');
+  b.className = 'bubble';
+  b.textContent = text;
+  if (badge) {
+    const tag = document.createElement('span');
+    tag.className = 'badge';
+    tag.textContent = badge;
+    b.appendChild(tag);
+  }
+  wrap.appendChild(b);
+  $('chat').appendChild(wrap);
+  $('chat').scrollTop = $('chat').scrollHeight;
+}
+
+async function sendMessage() {
+  const text = $('input').value.trim();
+  if (!text) return;
+  $('input').value = '';
+  bubble(text, true);
+  setStatus($('chatStatus'), '等待城市靈魂回應…', '');
+
+  const headers = {};
+  if (state.encounterToken) headers['X-Encounter-Token'] = state.encounterToken;
+  else if (state.senseToken) headers['X-Sense-Token'] = state.senseToken;
+
+  const { ok, status, payload } = await api(
+    'POST', '/api/v1/spirits/' + state.spirit.spirit_id + '/dialogue',
+    { auth: true, headers, body: { user_input: text } },
+  );
+
+  if (!ok) {
+    // source 分不出來的失敗都在這裡。429 是配額、401/403 是憑證、
+    // 500 多半是 Redis（雲端目前沒接 Memorystore）。
+    bubble('（呼叫失敗 ' + status + '：' + (payload.detail || '見右側回應') + '）', false);
+    setStatus($('chatStatus'), '對話失敗，看右側原始回應。', 'err');
+    return;
+  }
+
+  // `source` 是這個主控台最有用的一個欄位：
+  //   canned    = B12 預寫招呼命中，沒有呼叫模型
+  //   generated = 真的走了 Gemini
+  //   fallback  = 沒有生效人格卡，或模型失敗
+  // 看到 fallback 不代表壞掉——seed 的人格卡是未審核草稿（active=False），
+  // 在審核通過之前所有對話都會走這條路。
+  bubble(payload.reply_text, false, payload.source);
+  setStatus($('chatStatus'), '回應來源：' + payload.source, payload.source === 'generated' ? 'ok' : 'warn');
+}
+
+/* ── 資料查詢按鈕 ───────────────────────────────────── */
+
+const calls = {
+  'daily-event': () => api('GET', '/api/v1/spirits/' + state.spirit.spirit_id + '/daily-event'),
+  'quests':      () => api('GET', '/api/v1/quests/daily', { auth: true }),
+  'resonance':   () => api('GET', '/api/v1/resonance/' + state.spirit.spirit_id, { auth: true }),
+  'profile':     () => api('GET', '/api/v1/profile', { auth: true }),
+  'memory':      () => api('GET', '/api/v1/players/me/memory-summary', { auth: true }),
+};
+
+/* ── 綁定 ───────────────────────────────────────────── */
+
+$('playerSelect').addEventListener('change', (e) => {
+  if (e.target.value) loginAs(e.target.value);
+});
+$('createPlayer').addEventListener('click', () => {
+  const id = $('newDevice').value.trim();
+  if (id) loginAs(id);
+});
+$('spiritSelect').addEventListener('change', selectSpirit);
+$('summon').addEventListener('click', summon);
+$('sense').addEventListener('click', sense);
+$('send').addEventListener('click', sendMessage);
+$('input').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(); });
+
+for (const btn of document.querySelectorAll('[data-call]')) {
+  btn.addEventListener('click', () => {
+    const fn = calls[btn.dataset.call];
+    if (!state.spirit) { show('尚未選地標', '先在右邊選一個地標。'); return; }
+    if (btn.dataset.call !== 'daily-event' && !state.player) {
+      show('尚未登入', '這支端點需要 session token，先選或建立一個玩家。');
+      return;
+    }
+    fn();
+  });
+}
+
+loadPlayers();
+loadSpirits();
+</script>
+</body>
+</html>

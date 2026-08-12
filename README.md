@@ -172,6 +172,45 @@ uv run python -m uvicorn app.main:app --reload --reload-dir app
 
 打開 http://localhost:8000/docs 會看到自動產生的 API 文件。
 
+## 5.5 開發測試主控台
+
+<http://localhost:8000/dev/console>（線上：`/dev/console`）
+
+一個瀏覽器頁面，用來手動走完「選身分 → 選地標 → 召喚 → 對話」，不需要 Unity
+client，也不需要真的站在龍山寺前面。右邊兩個下拉選單分別選登入身分與地標，
+選了地標會自動把它自己的座標填進去——想測在場驗證失敗，把緯度改掉再召喚。
+
+底下那排按鈕打的是各支查詢端點（當日情境／每日任務／共鳴值／個人檔案／記憶
+摘要），右側永遠顯示最後一次呼叫的原始回應，含 4xx。
+
+### 它不是產品的一部分
+
+- 掛在 `/dev`，整組 `include_in_schema=False`，**不會進 `contracts/openapi.json`**。
+- 不提供正式 API 以外的權限：切換身分走的是真正的 `POST /api/v1/players`，
+  主控台自己不發 token。
+- 不繞過驗證：召喚一樣打 `/api/v1/summon`，一樣要通過在場驗證。
+
+`/dev/players` 與 `/dev/spirits` 只是「測試時人要看得到有什麼」。正式 API 沒有
+列表端點是因為 App 以裝置為中心、客戶端從地圖點選，不是因為功能缺了一塊——
+不要因為主控台有就把它們搬進 `/api/v1`。
+
+用 `DEV_CONSOLE_ENABLED=false` 關掉。預設開著（本機開發需要），**對外的正式
+部署要明確關掉**。
+
+### 對話回 `fallback` 是正常的
+
+回應的 `source` 欄位有三種值，主控台會直接標在氣泡上：
+
+| source | 意思 |
+|---|---|
+| `canned` | B12 預寫招呼命中，完全沒有呼叫模型 |
+| `generated` | 真的走了 Gemini |
+| `fallback` | 沒有生效人格卡，或模型失敗 |
+
+seed 進去的龍山寺人格是**未審核草稿**（`active=False`），所以在審核通過之前，
+每一句都會走 `fallback`。那是內容治理的閘門在生效，不是 B1 壞掉。要驗真正的
+Gemini 生成，得先有一版通過審核、`active=True` 的人格卡。
+
 ## 6. 手動測試
 
 ```bash
@@ -365,6 +404,20 @@ gcloud run jobs execute citysoul-seed --region=asia-east1 --wait
 
 ### 3. 部署服務
 
+服務有兩個容器（app + Redis sidecar），所以走 YAML 而不是一長串旗標：
+
+```bash
+gcloud run services replace scripts/gcp/service.yaml --region=asia-east1
+```
+
+> ⚠️ **Redis 是 sidecar，不是 Memorystore。** 這省下每月約 US$40，代價是資料
+> 不持久、不跨實例共用——所以 `maxScale` 鎖在 1。那不是效能設定，是正確性的
+> 前提：第二個實例會有自己的一份 Redis，同一個玩家的對話歷史會隨路由結果而不同。
+> 真實流量前必須換成 Memorystore + Direct VPC egress。理由與細節寫在
+> `scripts/gcp/service.yaml` 開頭。
+
+單一容器版本（沒有 Redis，對話端點會 500）的等價指令：
+
 ```bash
 gcloud run deploy citysoul-backend \
   --image=asia-east1-docker.pkg.dev/citysoul/citysoul/backend:latest \
@@ -409,14 +462,17 @@ curl -s -X POST $U/api/v1/players -H "Content-Type: application/json" \
 上面幾步足以讓服務跑起來並連上資料庫，但以下還是缺的，不要以為部署完就等於
 上線：
 
-- **Redis**：Memorystore 是 VPC 內部 IP，Cloud Run 要 Direct VPC egress 或
-  Serverless VPC connector 才連得到。目前 `REDIS_URL` 沒有可用的正式環境值。
+- **Redis**：目前是同一個實例裡的 sidecar（見上），不是 Memorystore。資料不
+  持久、不跨實例，`maxScale` 因此鎖在 1。要放開擴縮就得接 Memorystore +
+  Direct VPC egress。
 - **TTS 簽章 URL**：`generate_signed_url()` 在 ADC（無金鑰檔）下需要 IAM
   SignBlob，service account 要對自己有 `roles/iam.serviceAccountTokenCreator`。
   沒設定就是簽章失敗，而不是降級成沒有語音。
 - **推播**：`app/modules/body/push.py` 目前只有抽象介面，沒有真的送出實作。
 - **Cloud Scheduler**：B8 夜間記憶批次與 S10 每日事件還沒有觸發來源。
 - **CD**：`.github/workflows/` 只有 `test.yml`，部署還是手動跑上面的指令。
+- **`/dev/console` 是開著的**（`DEV_CONSOLE_ENABLED=true`）。現階段刻意如此——
+  沒有 Unity client 就沒有別的方法驗端到端。上真實玩家前要關掉。
 
 ---
 

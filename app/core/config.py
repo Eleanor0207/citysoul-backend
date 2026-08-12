@@ -17,6 +17,15 @@ class Settings(BaseSettings):
     encounter_token_secret: str
     sense_token_secret: str
 
+    # 開發測試主控台（`/dev/console`）。手動走完「選身分 → 選地標 → 召喚 →
+    # 對話」用的頁面，不需要 Unity client。
+    #
+    # 預設開著，因為本機開發需要它而不該再多一個設定步驟。**正式對外的部署要
+    # 明確關掉**：它本身不提供正式 API 以外的權限（切身分一樣走
+    # `POST /api/v1/players`），但它把「有哪些玩家、有哪些地標」列出來，那是
+    # 內部資訊，也是一個讓人很容易開始拿正式資料庫當測試場的入口。
+    dev_console_enabled: bool = True
+
     # GCP（ADR-0003）。這裡**沒有**任何憑證欄位，是刻意的——存取 Vertex AI 走
     # Application Default Credentials：正式環境用 Cloud Run 綁定的 service
     # account，本機用 `gcloud auth application-default login`。兩者在程式裡是

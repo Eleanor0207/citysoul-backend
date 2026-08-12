@@ -55,6 +55,14 @@ if settings.app_env == "local":
 
 app.include_router(body_router)
 
+if settings.dev_console_enabled:
+    # 開發測試主控台。整組 `include_in_schema=False`，所以它不會進
+    # `contracts/openapi.json`——契約是後端與 citysoul-client 之間的東西，
+    # 測試工具不該出現在裡面。
+    from app.modules.dev.router import router as dev_router
+
+    app.include_router(dev_router)
+
 
 @app.get("/health")
 def health():
