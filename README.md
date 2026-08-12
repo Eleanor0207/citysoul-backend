@@ -263,6 +263,83 @@ uv run python -m scripts.generate_openapi_contract
 
 ---
 
+## 部署到 Cloud Run
+
+映像檔由根目錄的 `Dockerfile` 建出來。它跟 `Dockerfile.postgres` 是兩件不相干
+的事：後者是本機開發用的資料庫映像檔（pgvector + PostGIS），只給
+docker-compose 用，永遠不上雲。
+
+`.dockerignore` 與 `.gcloudignore` 也是兩份各自維護的清單：前者管本機
+`docker build` 的 build context，後者管 `gcloud ... --source` 上傳到雲端建置
+環境的內容。內容高度重疊，但不要假設它們會一致。
+
+### 設定從哪裡來
+
+`app/core/config.py` 的 `Settings` 全部讀環境變數，本機讀 `.env`，正式環境由
+Cloud Run 的 `--set-env-vars` 與 `--set-secrets` 提供。**程式碼裡沒有任何一處
+會去呼叫 Secret Manager 的 API**——Cloud Run 直接把 secret 版本掛成環境變數，
+少一層執行期相依，也少一份要維護的 IAM。
+
+秘密的部分放 Secret Manager（`DATABASE_URL`、三把 token 金鑰），非秘密的
+（`GCP_PROJECT_ID`、`GEMINI_MODEL` 等）走 `--set-env-vars`。憑證本身仍然不進
+Secret Manager，那是 ADR-0003 的事，跟這裡的設定值是兩回事。
+
+### 1. 建置並推上 Artifact Registry
+
+```bash
+gcloud builds submit --tag asia-east1-docker.pkg.dev/citysoul/citysoul/backend:latest
+```
+
+### 2. 跑 migration
+
+```bash
+scripts/gcp/migrate-job.sh          # 加 DRY_RUN=1 可以先看要跑什麼
+```
+
+這支腳本建立（或更新）並執行 Cloud Run Job `citysoul-migrate`，用**同一個
+映像檔**跑 `alembic upgrade head`。
+
+**migration 不綁在服務啟動流程裡**，是刻意的：Cloud Run 會同時起多個實例，
+綁在啟動流程等於讓多個實例同時對同一個資料庫跑 DDL；而且 revision 一失敗，
+整個服務就起不來——把「schema 有問題」升級成「服務全掛」。
+
+> ⚠️ `DATABASE_URL` 裡的帳號要有 `cloudsqlsuperuser`。migration `0001`/`0006`
+> 會 `CREATE EXTENSION vector` / `postgis`，一般使用者做不到這件事。
+
+### 3. 部署服務
+
+```bash
+gcloud run deploy citysoul-backend \
+  --image=asia-east1-docker.pkg.dev/citysoul/citysoul/backend:latest \
+  --region=asia-east1 \
+  --service-account=citysoul-run@citysoul.iam.gserviceaccount.com \
+  --set-cloudsql-instances=citysoul:asia-east1:citysoul \
+  --set-env-vars=APP_ENV=production,GCP_PROJECT_ID=citysoul,GCP_LOCATION=global \
+  --set-secrets=DATABASE_URL=citysoul-database-url:latest,SESSION_TOKEN_SECRET=session-token-secret:latest,ENCOUNTER_TOKEN_SECRET=encounter-token-secret:latest,SENSE_TOKEN_SECRET=sense-token-secret:latest
+```
+
+Cloud SQL 的 `DATABASE_URL` 走 unix socket，不是 IP：
+
+```text
+postgresql+psycopg://<user>:<pass>@/<db>?host=/cloudsql/citysoul:asia-east1:citysoul
+```
+
+### 還沒做完的部分
+
+上面這三步足以讓服務跑起來並連上資料庫，但以下還是缺的，不要以為部署完就等於
+上線：
+
+- **Redis**：Memorystore 是 VPC 內部 IP，Cloud Run 要 Direct VPC egress 或
+  Serverless VPC connector 才連得到。目前 `REDIS_URL` 沒有可用的正式環境值。
+- **TTS 簽章 URL**：`generate_signed_url()` 在 ADC（無金鑰檔）下需要 IAM
+  SignBlob，service account 要對自己有 `roles/iam.serviceAccountTokenCreator`。
+  沒設定就是簽章失敗，而不是降級成沒有語音。
+- **推播**：`app/modules/body/push.py` 目前只有抽象介面，沒有真的送出實作。
+- **Cloud Scheduler**：B8 夜間記憶批次與 S10 每日事件還沒有觸發來源。
+- **CD**：`.github/workflows/` 只有 `test.yml`，部署還是手動跑上面的指令。
+
+---
+
 ## 遇到 `password authentication failed` 怎麼辦
 
 照下面順序做，通常是這兩個原因之一：

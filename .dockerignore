@@ -1,0 +1,49 @@
+# `docker build` 時排除的檔案。
+#
+# 跟 .gcloudignore 內容高度重疊但**不是同一份**：.gcloudignore 管的是
+# `gcloud run deploy --source` / `gcloud builds submit` 上傳到雲端建置環境的
+# 內容，.dockerignore 管的是本機 `docker build` 的 build context。兩條路徑
+# 都可能用到，各自維護，不要假設它們會一致。
+
+.git
+.gitignore
+.gcloudignore
+.dockerignore
+
+# 本機開發專用，不該進映像檔
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.claude/
+.codex/
+.agents/
+AGENTS.md
+CLAUDE.md
+
+# ⚠️ .env 已在上面排除，但值得說清楚為什麼：正式環境的設定由 Cloud Run 的
+# 環境變數與 --set-secrets 提供，不是靠映像檔裡的檔案。把 .env 烤進映像檔
+# 等於把本機的假金鑰帶上正式環境，而且任何能 pull 映像檔的人都讀得到。
+
+# 文件與規格
+docs/
+image/
+*.md
+
+# 測試不需要跟著部署
+tests/
+
+# 本機資料庫映像檔與 compose，跟 Cloud Run 無關
+Dockerfile.postgres
+docker-compose.yml
+
+# IDE/editor
+.idea/
+.vscode/
+*.code-workspace
+
+# 其他開發期產物
+.scratch/
+node_modules/
