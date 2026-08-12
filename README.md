@@ -284,11 +284,48 @@ Cloud Run 的 `--set-env-vars` 與 `--set-secrets` 提供。**程式碼裡沒有
 （`GCP_PROJECT_ID`、`GEMINI_MODEL` 等）走 `--set-env-vars`。憑證本身仍然不進
 Secret Manager，那是 ADR-0003 的事，跟這裡的設定值是兩回事。
 
+### 0. 一次性的資源
+
+以下在 `citysoul` 專案上已經建好，**不需要重跑**，列在這裡是為了知道服務靠什麼
+活著（換專案重建時照這個順序）：
+
+```bash
+gcloud services enable run.googleapis.com sqladmin.googleapis.com \
+  secretmanager.googleapis.com artifactregistry.googleapis.com cloudbuild.googleapis.com
+
+gcloud artifacts repositories create citysoul \
+  --repository-format=docker --location=asia-east1
+
+gcloud sql instances create citysoul --region=asia-east1 \
+  --database-version=POSTGRES_16 --edition=enterprise --tier=db-f1-micro \
+  --storage-size=10GB --storage-type=HDD --availability-type=zonal --no-backup
+gcloud sql databases create citysoul --instance=citysoul
+
+gcloud iam service-accounts create citysoul-run
+```
+
+`citysoul-run` 這個 service account 需要四個專案層級角色
+（`cloudsql.client`、`secretmanager.secretAccessor`、`aiplatform.user`、
+`storage.objectAdmin`），外加**對自己**的 `iam.serviceAccountTokenCreator`——
+最後這個是 TTS 簽章 URL 用的，ADC 沒有金鑰檔，簽章要走 IAM SignBlob。
+
+Secret Manager 裡有四個 secret：`citysoul-database-url` 與三把 token 金鑰。
+三把金鑰**各自獨立產生**，不是產一次複製三份——兩把相同就等於兩種 token 可以
+互相冒充（SDD 第6節）。
+
+> ⚠️ 資料庫密碼只用英數字元。它要塞進 `DATABASE_URL` 的 userinfo 欄位，
+> 出現 `/ + = @` 就必須 percent-encoding，而那正是「本機測得過、雲端連不上」
+> 最常見的來源。
+
 ### 1. 建置並推上 Artifact Registry
 
 ```bash
-gcloud builds submit --tag asia-east1-docker.pkg.dev/citysoul/citysoul/backend:latest
+docker build -t asia-east1-docker.pkg.dev/citysoul/citysoul/backend:latest .
+gcloud auth configure-docker asia-east1-docker.pkg.dev   # 第一次才需要
+docker push asia-east1-docker.pkg.dev/citysoul/citysoul/backend:latest
 ```
+
+本機沒有 Docker 的話改用 `gcloud builds submit --tag <同一個標籤>`，在雲端建置。
 
 ### 2. 跑 migration
 
@@ -304,7 +341,27 @@ scripts/gcp/migrate-job.sh          # 加 DRY_RUN=1 可以先看要跑什麼
 整個服務就起不來——把「schema 有問題」升級成「服務全掛」。
 
 > ⚠️ `DATABASE_URL` 裡的帳號要有 `cloudsqlsuperuser`。migration `0001`/`0006`
-> 會 `CREATE EXTENSION vector` / `postgis`，一般使用者做不到這件事。
+> 會 `CREATE EXTENSION vector` / `postgis`，一般使用者做不到這件事。目前用的是
+> 內建的 `postgres` 帳號，它有；後來自己建的一般使用者沒有。
+
+### 2.5 塞垂直切片 seed data（只有全新的資料庫需要）
+
+migration 只建表，不放資料。沒有 seed，`GET /spirits/longshan_temple` 會 404——
+`spirits` 表是空的。
+
+```bash
+gcloud run jobs deploy citysoul-seed \
+  --region=asia-east1 \
+  --image=asia-east1-docker.pkg.dev/citysoul/citysoul/backend:latest \
+  --service-account=citysoul-run@citysoul.iam.gserviceaccount.com \
+  --set-cloudsql-instances=citysoul:asia-east1:citysoul \
+  --set-env-vars=APP_ENV=production,REDIS_URL=redis://127.0.0.1:6379/0,GCP_PROJECT_ID=citysoul \
+  --set-secrets=DATABASE_URL=citysoul-database-url:latest,SESSION_TOKEN_SECRET=session-token-secret:latest,ENCOUNTER_TOKEN_SECRET=encounter-token-secret:latest,SENSE_TOKEN_SECRET=sense-token-secret:latest \
+  --max-retries=0 --command=python --args=-m,scripts.init_db
+gcloud run jobs execute citysoul-seed --region=asia-east1 --wait
+```
+
+`seed_vertical_slice()` 每一段都先查再寫，重跑不會產生重複資料。
 
 ### 3. 部署服務
 
@@ -315,8 +372,19 @@ gcloud run deploy citysoul-backend \
   --service-account=citysoul-run@citysoul.iam.gserviceaccount.com \
   --set-cloudsql-instances=citysoul:asia-east1:citysoul \
   --set-env-vars=APP_ENV=production,GCP_PROJECT_ID=citysoul,GCP_LOCATION=global \
-  --set-secrets=DATABASE_URL=citysoul-database-url:latest,SESSION_TOKEN_SECRET=session-token-secret:latest,ENCOUNTER_TOKEN_SECRET=encounter-token-secret:latest,SENSE_TOKEN_SECRET=sense-token-secret:latest
+  --set-secrets=DATABASE_URL=citysoul-database-url:latest,SESSION_TOKEN_SECRET=session-token-secret:latest,ENCOUNTER_TOKEN_SECRET=encounter-token-secret:latest,SENSE_TOKEN_SECRET=sense-token-secret:latest \
+  --set-env-vars=REDIS_URL=redis://127.0.0.1:6379/0 \
+  --allow-unauthenticated --max-instances=2 --memory=512Mi
 ```
+
+目前的服務網址：<https://citysoul-backend-1096472835040.asia-east1.run.app>
+
+> ⚠️ `--allow-unauthenticated` 表示這個網址**任何人都打得到**。玩家用的 API
+> 本來就要公開，但在還沒有正式流量的階段，它也是任何人都能建匿名玩家、消耗
+> Gemini 額度的入口。`--max-instances=2` 是這個階段的成本上限，不是效能設定。
+>
+> `REDIS_URL` 目前是個連不到的佔位值（見下方「還沒做完的部分」）。`redis.from_url`
+> 是延遲連線，所以服務起得來、多數端點正常，只有會碰到對話 session 的路徑會炸。
 
 Cloud SQL 的 `DATABASE_URL` 走 unix socket，不是 IP：
 
@@ -324,9 +392,21 @@ Cloud SQL 的 `DATABASE_URL` 走 unix socket，不是 IP：
 postgresql+psycopg://<user>:<pass>@/<db>?host=/cloudsql/citysoul:asia-east1:citysoul
 ```
 
+### 4. 驗一下
+
+```bash
+U=https://citysoul-backend-1096472835040.asia-east1.run.app
+curl -s $U/health
+curl -s $U/api/v1/spirits/longshan_temple
+curl -s -X POST $U/api/v1/players -H "Content-Type: application/json" \
+  -d '{"device_id":"smoke-001"}'
+```
+
+三個都通表示映像檔、Cloud SQL 連線、Secret Manager 掛載、seed data 這條鏈是通的。
+
 ### 還沒做完的部分
 
-上面這三步足以讓服務跑起來並連上資料庫，但以下還是缺的，不要以為部署完就等於
+上面幾步足以讓服務跑起來並連上資料庫，但以下還是缺的，不要以為部署完就等於
 上線：
 
 - **Redis**：Memorystore 是 VPC 內部 IP，Cloud Run 要 Direct VPC egress 或
