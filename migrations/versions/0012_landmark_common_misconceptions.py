@@ -40,11 +40,10 @@ Create Date: 2026-08-13
 
 ## 為什麼 nullable
 
-多數地標沒有這種條目，NOT NULL 會逼所有人填一個空陣列。目前已知兩條，在
-`citysoul-doc` 的 `landmark/taiwan_new_cultural_movement_memorial.md` 與
-`landmark/rongjin_gorgeous_time.md`。
+多數地標沒有這種條目，NOT NULL 會逼所有人填一個空陣列。目前已知一條，在
+`citysoul-doc` 的 `landmark/taiwan_new_cultural_movement_memorial.md`。
 
-現在加最便宜：`landmark_souls` 目前只有一列佔位資料，11 個地標的內容還沒匯入。
+現在加最便宜：`landmark_souls` 目前只有一列佔位資料，10 個地標的內容還沒匯入。
 等匯完再加就變成一次資料遷移。
 """
 import sqlalchemy as sa
