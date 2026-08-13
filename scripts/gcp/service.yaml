@@ -38,7 +38,14 @@ spec:
       containers:
         # ── 對外的應用程式容器 ──────────────────────────────────
         - name: app
-          image: asia-east1-docker.pkg.dev/citysoul/citysoul/backend:latest
+          # 用 digest 而不是 :latest。`gcloud run services replace` 比對的是
+          # yaml 內容——tag 不變就判定沒有變更、不建新修訂版，於是剛推上去的
+          # 映像檔根本沒有上線，而指令仍然回報 Done。每次部署都要把這一行換成
+          # 當次 build 的 digest：
+          #   gcloud artifacts docker images describe \
+          #     asia-east1-docker.pkg.dev/citysoul/citysoul/backend:latest \
+          #     --format='value(image_summary.digest)'
+          image: asia-east1-docker.pkg.dev/citysoul/citysoul/backend@sha256:034702e104483a7eeaa86115d917080ad5a3d061abc605abdc3fd014f8c10b97
           ports:
             - name: http1
               containerPort: 8080
