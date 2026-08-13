@@ -61,6 +61,16 @@ class SafetyCategory:
     LEGAL = "legal"
     FINANCIAL = "financial"
     RELIGIOUS_DOCTRINE = "religious_doctrine"
+    # 政治立場。跟 RELIGIOUS_DOCTRINE 同一個道理：不是把「請保持中立」寫進
+    # system instruction 請模型自律，而是在生成之前就攔下來。
+    #
+    # 加這一類的理由是**故宮**（見 citysoul-doc 的 landmark/national_palace_museum.md
+    # §6）：文物遷臺的史觀定性、歸還爭議、機構名稱與去中國化討論，都是玩家
+    # **會主動反覆問**的方向。人格卡的 taboos 擋得住偶發的滑坡，擋不住有人一直問。
+    #
+    # 風險量級也不同：宗教講錯冒犯信眾，政治講錯是一張截圖變成新聞，而且會被
+    # 當成整個專案的立場。
+    POLITICAL_STANCE = "political_stance"
     OTHER = "other"
 
 
@@ -115,6 +125,19 @@ _REFUSALS = {
         "這我不敢替誰回答，也不該替誰回答——廟裡有師父，說了才算數。"
         "我能說的是這座廟一路走來的樣子，還有來這裡的人。你想從哪裡聽起？"
     ),
+    # ⚠️ 這一則刻意**不迴避問題本身**。
+    #
+    # 只說「我不談政治」會讓角色顯得心虛，而心虛看起來就像有立場只是不敢講。
+    # 所以先承認問題存在，再把話題錨定在祂實際在做的事——那不是轉移，
+    # 那真的是一個城市靈魂唯一有資格談的東西。
+    #
+    # 措辭上不出現任何政治共同體的名稱，包括用來否定的那種（「不是中國的也不是
+    # 台灣的」同樣是在那個座標系裡回答）。
+    SafetyCategory.POLITICAL_STANCE: (
+        "這個問題我沒有立場，也不該有。我照看的是這些東西——誰做的、怎麼做的、"
+        "經過了哪些人的手。至於它們該屬於誰，那是人要決定的事。"
+        "你想聽聽其中一件的來歷嗎？"
+    ),
     SafetyCategory.OTHER: (
         "這個我接不上話。"
         "不過你既然站在這裡了，要不要問問這座廟的事？我記得的比你想的多。"
@@ -157,6 +180,7 @@ _CLASSIFY_PROMPT = """你是一個輸入分類器。判斷以下玩家輸入屬�
 - legal：詢問法律責任、訴訟、權利義務
 - financial：詢問投資、理財、金錢決策
 - religious_doctrine：詢問教義解釋、神祇位階、是否靈驗、占卜結果、宗教優劣比較
+- political_stance：詢問政治立場、國族或政治共同體歸屬、兩岸關係、文物或土地的歸屬爭議、政黨或政治人物評價、機構更名等政治爭議
 - other：其他不適合或明顯偏離主題的內容
 
 玩家輸入：
@@ -224,6 +248,9 @@ class GeminiSafetyChecker(SafetyChecker):
             SafetyCategory.LEGAL,
             SafetyCategory.FINANCIAL,
             SafetyCategory.RELIGIOUS_DOCTRINE,
+            SafetyCategory.POLITICAL_STANCE,
+            # `other` 放最後：它是最寬鬆的一類，而其他標籤都不含 "other"
+            # 子字串，先比它會讓具體分類永遠比不到。
             SafetyCategory.OTHER,
         ]
         for category in dangerous:

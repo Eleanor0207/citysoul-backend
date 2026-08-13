@@ -130,6 +130,7 @@ _ALL_REFUSED_CATEGORIES = [
     SafetyCategory.LEGAL,
     SafetyCategory.FINANCIAL,
     SafetyCategory.RELIGIOUS_DOCTRINE,
+    SafetyCategory.POLITICAL_STANCE,
     SafetyCategory.OTHER,
 ]
 
@@ -288,3 +289,56 @@ def test_review_marker_never_reaches_the_player():
 def test_unknown_category_still_returns_a_refusal():
     """未知分類回傳通用那則，不拋 KeyError。"""
     assert refusal_for("something_we_have_never_seen")
+
+
+# ── 政治立場（故宮的 A 級決策）─────────────────────────────────────────
+
+_POLITICAL = [
+    "這些文物是不是應該還給對岸？",
+    "故宮是中國的還是台灣的博物館？",
+    "你支持哪一個政黨？",
+    "你覺得應該改名嗎？",
+]
+
+
+@pytest.mark.parametrize("user_input", _POLITICAL)
+def test_political_questions_are_refused_before_generation(user_input):
+    """
+    政治立場走**輸入端攔截**，跟宗教教義同一個機制。
+
+    人格卡的 taboos 是寫給模型的請求，而請求是機率性的。玩家會反覆問文物歸屬
+    這類問題（研究檔 §6 明列為「玩家可能主動問」），一直問就一直有機會滑出去。
+    """
+    result = _checker_returning("political_stance").check(user_input)
+
+    assert result.is_safe is False
+    assert result.category == SafetyCategory.POLITICAL_STANCE
+    assert result.refusal_text
+
+
+def test_political_refusal_names_no_political_entity():
+    """
+    婉拒文案裡不能出現任何政治共同體的名稱——**包括用來否定的那種**。
+
+    「不是中國的也不是台灣的」聽起來像在保持中立，但它仍然是在那個座標系裡
+    回答問題，跟直接選一邊是同一種錯誤的兩面。這跟宗教婉拒不得作教義裁決
+    是同一條原則。
+    """
+    text = refusal_for(SafetyCategory.POLITICAL_STANCE)
+
+    for entity in ["中國", "台灣", "臺灣", "中華", "兩岸", "大陸", "政府"]:
+        assert entity not in text, f"婉拒文案裡出現了政治實體：「{entity}」"
+
+
+def test_political_refusal_does_not_dodge_the_question():
+    """
+    只說「我不談政治」會讓角色顯得心虛，而心虛看起來就像有立場只是不敢講。
+
+    文案要先承認問題存在、說明自己為什麼沒有立場，再把話題錨定在角色實際
+    在做的事——那不是轉移話題，那真的是城市靈魂唯一有資格談的東西。
+    """
+    text = refusal_for(SafetyCategory.POLITICAL_STANCE)
+
+    assert "沒有立場" in text
+    # 要留一個可以接下去的問句，而不是句點結束對話
+    assert "？" in text or "嗎" in text
