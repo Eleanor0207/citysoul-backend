@@ -276,6 +276,17 @@ class District(Base):
     radius_meters = Column(Integer, nullable=True)
     boundary = Column(Geography, nullable=True)
 
+    # 區級基調（0016）。欄位與 `CitySoul` 同名同型別，因為它們是同一種東西在
+    # 不同尺度上——只是研究資料顯示有用的尺度是「區」而不是「市」：10 份地標
+    # 研究檔全部寫了自己那一區的基調，沒有一份寫得出城市層的。
+    #
+    # ⚠️ **目前沒有接進 prompt。** `prompt_builder` 不讀這張表，所以這三欄現在
+    # 沒有執行期效果，也沒有執行期成本。等第二個行政區上線、能實際比較生成結果
+    # 時再決定怎麼注入與覆蓋順序（初步方向：character > district > city）。
+    core_tone_descriptors = Column(ARRAY(Text), nullable=True)
+    shared_values = Column(ARRAY(Text), nullable=True)
+    macro_history_summary = Column(Text, nullable=True)
+
 
 class StoryArc(Base):
     """

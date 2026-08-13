@@ -19,17 +19,24 @@
 產生，而研究檔已經過 Lead 覆核。這支腳本會擋掉明顯未完成的內容（佔位字串、空的
 史實表），但它擋不掉「寫錯的史實」——那是人的責任。
 
-## city_tone 預設不匯入，要匯入必須指名來源
+## 區級基調寫進 brain.districts（0016）
 
-10 份研究檔各自寫了**自己那一區**的基調（Lead 決策摘要稱之為「區域基調主寫」，
-萬華、大同、士林……各一份），但 `brain.city_souls` 是**一個城市一列**，沒有分區
-維度；`brain.districts` 也沒有基調欄位。**區級基調目前在 schema 裡沒有地方放。**
+10 份研究檔各自寫了**自己那一區**的基調。`brain.city_souls` 是一個城市一列、
+裝不下這種差異，所以 0016 給 `districts` 加了同名的三個欄位。
 
-這不是這支腳本能決定的事——要嘛挑一份當全臺北的基調，要嘛給 `districts` 加欄位。
-所以預設**完全不碰 `city_souls`**，要寫必須用 `--city-tone-from <檔名>` 指名，
-把「誰代表臺北」這個決定留在指令上，而不是藏在檔名排序裡。
+同一區有多個地標時會有多份互相競爭的版本（萬華就有三份），由
+`content/districts.yaml` 的 `tone_author` 指定誰主寫——沿用 Lead 決策摘要的
+「區域基調主寫」指派。沒被指定的那幾份保留在自己的 YAML 裡當素材，不進資料庫。
 
-地標本身的匯入不受這件事阻擋：`landmark_souls` 跟 `city_souls` 是兩張表。
+`landmark_souls.district_id` 也由 `content/districts.yaml` 的 `landmarks` 清單決定。
+
+⚠️ **`boundary` 不在這支腳本的職責內。** 邊界由 `scripts/load_districts.py` 從
+GeoJSON 載入，兩支互不覆蓋——這裡的 UPSERT 不碰 `boundary` 那一欄。
+
+## city_souls 一律不碰
+
+城市層目前沒有人在寫（`macro_history_summary` 還是 PENDING 佔位）。要寫必須用
+`--city-tone-from <檔名>` 明確指名，把「誰代表臺北」的決定留在指令上。
 """
 from __future__ import annotations
 
@@ -44,6 +51,7 @@ from sqlalchemy import create_engine, text
 from app.core.config import settings
 
 CONTENT_DIR = pathlib.Path(__file__).resolve().parent.parent / "content" / "landmarks"
+DISTRICTS_YAML = pathlib.Path(__file__).resolve().parent.parent / "content" / "districts.yaml"
 
 # 研究檔還沒寫完時留下的記號。這些不該進資料庫。
 PLACEHOLDERS = ("PENDING_NARRATIVE_REVIEW", "PENDING_HUMAN_REVIEW", "待定", "TODO")
@@ -121,6 +129,22 @@ UPSERT_LANDMARK = text(
     """
 )
 
+# ⚠️ 沒有 boundary 這一欄，是刻意的：邊界由 load_districts.py 負責，這裡蓋過去
+# 會把已經載好的萬華多邊形清成 NULL，而圍欄判斷失效不會有任何錯誤訊息。
+UPSERT_DISTRICT = text(
+    """
+    INSERT INTO brain.districts
+        (district_id, city_id, name, core_tone_descriptors, shared_values, macro_history_summary)
+    VALUES (:district_id, :city_id, :name, :core_tone_descriptors, :shared_values, :macro)
+    ON CONFLICT (district_id) DO UPDATE SET
+        city_id               = EXCLUDED.city_id,
+        name                  = EXCLUDED.name,
+        core_tone_descriptors = EXCLUDED.core_tone_descriptors,
+        shared_values         = EXCLUDED.shared_values,
+        macro_history_summary = EXCLUDED.macro_history_summary
+    """
+)
+
 UPSERT_CITY = text(
     """
     INSERT INTO brain.city_souls
@@ -160,7 +184,32 @@ def main() -> int:
         errors.extend(validate(path, data))
         warns.extend(warnings_for(path, data))
 
-    # 見 docstring：city_tone 預設不匯入，要匯入必須用 --city-tone-from 指名。
+    # 行政區指派（content/districts.yaml）
+    districts_cfg = yaml.safe_load(DISTRICTS_YAML.read_text(encoding="utf-8"))
+    by_id = {d["landmark_id"]: d for _, d in loaded}
+    landmark_district: dict[str, str] = {}
+    for d in districts_cfg["districts"]:
+        for lm in d["landmarks"]:
+            if lm not in by_id:
+                errors.append(
+                    f"districts.yaml：{d['district_id']} 列出的 {lm} 沒有對應的 YAML"
+                )
+            if lm in landmark_district:
+                errors.append(f"districts.yaml：{lm} 被指派到兩個行政區")
+            landmark_district[lm] = d["district_id"]
+        author = d["tone_author"]
+        if author not in d["landmarks"]:
+            errors.append(
+                f"districts.yaml：{d['district_id']} 的 tone_author（{author}）"
+                " 不在自己的 landmarks 清單裡"
+            )
+        elif author in by_id and not by_id[author].get("city_tone"):
+            errors.append(f"districts.yaml：{author} 被指定主寫 {d['district_id']} 基調，但它沒有 city_tone")
+    for lm in by_id:
+        if lm not in landmark_district:
+            warns.append(f"{lm} 沒有被指派到任何行政區，district_id 會留白")
+
+    # 見 docstring：city_souls 一律不碰，除非 --city-tone-from 指名。
     have_tone = [(p, d) for p, d in loaded if d.get("city_tone")]
     chosen = None
     if args.city_tone_from:
@@ -201,13 +250,28 @@ def main() -> int:
 
     engine = create_engine(settings.database_url)
     with engine.begin() as conn:
+        # 先寫行政區：landmark_souls.district_id 是指向它的外鍵。
+        for d in districts_cfg["districts"]:
+            tone = by_id[d["tone_author"]]["city_tone"]
+            conn.execute(
+                UPSERT_DISTRICT,
+                {
+                    "district_id": d["district_id"],
+                    "city_id": districts_cfg["city_id"],
+                    "name": d["name"],
+                    "core_tone_descriptors": tone.get("core_tone_descriptors"),
+                    "shared_values": tone.get("shared_values"),
+                    "macro": tone.get("macro_history_summary"),
+                },
+            )
+
         for _, data in loaded:
             conn.execute(
                 UPSERT_LANDMARK,
                 {
                     "landmark_id": data["landmark_id"],
                     "city_id": data["city_id"],
-                    "district_id": data.get("district_id"),
+                    "district_id": landmark_district.get(data["landmark_id"]),
                     "name": data["name"],
                     "founding_facts": json.dumps(
                         data["founding_facts"], ensure_ascii=False

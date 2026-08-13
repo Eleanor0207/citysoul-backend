@@ -1,0 +1,51 @@
+# 行政區定義與「基調主寫」指派。
+#
+# ## 為什麼需要指派
+#
+# 每份地標研究檔都寫了自己那一區的基調素材，所以同一個區會有多份互相競爭的版本
+# ——萬華有龍山寺、西門紅樓、剝皮寮三份，各自從自己的角度描述萬華。若匯入時
+# 「後蓋前」，誰贏取決於檔名排序，那是靜默的資料衝突。
+#
+# `tone_author` 明確指定由哪一份主寫，其餘地標的 `city_tone` 保留在各自的 YAML
+# 裡當素材，但不寫進資料庫。指派沿用 `citysoul-doc` 的 `landmark/lead_decisions_v3.md`
+# 「區域基調主寫」那張表。
+#
+# ## boundary 不在這裡
+#
+# 多邊形邊界由 `scripts/load_districts.py` 從 `data/districts/*.geojson` 載入，
+# 跟這份檔案互不覆蓋。目前只有萬華有邊界資料；其餘四區的列會先建起來、
+# `boundary` 為 NULL——那代表「圍欄還不能用」，不代表資料錯了。
+#
+# ## ⚠️ 這一層目前不進 prompt
+#
+# `prompt_builder` 沒有讀 `districts`，所以區級基調現在**沒有執行期成本，也沒有
+# 執行期效果**。它先有正確的存放位置，等第二個行政區真的上線、能實際比較生成
+# 結果時，再決定怎麼接進 prompt 與覆蓋順序（初步方向：character > district > city）。
+
+city_id: taipei
+
+districts:
+  - district_id: wanhua
+    name: 萬華區
+    tone_author: longshan_temple
+    landmarks: [longshan_temple, ximen_red_house, bopiliao_historic_block]
+
+  - district_id: datong
+    name: 大同區
+    tone_author: xiahai_city_god_temple
+    landmarks: [xiahai_city_god_temple, taiwan_new_cultural_movement_memorial]
+
+  - district_id: shilin
+    name: 士林區
+    tone_author: national_palace_museum
+    landmarks: [national_palace_museum, taipei_astronomical_museum]
+
+  - district_id: zhongshan
+    name: 中山區
+    tone_author: taipei_fine_arts_museum
+    landmarks: [taipei_fine_arts_museum, moca_taipei]
+
+  - district_id: xinyi
+    name: 信義區
+    tone_author: songshan_cultural_park
+    landmarks: [songshan_cultural_park]
