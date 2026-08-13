@@ -1,0 +1,75 @@
+# 靈魂實體與角色身分。`scripts/import_spirits.py` 讀這一份。
+#
+# ## 座標是暫定的
+#
+# ⚠️ `latitude` / `longitude` 目前取自各地標的公開位置，**沒有經過實地勘查**。
+# 召喚點應該是「安全、公開、不需要進入受管制場館」的位置——那要人站在現場才判斷
+# 得出來（龍山寺就是這樣定在廟埕前廣場而不是殿內）。
+#
+# 這些值足以讓開發與測試跑起來，不足以出貨。實地勘查之後要逐一覆蓋。
+#
+# ## 半徑沿用龍山寺的 50 / 150
+#
+# SDD 的召喚半徑 50 公尺、感應半徑 150 公尺。不為個別地標調整——半徑是玩法參數，
+# 不是地標屬性，各自調整會讓「走近就能召喚」這件事在不同地標有不同手感。
+#
+# ## character_id 的命名
+#
+# `{地名}_{英文角色定位詞}`，地名取短的那一段，不重複整個 spirit_id
+# （既有值是 `longshan_watcher` 而非 `longshan_temple_watcher`）。
+# 定位詞用角色在敘事裡的功能，不用角色暱稱（SDD §7.3.1）。
+
+spirits:
+  - spirit_id: ximen_red_house
+    display_name: 西門紅樓
+    character_id: red_house_collector
+    latitude: 25.042100
+    longitude: 121.506800
+
+  - spirit_id: bopiliao_historic_block
+    display_name: 剝皮寮歷史街區
+    character_id: bopiliao_keeper
+    latitude: 25.036900
+    longitude: 121.499300
+
+  - spirit_id: xiahai_city_god_temple
+    display_name: 霞海城隍廟
+    character_id: xiahai_neighbour
+    latitude: 25.055500
+    longitude: 121.510000
+
+  - spirit_id: taiwan_new_cultural_movement_memorial
+    display_name: 臺灣新文化運動紀念館
+    character_id: new_culture_witness
+    latitude: 25.057000
+    longitude: 121.513300
+
+  - spirit_id: national_palace_museum
+    display_name: 國立故宮博物院
+    character_id: palace_custodian
+    latitude: 25.102300
+    longitude: 121.548500
+
+  - spirit_id: taipei_astronomical_museum
+    display_name: 天文館
+    character_id: astronomy_observer
+    latitude: 25.095400
+    longitude: 121.518500
+
+  - spirit_id: taipei_fine_arts_museum
+    display_name: 臺北市立美術館
+    character_id: fine_arts_curator
+    latitude: 25.072500
+    longitude: 121.524800
+
+  - spirit_id: moca_taipei
+    display_name: 台北當代藝術館
+    character_id: moca_experimenter
+    latitude: 25.051000
+    longitude: 121.519500
+
+  - spirit_id: songshan_cultural_park
+    display_name: 松山文創園區
+    character_id: songshan_worker
+    latitude: 25.043900
+    longitude: 121.560600

@@ -133,13 +133,16 @@ def main() -> int:
     sub = ap.add_subparsers(dest="what", required=True)
 
     p = sub.add_parser("persona")
-    p.add_argument("--character", required=True)
-    p.add_argument("--version", type=int, required=True)
+    p.add_argument("--character")
+    p.add_argument("--version", type=int)
+    # 一次把所有草稿上線。每個角色取版本號最大的那一份。
+    p.add_argument("--all", action="store_true", help="所有角色的最新草稿一次上線")
     # 必填。沒有名字就不能上線，見 docstring。
     p.add_argument("--reviewed-by", required=True)
 
     d = sub.add_parser("district")
-    d.add_argument("--district", required=True)
+    d.add_argument("--district")
+    d.add_argument("--all", action="store_true", help="所有有基調內容的行政區一次上線")
     d.add_argument("--reviewed-by", required=True)
 
     sub.add_parser("status")
@@ -153,9 +156,40 @@ def main() -> int:
         return 0
 
     if args.what == "persona":
-        code = activate_persona(engine, args.character, args.version, args.reviewed_by)
+        if args.all:
+            with engine.connect() as conn:
+                targets = conn.execute(
+                    text(
+                        """SELECT DISTINCT ON (character_id) character_id, version
+                           FROM brain.character_personas
+                           ORDER BY character_id, version DESC"""
+                    )
+                ).all()
+            code = 0
+            for character_id, version in targets:
+                code |= activate_persona(engine, character_id, version, args.reviewed_by)
+        elif args.character and args.version:
+            code = activate_persona(engine, args.character, args.version, args.reviewed_by)
+        else:
+            print("✗ 要 --all，或同時給 --character 與 --version")
+            return 2
     else:
-        code = activate_district(engine, args.district, args.reviewed_by)
+        if args.all:
+            with engine.connect() as conn:
+                targets = conn.execute(
+                    text(
+                        """SELECT district_id FROM brain.districts
+                           WHERE core_tone_descriptors IS NOT NULL ORDER BY district_id"""
+                    )
+                ).scalars().all()
+            code = 0
+            for district_id in targets:
+                code |= activate_district(engine, district_id, args.reviewed_by)
+        elif args.district:
+            code = activate_district(engine, args.district, args.reviewed_by)
+        else:
+            print("✗ 要 --all，或給 --district")
+            return 2
 
     print()
     with engine.connect() as conn:

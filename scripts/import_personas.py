@@ -19,8 +19,12 @@ YAML 裡若出現 `active` 欄位，匯入器會直接拒絕整批，而不是�
 舊版留著。沒有歷史與審核人記錄的話，出事時無法回溯是誰在什麼時候改的——那不是
 稽核的方便，是人格內容能不能上線的前提。
 
-所以同一個 `(character_id, version)` 已存在時，這支腳本**拒絕**而不是更新。
-要改內容就換一個 version 號碼。
+所以同一個 `(character_id, version)` 已存在時，這支腳本**跳過**它，不更新也不
+報錯。要改內容就換一個 version 號碼。
+
+跳過而不是報錯，是因為十份人格是一批：其中一份已經匯入過就讓整批失敗的話，
+每加一個新地標都要先手動挑掉已完成的檔案。「不覆寫」的保證仍然成立——被跳過的
+那一份在資料庫裡一個字都不會變。
 
 ## taboos 只能往上加
 
@@ -74,10 +78,8 @@ def validate(path: pathlib.Path, data: dict, conn) -> list[str]:
             {"c": data["character_id"], "v": data["version"]},
         ).scalar()
         if exists:
-            errors.append(
-                f"{where}：{data['character_id']} v{data['version']} 已存在。"
-                " 人格不就地覆寫——要改內容請換一個 version 號碼"
-            )
+            # 見 docstring：跳過，不是錯誤。回傳特殊標記讓呼叫端排除這一份。
+            return ["__SKIP__"]
 
         # taboos 必須是前一版的超集
         prev = conn.execute(
@@ -150,12 +152,20 @@ def main() -> int:
     loaded = []
     errors: list[str] = []
     with engine.connect() as conn:
+        skipped: list[str] = []
         for path in files:
             data = yaml.safe_load(path.read_text(encoding="utf-8"))
             # YAML 折行在中文之間留下的空格，見 scripts/text_normalize.py
             data = strip_fold_spaces(data)
+            problems = validate(path, data, conn)
+            if problems == ["__SKIP__"]:
+                skipped.append(f"{data['character_id']} v{data['version']}")
+                continue
             loaded.append((path, data))
-            errors.extend(validate(path, data, conn))
+            errors.extend(problems)
+
+    for name in skipped:
+        print(f"－ {name} 已存在，跳過")
 
     if errors:
         for e in errors:
