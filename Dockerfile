@@ -28,6 +28,9 @@ COPY alembic.ini ./
 COPY app ./app
 COPY migrations ./migrations
 COPY scripts ./scripts
+# 區界 GeoJSON。`scripts/load_districts.py` 在 Cloud Run Job 裡讀它，所以它必須
+# 在映像檔內——這是唯一一份要跟著程式一起走的資料檔。
+COPY data ./data
 
 # ⚠️ 不要在這裡寫 EXPOSE 8080 就當成埠號設定好了。Cloud Run 是用 $PORT
 # 環境變數告訴容器要聽哪個埠，而且它可以不是 8080。硬寫 --port 8080 在多數
