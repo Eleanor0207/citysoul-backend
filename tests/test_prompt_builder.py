@@ -635,3 +635,16 @@ def test_a_missing_district_still_builds_a_usable_prompt():
     assert "沉靜、耐心的守望者" in text
     assert "三邑移民合資" in text
     assert "這一帶給人的感覺" not in text
+
+
+def test_the_model_is_told_not_to_narrate_its_own_voice():
+    """
+    人格卡的 `speech_style` 是給模型的指示，不是要它唸出來的內容。
+
+    沒有這條規則時，每一則回應都會以「（微風輕拂，聲音溫和而悠長……）」開頭——
+    每次都寫、每次都一樣，讀起來像劇本而不是對話，而且每輪白付幾十個 token。
+    """
+    text = build_system_instruction(_Persona(), _Landmark(), _District())
+
+    assert "不要在開頭描述自己的聲音" in text
+    assert "括號裡的動作提示" in text
