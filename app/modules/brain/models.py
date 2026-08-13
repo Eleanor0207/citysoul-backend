@@ -200,7 +200,7 @@ class MemoryEmbedding(Base):
         #
         # ivfflat 是「近似」最近鄰索引：它把向量分成 lists 個群集，查詢時只掃其中
         # 幾群，所以可能漏掉真正的前 K 名。這對記憶檢索是可接受的取捨，但也代表
-        # 檢索函式的正確性測試不能依賴它——見 retrieval.py 裡關於 seq scan 的說明。
+        # 檢索函式的正確性測試不能依賴它——見 memory.py 裡關於 seq scan 的說明。
         Index(
             "ix_memory_embeddings_embedding_cosine",
             "embedding",
