@@ -39,6 +39,7 @@ from typing import Any, Callable
 import re
 
 from app.core.config import settings
+from app.core.text_normalize import strip_fold_spaces
 
 logger = logging.getLogger(__name__)
 
@@ -198,7 +199,15 @@ class VertexAIGeminiClient(GeminiClient):
                 # 常見原因是被安全過濾器擋掉，或 thinking 吃光了整個預算。
                 return self._fall_back("模型回傳空字串（安全過濾器或 token 預算耗盡）")
 
-            return text
+            # 中文標點後面的空格。模型會寫出「什麼沒見過。 1815 年」這種
+            # 排版——句號後的空格在中文裡沒有意義，但它會一路帶到玩家眼前，
+            # 也會被 TTS 讀成一個停頓。
+            #
+            # 用的是匯入器那支正規化器，規則一模一樣（只動中日韓字元之間與
+            # 中文標點之後的空白，「1945 年」的空格保留）。**不做其他修剪**——
+            # 這裡是模型輸出，動得愈少愈好，切句號、補標點那類 heuristic 只會
+            # 把生成品質的問題藏起來。
+            return strip_fold_spaces(text)
 
         except Exception as exc:  # noqa: BLE001
             # 刻意攔截所有例外。這裡不該有「哪些例外算預期」的清單——

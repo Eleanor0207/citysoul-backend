@@ -253,3 +253,16 @@ def test_gated_spirit_refuses_without_calling_the_model(
     # 玩家會拿到一句愉快的問候。
     assert body["reply_text"] != _GREETING
     assert body["reply_text"]
+
+
+def test_generated_text_has_no_stray_spaces_after_chinese_punctuation():
+    """
+    模型會寫出「什麼沒見過。 1815 年」這種排版——句號後的空格在中文裡沒有意義，
+    但它會一路帶到玩家眼前，也會被 TTS 讀成一個停頓。
+
+    `1945 年` 的空格保留：那是數字與中文之間的排版慣例。
+    """
+    from app.core.text_normalize import strip_fold_spaces
+
+    assert strip_fold_spaces("什麼沒見過。 1815 年那場地震") == "什麼沒見過。1815 年那場地震"
+    assert strip_fold_spaces("1945 年臺北大空襲") == "1945 年臺北大空襲"
