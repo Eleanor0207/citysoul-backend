@@ -400,3 +400,145 @@ class PushSubscription(Base):
     updated_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
+
+class MediaAsset(Base):
+    """
+    媒體資產（0013）。圖檔本身在 Cloud Storage，這裡只存路徑與 metadata。
+
+    ⚠️ **沒有 EXIF 欄位，也不要加。** 手機照片的 EXIF 帶著拍攝座標與時間，
+    原樣保存等同建立位置紀錄——那是 CONTEXT.md「不存移動軌跡」擋的東西，
+    只是換個地方存。上傳流程必須在寫進 Cloud Storage 之前就把 EXIF 剝掉。
+
+    `spirit_id` 對系統素材（主線信件、道具插圖）是 NULL：那些屬於整條 arc，
+    不專屬單一靈魂。
+    """
+
+    __tablename__ = "media_assets"
+
+    asset_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    asset_type = Column(Text, nullable=False)
+    owner_type = Column(Text, nullable=False)  # 'system' / 'player'
+    owner_id = Column(Text, nullable=True)
+    spirit_id = Column(Text, ForeignKey("spirits.spirit_id"), nullable=True)
+    gcs_path = Column(Text, nullable=False)
+    cdn_url = Column(Text, nullable=False)
+    content_type = Column(Text, nullable=False)
+    width = Column(Integer, nullable=True)
+    height = Column(Integer, nullable=True)
+    uploaded_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("owner_type IN ('system', 'player')", name="ck_media_assets_owner_type"),
+    )
+
+
+class Quest(Base):
+    """
+    人工撰寫的任務定義（0013）。
+
+    ⚠️ **每日任務不在這張表裡。** `quests.py` 的 `quest_id_for_spirit()` 是
+    推導出 `f"{spirit_id}:daily"`，從來不寫進任何表——所以 `quest_progress`
+    的每日列引用的 quest_id 在這裡找不到對應。這也是 `quest_progress.quest_id`
+    刻意不加外鍵的原因（見 0013 的 docstring）。
+
+    這張表放的是 story 類型與主線的拍照任務，也就是有人真的寫過內容的那些。
+    """
+
+    __tablename__ = "quests"
+
+    quest_id = Column(Text, primary_key=True)
+    spirit_id = Column(Text, ForeignKey("spirits.spirit_id"), nullable=True)
+    title = Column(Text, nullable=False)
+    quest_type = Column(Text, nullable=False)  # 'daily' / 'story' / 'resonance_gated'
+    min_resonance = Column(Integer, nullable=False, server_default="0", default=0)
+    # 值關聯 → brain.story_beats，不建跨 schema 外鍵。僅 story 類型有值。
+    story_beat_id = Column(Text, nullable=True)
+    steps = Column(JSONB, nullable=False, server_default="[]")
+    reward_type = Column(Text, nullable=True)  # 'resonance' / 'item'
+    reward_value = Column(JSONB, nullable=True)
+    is_active = Column(Boolean, nullable=False, server_default="true", default=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "quest_type IN ('daily', 'story', 'resonance_gated')", name="ck_quests_type"
+        ),
+    )
+
+
+class PlayerInventory(Base):
+    """
+    玩家持有的道具（0013）。`story_beats.required_item_ids` 查的就是這張表。
+
+    `uq_inventory_player_item` **是防重複發放的機制本身**，不是效能索引。
+    玩家在區域圍欄邊緣來回走動會重複觸發 `grant_arc_intro_document()`，
+    靠應用層「先查有沒有再寫」在併發下會漏掉——唯一索引才擋得住。
+    """
+
+    __tablename__ = "player_inventory"
+
+    inventory_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    player_id = Column(UUID(as_uuid=True), ForeignKey("players.player_id"), nullable=False)
+    # 'badge' / 'collectible' / 'story_memento' / 'story_key_item' / 'story_document'
+    item_type = Column(Text, nullable=False)
+    item_id = Column(Text, nullable=False)
+    source_quest_id = Column(Text, ForeignKey("quests.quest_id"), nullable=True)
+    illustration_asset_id = Column(
+        UUID(as_uuid=True), ForeignKey("media_assets.asset_id"), nullable=True
+    )
+    acquired_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_inventory_player", "player_id"),
+        Index("uq_inventory_player_item", "player_id", "item_id", unique=True),
+    )
+
+
+class DialogueTurn(Base):
+    """
+    對話日誌（0013）。也是 B6 長期記憶排程萃取的資料來源。
+
+    ⚠️ **不存座標。** 哪一次對話發生在哪裡由 `spirit_id` 表達——靈魂本身就是
+    地點。這張表帶 `player_id` 與時間，再加座標就是移動軌跡，只是叫別的名字。
+
+    `story_beat_id` 是**日誌上的註記，不是進度的依據**。「這個 beat 觸發了沒」
+    永遠查 `PlayersStoryProgress`，兩邊對不上時不需要猜該信哪一個。
+    """
+
+    __tablename__ = "dialogue_turns"
+
+    turn_id = Column(BigInteger, Identity(always=False), primary_key=True)
+    player_id = Column(UUID(as_uuid=True), ForeignKey("players.player_id"), nullable=False)
+    spirit_id = Column(Text, ForeignKey("spirits.spirit_id"), nullable=False)
+    role = Column(Text, nullable=False)  # 'player' / 'spirit'
+    content = Column(Text, nullable=False)
+    resonance_value_at_time = Column(Integer, nullable=True)
+    # 值關聯 → brain.story_beats，不建跨 schema 外鍵。
+    story_beat_id = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("role IN ('player', 'spirit')", name="ck_dialogue_turns_role"),
+        Index("idx_dialogue_player_spirit_time", "player_id", "spirit_id", "created_at"),
+    )
+
+
+class PlayersStoryProgress(Base):
+    """
+    玩家踩過哪些劇情節點（0013）。**主線進度的唯一真相來源。**
+
+    `check_beat_unlockable()` 判斷 `prerequisite_beat_ids` 是否都滿足，查的就是
+    這張表。主鍵 `(player_id, beat_id)` 讓同一個 beat 天然只能記錄一次，寫入端
+    用 `ON CONFLICT DO NOTHING` 就夠，不需要先查再寫。
+
+    也因為只能記一次，`story_beats.one_time = false` 在這裡沒有對應的表達方式
+    ——「觸發了幾次」這件事無處可存。需要重複出現的東西應該是語氣狀態
+    （`contingency_notes`），不是劇情節點。
+    """
+
+    __tablename__ = "players_story_progress"
+
+    player_id = Column(UUID(as_uuid=True), ForeignKey("players.player_id"), primary_key=True)
+    # 值關聯 → brain.story_beats，不建跨 schema 外鍵。
+    beat_id = Column(Text, primary_key=True)
+    triggered_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
