@@ -19,6 +19,15 @@
 產生，而研究檔已經過 Lead 覆核。這支腳本會擋掉明顯未完成的內容（佔位字串、空的
 史實表），但它擋不掉「寫錯的史實」——那是人的責任。
 
+## 🔒 基調有審核閘，這支腳本只會把它關掉
+
+`brain.districts` 有 `active` / `reviewed_by` / `reviewed_at`（0018），語意與人格
+卡一致：**沒有任何程式路徑會把 `active` 設成 true**，只有人工審核流程能 flip。
+`prompt_builder` 只注入 `active=true` 的基調。
+
+而且**重新匯入會把已審核的列退回未審核**。內容換了、審核狀態留著，等於讓上一次
+的簽名替這一次的文字背書——那比一開始就沒有審核更糟，因為它看起來是有審核的。
+
 ## 區級基調寫進 brain.districts（0016）
 
 10 份研究檔各自寫了**自己那一區**的基調。`brain.city_souls` 是一個城市一列、
@@ -141,7 +150,12 @@ UPSERT_DISTRICT = text(
         name                  = EXCLUDED.name,
         core_tone_descriptors = EXCLUDED.core_tone_descriptors,
         shared_values         = EXCLUDED.shared_values,
-        macro_history_summary = EXCLUDED.macro_history_summary
+        macro_history_summary = EXCLUDED.macro_history_summary,
+        -- 🔒 改了基調文字就退回未審核。內容變了而審核狀態沒變，等於讓上一次的
+        -- 簽名替這一次的文字背書——那比一開始就沒有審核更糟。
+        active                = false,
+        reviewed_by           = NULL,
+        reviewed_at           = NULL
     """
 )
 

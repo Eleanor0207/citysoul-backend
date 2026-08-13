@@ -11,7 +11,7 @@ CONTEXT.md 定義：人格是「經人工審核的角色定義」，LLM 只能�
 from sqlalchemy.orm import Session
 
 from app.modules.body.models import Spirit
-from app.modules.brain.models import CannedGreeting, CharacterPersona, LandmarkSoul
+from app.modules.brain.models import CannedGreeting, CharacterPersona, District, LandmarkSoul
 
 
 def character_id_for_spirit(db: Session, spirit_id: str) -> str | None:
@@ -72,3 +72,25 @@ def load_landmark_soul(db: Session, spirit_id: str) -> LandmarkSoul | None:
         return None
 
     return db.query(LandmarkSoul).filter_by(landmark_id=spirit.landmark_id).first()
+
+
+def load_active_district(db: Session, spirit_id: str) -> District | None:
+    """
+    地標靈魂 → 所屬行政區的基調，**只回傳審核通過的**。
+
+    `active=False` 一律當作不存在。基調文字會被注入 prompt，跟人格卡同級——
+    未審核的內容不該因為「它只是背景描述」就放寬。過濾寫在這裡而不是呼叫端，
+    是為了讓「未審核的基調可能外洩」這件事不取決於每個呼叫端記不記得加條件。
+
+    找不到區、或該區沒有基調，都回傳 None：`districts` 是敘事分組標籤，不是每個
+    地標都得屬於某個區（`landmark_souls.district_id` 可為 NULL）。
+    """
+    landmark = load_landmark_soul(db, spirit_id)
+    if landmark is None or not landmark.district_id:
+        return None
+
+    return (
+        db.query(District)
+        .filter_by(district_id=landmark.district_id, active=True)
+        .first()
+    )

@@ -5,9 +5,10 @@ B2．Prompt 組裝引擎（issue #12）。
 
     System Instruction:
       1. 人格（B3）
-      2. 地標史實（`brain.landmark_souls`）
-      3. 史實邊界規則（B5）
-      4. ——安全邊界（B4）刻意**不在這裡**——
+      2. 行政區基調（`brain.districts`，僅 active）
+      3. 地標史實（`brain.landmark_souls`）
+      4. 史實邊界規則（B5）
+      5. ——安全邊界（B4）刻意**不在這裡**——
 
     User Turn:
       1. 當日情境摘要（B9，若今天有）
@@ -17,16 +18,26 @@ B2．Prompt 組裝引擎（issue #12）。
 
 ## 順序是有意義的，不是排版
 
-模型對 System Instruction 前段的內容給予較高權重。三段是「你是誰 → 你知道什麼
-→ 你不能怎麼講」：
+模型對 System Instruction 前段的內容給予較高權重。四段是「你是誰 → 你在什麼樣的
+地方 → 你知道什麼 → 你不能怎麼講」——人格最先，然後由寬到窄收斂到具體史實，
+最後才是限制：
 
 人格排在最前，因為「你是誰」決定了「你怎麼說」。史實邊界規則排在最後，因為它是
 對前兩段的**限制**——限制放在被限制的對象之後才讀得懂。倒過來排，模型會先看到
 一串禁令，然後才知道那是給誰的、在管什麼。
 
-史實夾在中間而不是放進 User Turn：它是**每次對話都相同的知識**，跟當日情境、
-記憶那種每次不同的東西不是同一類。放 User Turn 會讓模型把恆定的史實當成「這次
-特別提到的資訊」。
+行政區基調排在史實之前，因為它是**背景**而史實是**細節**：先知道自己在一條什麼
+樣的街上，再去講那條街上發生過什麼事。反過來排，具體年代會先佔住注意力，基調
+變成事後補充的形容詞。
+
+史實與基調都在 System Instruction 而不是 User Turn：它們是**每次對話都相同的
+知識**，跟當日情境、記憶那種每次不同的東西不是同一類。放 User Turn 會讓模型把
+恆定的內容當成「這次特別提到的資訊」。
+
+## 🔒 基調有審核閘，未審核的不會進來
+
+`load_active_district()` 只回傳 `active=true` 的列。基調文字跟人格卡同級——會
+被注入 prompt 的東西都要有人簽名，不因為「它只是背景描述」而放寬。
 
 ## B4 為什麼不在 System Instruction 裡
 
@@ -36,14 +47,12 @@ B2．Prompt 組裝引擎（issue #12）。
 真正的差別在於：塞進 System Instruction 是**請求模型自律**，而自律是機率性的；
 輸入端過濾是**下游根本不會被呼叫**。兩者不是同一件事的兩種寫法。
 
-## 城市層與行政區層還沒接進來
+## 城市層還沒接進來
 
-`brain.city_souls` 的內容目前還是 `PENDING_NARRATIVE_REVIEW` 佔位，沒有人在寫；
-`brain.districts` 的區級基調有內容，但接不接、以及「人格 / 區 / 市」的覆蓋順序
-要等第二個行政區真的上線、能比較生成結果時才驗得了。
+`brain.city_souls` 的內容目前還是 `PENDING_NARRATIVE_REVIEW` 佔位，沒有人在寫。
+接進來也只是多付一段 token 換一段佔位字串，所以先不接。
 
-**每多注入一層，每一次對話都多付一段 token，而且多一個彼此矛盾的地方。** 目前
-首發只有萬華，多這兩層講出來的話不會有差別。
+它已經有審核閘（0018 一併加的），要接的時候條件跟行政區一樣：`active=true`。
 
 ## 缺項一律優雅省略
 
@@ -79,7 +88,11 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.redis_client import get_session
 from app.modules.brain.historical_boundary import factual_boundary_for_persona
-from app.modules.brain.loader import load_active_persona, load_landmark_soul
+from app.modules.brain.loader import (
+    load_active_district,
+    load_active_persona,
+    load_landmark_soul,
+)
 from app.modules.brain.memory import retrieve_similar_memories
 
 logger = logging.getLogger(__name__)
@@ -130,6 +143,36 @@ def _persona_section(persona) -> str:
     add("不談論的主題", persona.taboos)
 
     return "\n".join(lines)
+
+
+def _district_section(district) -> str | None:
+    """
+    第 2 段：行政區基調。角色所在的這條街是什麼樣的地方。
+
+    🔒 呼叫端傳進來的必須已經是 `active=true` 的列（`load_active_district()`
+    負責過濾）。這個函式本身不查資料庫，所以它擋不住未審核內容——真正的閘門
+    在 loader，這裡只負責排版。
+
+    基調是**形容詞不是事實**：`core_tone_descriptors` 講的是氣質，不是可以拿來
+    當史料引用的東西。措辭上刻意用「這一帶給人的感覺」而不是「這一帶的歷史是」，
+    免得模型把關鍵詞當成可以展開論述的史實。
+    """
+    if district is None:
+        return None
+
+    lines: list[str] = []
+    if district.core_tone_descriptors:
+        lines.append("這一帶給人的感覺：" + "、".join(district.core_tone_descriptors))
+    if district.shared_values:
+        lines.append("這裡的人共同在意的事：" + "、".join(district.shared_values))
+    if district.macro_history_summary:
+        lines.append(district.macro_history_summary)
+
+    if not lines:
+        return None
+
+    name = district.name or "這一帶"
+    return f"你屬於{name}這片區域。" + "\n\n" + "\n".join(lines)
 
 
 def _format_fact(fact) -> str | None:
@@ -216,18 +259,25 @@ def _landmark_section(landmark) -> str | None:
     return f"你是「{name}」這個地方本身累積下來的記憶。\n\n" + "\n\n".join(blocks)
 
 
-def build_system_instruction(persona, landmark=None) -> str:
+def build_system_instruction(persona, landmark=None, district=None) -> str:
     """
     人格 → 地標史實 → 史實邊界規則。順序見模組註解。
 
-    `landmark` 預設 None：史實層與人格層各自獨立缺席（見 loader 的
-    `load_landmark_soul`），少了史實仍然組得出可用的 prompt——角色只是不知道這座
-    地標的往事，而不是不能講話。
+    `landmark` 與 `district` 都預設 None：三層各自獨立缺席（見 loader）。少了史實
+    仍然組得出可用的 prompt——角色只是不知道這座地標的往事，而不是不能講話；少了
+    基調同理。
+
+    🔒 `district` 必須是已經過 `load_active_district()` 過濾的列。這個函式不查
+    資料庫，擋不住未審核內容。
 
     B5 的規則已經把人格自己的 `imagination_license` 疊進去了，所以這裡不需要、
     也不應該再列一次。
     """
     sections = [_persona_section(persona)]
+
+    district_section = _district_section(district)
+    if district_section:
+        sections.append(district_section)
 
     landmark_section = _landmark_section(landmark)
     if landmark_section:
@@ -319,6 +369,9 @@ def build_prompt(
     if landmark is None:
         logger.info("靈魂 %s 沒有對應的史實層，prompt 不含地標史實", spirit_id)
 
+    # 🔒 只取審核通過的基調。未審核的一律當作不存在。
+    district = load_active_district(db, spirit_id)
+
     k = settings.prompt_memory_top_k if top_k is None else top_k
     turns_limit = settings.prompt_recent_turns if recent_turns is None else recent_turns
 
@@ -339,7 +392,7 @@ def build_prompt(
     recent = history[-turns_limit:] if turns_limit > 0 else []
 
     return Prompt(
-        system_instruction=build_system_instruction(persona, landmark),
+        system_instruction=build_system_instruction(persona, landmark, district),
         user_turn=build_user_turn(
             user_input=user_input,
             daily_context=daily_context,

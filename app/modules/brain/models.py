@@ -55,6 +55,14 @@ class CitySoul(Base):
     shared_values = Column(ARRAY(Text), nullable=True)
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
+    # 審核閘（0018）。語意與 `CharacterPersona` 的同名欄位一致：**沒有任何程式
+    # 路徑會把 `active` 設成 true**，只有人工審核流程能 flip。
+    #
+    # `prompt_builder` 只注入 `active=true` 的基調——未審核的文字不會到達模型。
+    active = Column(Boolean, nullable=False, server_default="false", default=False)
+    reviewed_by = Column(Text, nullable=True)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+
 
 class LandmarkSoul(Base):
     """
@@ -286,6 +294,15 @@ class District(Base):
     core_tone_descriptors = Column(ARRAY(Text), nullable=True)
     shared_values = Column(ARRAY(Text), nullable=True)
     macro_history_summary = Column(Text, nullable=True)
+
+    # 審核閘（0018）。語意與 `CharacterPersona` 的同名欄位一致：**沒有任何程式
+    # 路徑會把 `active` 設成 true**，只有人工審核流程能 flip。
+    #
+    # `prompt_builder` 只注入 `active=true` 的基調——未審核的文字不會到達模型。
+    active = Column(Boolean, nullable=False, server_default="false", default=False)
+    reviewed_by = Column(Text, nullable=True)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+
 
 
 class StoryArc(Base):

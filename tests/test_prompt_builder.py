@@ -580,3 +580,58 @@ def test_the_character_does_not_volunteer_misconceptions():
     text = build_system_instruction(_Persona(), _Landmark())
 
     assert "你不會主動提起這些錯誤說法" in text
+
+
+# ── 行政區基調（brain.districts）─────────────────────────────────────
+
+class _District:
+    """行政區替身，欄位名跟 `brain.districts` 一致。"""
+
+    name = "萬華區"
+    core_tone_descriptors = ["市井", "信仰", "煙火氣"]
+    shared_values = ["鄉土凝聚", "歷劫重生"]
+    macro_history_summary = "艋舺為臺北市最早發展的街市之一，依傍淡水河港口而興。"
+
+
+def test_tone_sits_between_the_persona_and_the_facts():
+    """
+    四段的順序是「你是誰 → 你在什麼樣的地方 → 你知道什麼 → 你不能怎麼講」。
+
+    基調排在史實之前，因為它是背景而史實是細節：先知道自己在一條什麼樣的街上，
+    再講那條街上發生過什麼。反過來排，具體年代會先佔住注意力。
+    """
+    text = build_system_instruction(_Persona(), _Landmark(), _District())
+
+    persona_at = text.index("沉靜、耐心的守望者")
+    tone_at = text.index("煙火氣")
+    facts_at = text.index("三邑移民合資")
+    rules_at = text.index("談到歷史時")
+
+    assert persona_at < tone_at < facts_at < rules_at
+
+
+def test_all_three_tone_fields_appear():
+    text = build_system_instruction(_Persona(), _Landmark(), _District())
+
+    assert "市井、信仰、煙火氣" in text
+    assert "鄉土凝聚、歷劫重生" in text
+    assert "依傍淡水河港口而興" in text
+
+
+def test_tone_is_framed_as_atmosphere_not_as_citable_history():
+    """
+    基調是形容詞不是史料。措辭要讓模型知道那是氣質，不是可以展開論述的事實——
+    否則「歲月韌性」這種關鍵詞會被當成一個可以引用的歷史論斷。
+    """
+    text = build_system_instruction(_Persona(), _Landmark(), _District())
+
+    assert "這一帶給人的感覺：" in text
+
+
+def test_a_missing_district_still_builds_a_usable_prompt():
+    """三層各自獨立缺席。沒有基調時整段消失，不留空標題。"""
+    text = build_system_instruction(_Persona(), _Landmark(), None)
+
+    assert "沉靜、耐心的守望者" in text
+    assert "三邑移民合資" in text
+    assert "這一帶給人的感覺" not in text
