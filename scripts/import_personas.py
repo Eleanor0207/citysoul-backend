@@ -43,6 +43,7 @@ import yaml
 from sqlalchemy import create_engine, text
 
 from app.core.config import settings
+from scripts.text_normalize import strip_fold_spaces
 
 PERSONA_DIR = pathlib.Path(__file__).resolve().parent.parent / "content" / "personas"
 
@@ -151,6 +152,8 @@ def main() -> int:
     with engine.connect() as conn:
         for path in files:
             data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            # YAML 折行在中文之間留下的空格，見 scripts/text_normalize.py
+            data = strip_fold_spaces(data)
             loaded.append((path, data))
             errors.extend(validate(path, data, conn))
 
