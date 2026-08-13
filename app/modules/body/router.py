@@ -35,6 +35,7 @@ from app.modules.body.resonance import (
 from app.modules.body.sense_tokens import SENSE_TOKEN_HEADER, require_sense_token
 from app.modules.body.sense_tokens import issue_sense_token
 from app.modules.body.tokens import issue_session_token
+from app.modules.brain.safety import GeminiSafetyChecker, SafetyGate
 from app.modules.brain.gemini import (
     GeminiClient,
     VertexAIGeminiClient,
@@ -334,28 +335,53 @@ def dialogue(
     # 幾句話」，不是「我們付了多少錢」，讓招呼免費會給出一條無限對話的路徑。
     consume(db, session_player_id, RESOURCE_DIALOGUE)
 
-    # ── B12 招呼比對 ─────────────────────────────────────────────────
-    canned = match_canned_greeting(db, place_id, payload.user_input)
-    if canned is not None:
-        reply_text, source = canned, "canned"
-    else:
-        # ── B2 → B1 ──────────────────────────────────────────────────
+    # ── B12 招呼比對 → B2 → B1 ───────────────────────────────────────
+    #
+    # 包成 closure 是為了讓 B4 能把整段當成「下游」傳給 `SafetyGate.run()`。
+    # `source` 用 nonlocal 從裡面設定，所以**下游沒被呼叫時 source 仍然是
+    # "refused"**——那正是 B4 要保證的事，而不是另外再寫一個 if 去推斷。
+    source = "refused"
+
+    def _reply(user_input: str) -> str:
+        nonlocal source
+
+        canned = match_canned_greeting(db, place_id, user_input)
+        if canned is not None:
+            source = "canned"
+            return canned
+
         prompt = build_prompt(
             db,
             spirit_id=place_id,
             player_id=session_player_id,
-            user_input=payload.user_input,
+            user_input=user_input,
         )
 
         if prompt is None:
             # 沒有生效人格卡。封閉測試期這是常態（草稿在審核通過前都是
             # active=False），所以走人工預寫台詞而不是 500。
-            reply_text, source = FALLBACK_REPLY, "fallback"
-        else:
-            reply_text = gemini.generate(prompt.as_single_text())
-            # B1 的契約是「永遠回非空字串，失敗時回 FALLBACK_REPLY」，所以
-            # 這裡靠內容而不是例外來判斷是不是回退了。
-            source = "fallback" if reply_text == FALLBACK_REPLY else "generated"
+            source = "fallback"
+            return FALLBACK_REPLY
+
+        text = gemini.generate(prompt.as_single_text())
+        # B1 的契約是「永遠回非空字串，失敗時回 FALLBACK_REPLY」，所以
+        # 這裡靠內容而不是例外來判斷是不是回退了。
+        source = "fallback" if text == FALLBACK_REPLY else "generated"
+        return text
+
+    # ── B4 安全邊界 ──────────────────────────────────────────────────
+    #
+    # ⚠️ **只對開了旗標的靈魂跑。** 這一層要多花一次 Gemini 呼叫做輸入分類，
+    # 也就是每輪對話的延遲與成本加倍，而 SDD 把「AI 對話成本與延遲」列為 🔴。
+    # 風險不是均勻分布的——玩家問天文館「文物該不該還給對岸」的機率，跟問故宮
+    # 差了一個量級。判斷依據與目前開了哪三個見 migration 0019。
+    #
+    # 排在 B12 招呼比對之前（包在同一個 closure 裡）：招呼比對是字串比對，
+    # 「你好，我想自殺」這種夾帶的輸入若先命中招呼，玩家會拿到一句愉快的問候。
+    if spirit.safety_gate_enabled:
+        reply_text = SafetyGate(GeminiSafetyChecker(gemini)).run(payload.user_input, _reply)
+    else:
+        reply_text = _reply(payload.user_input)
 
     # ── B10 語音 ─────────────────────────────────────────────────────
     #

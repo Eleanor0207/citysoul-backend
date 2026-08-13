@@ -13,6 +13,14 @@
 # SDD 的召喚半徑 50 公尺、感應半徑 150 公尺。不為個別地標調整——半徑是玩法參數，
 # 不是地標屬性，各自調整會讓「走近就能召喚」這件事在不同地標有不同手感。
 #
+# ## safety_gate
+#
+# 開了的地標，每輪對話會先跑一次 B4 輸入分類（多一次 Gemini 呼叫，延遲與成本
+# 加倍），不安全的提問在**呼叫生成之前**就被婉拒。
+#
+# 只給風險高的開：玩家問天文館「文物該不該還給對岸」的機率，跟問故宮差了一個
+# 量級。全開等於為了三個地標讓十個一起變慢。沒寫就是 false。
+#
 # ## character_id 的命名
 #
 # `{地名}_{英文角色定位詞}`，地名取短的那一段，不重複整個 spirit_id
@@ -33,18 +41,21 @@ spirits:
     longitude: 121.499300
 
   - spirit_id: xiahai_city_god_temple
+    safety_gate: true
     display_name: 霞海城隍廟
     character_id: xiahai_neighbour
     latitude: 25.055500
     longitude: 121.510000
 
   - spirit_id: taiwan_new_cultural_movement_memorial
+    safety_gate: true
     display_name: 臺灣新文化運動紀念館
     character_id: new_culture_witness
     latitude: 25.057000
     longitude: 121.513300
 
   - spirit_id: national_palace_museum
+    safety_gate: true
     display_name: 國立故宮博物院
     character_id: palace_custodian
     latitude: 25.102300

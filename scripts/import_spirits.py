@@ -50,16 +50,17 @@ UPSERT_SPIRIT = text(
     """
     INSERT INTO spirits
         (spirit_id, display_name, character_id, landmark_id, latitude, longitude,
-         summon_radius_meters, sense_radius_meters, is_active)
+         summon_radius_meters, sense_radius_meters, is_active, safety_gate_enabled)
     VALUES
         (:spirit_id, :display_name, :character_id, :landmark_id, :latitude, :longitude,
-         :summon_radius, :sense_radius, true)
+         :summon_radius, :sense_radius, true, :safety_gate)
     ON CONFLICT (spirit_id) DO UPDATE SET
         display_name  = EXCLUDED.display_name,
         character_id  = EXCLUDED.character_id,
         landmark_id   = EXCLUDED.landmark_id,
         latitude      = EXCLUDED.latitude,
-        longitude     = EXCLUDED.longitude
+        longitude     = EXCLUDED.longitude,
+        safety_gate_enabled = EXCLUDED.safety_gate_enabled
     """
 )
 
@@ -93,7 +94,8 @@ def main() -> int:
         return 1
 
     for e in entries:
-        print(f"  {e['spirit_id']:36s} {e['display_name']:12s} → {e['character_id']}")
+        gate = "  [B4 安全閘]" if e.get("safety_gate") else ""
+        print(f"  {e['spirit_id']:36s} {e['display_name']:12s} → {e['character_id']}{gate}")
 
     if args.dry_run:
         print("\n--dry-run：沒有寫入資料庫")
@@ -116,6 +118,7 @@ def main() -> int:
                     "longitude": e["longitude"],
                     "summon_radius": SUMMON_RADIUS_M,
                     "sense_radius": SENSE_RADIUS_M,
+                    "safety_gate": bool(e.get("safety_gate", False)),
                 },
             )
 

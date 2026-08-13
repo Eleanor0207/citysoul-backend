@@ -163,8 +163,11 @@ class DialogueResponse(BaseModel):
     """
 
     reply_text: str
-    # 'canned' = 命中預寫招呼；'generated' = Gemini 生成；
-    # 'fallback' = 生成失敗或無法組裝，回人工預寫台詞。
+    # 'canned'    = 命中預寫招呼，沒有呼叫模型
+    # 'generated' = Gemini 生成
+    # 'fallback'  = 生成失敗或無法組裝，回人工預寫台詞
+    # 'refused'   = B4 輸入端安全檢查擋下，**生成一次都沒有被呼叫**
+    #               （只有 `spirits.safety_gate_enabled` 的靈魂會出現）
     # 客戶端不需要據此改變行為，但除錯與觀察命中率時很有用。
     source: str
     # 依空行切好的段落，供客戶端逐段推播（一次跳出整段文字像在讀說明書）。

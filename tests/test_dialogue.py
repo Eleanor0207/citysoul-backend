@@ -208,3 +208,48 @@ def test_response_shape(client, spirit, player, active_card):
     assert body["segments"]
     for seg in body["segments"]:
         assert seg in body["reply_text"]
+
+
+# ── B4 安全閘（逐地標開關，0019）──────────────────────────────────────
+
+def test_safety_gate_is_off_by_default(client, spirit, player, active_card):
+    """
+    預設不跑 B4。開了就是每輪多一次 Gemini 呼叫，延遲與成本加倍——那個代價
+    只值得付在風險高的地標上（見 migration 0019）。
+    """
+    assert spirit.safety_gate_enabled is False
+
+    pid, sess = player
+    enc = issue_encounter_token(pid, spirit.spirit_id)
+    body = _say(client, spirit, sess, enc, "這座廟什麼時候蓋的？").json()
+
+    assert body["source"] != "refused"
+
+
+def test_gated_spirit_refuses_without_calling_the_model(
+    client, db_session, spirit, player, active_card
+):
+    """
+    開了閘的靈魂，分類判定不出來時 **fail-closed**，而且下游一次都不會被呼叫。
+
+    測試用的 `FakeGeminiClient` 回的是固定字串，解析不出任何標籤——那正是
+    「分類失敗」的情境。B4 的設計是往嚴格的方向倒（`safety.py` 模組註解），
+    所以這裡預期婉拒。
+
+    `source == "refused"` 是這條保證的證據而不是另一個推斷：`source` 的初始值
+    就是 refused，只有下游真的被呼叫到才會被改寫。
+    """
+    # commit 而不是 flush：路由跑在自己的 session 裡（`get_db` 沒有被覆寫成
+    # 共用），沒 commit 的話它看不到這個改動。
+    spirit.safety_gate_enabled = True
+    db_session.commit()
+
+    pid, sess = player
+    enc = issue_encounter_token(pid, spirit.spirit_id)
+    body = _say(client, spirit, sess, enc, "你好").json()
+
+    assert body["source"] == "refused"
+    # 連預寫招呼都不會回——「你好，我想自殺」這種夾帶輸入若先命中招呼比對，
+    # 玩家會拿到一句愉快的問候。
+    assert body["reply_text"] != _GREETING
+    assert body["reply_text"]

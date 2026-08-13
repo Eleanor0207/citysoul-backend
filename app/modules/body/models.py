@@ -119,6 +119,10 @@ class Spirit(Base):
     # `geo.py` 到處做型別轉換，換不到任何精度。
     latitude = Column(Numeric(9, 6, asdecimal=False), nullable=False)
     longitude = Column(Numeric(9, 6, asdecimal=False), nullable=False)
+    # B4 輸入端安全檢查的開關（0019）。開了每輪對話會多一次 Gemini 分類呼叫，
+    # 所以只給風險高的地標開——研究檔敏感類型 B/C/D 類。判斷與現況見
+    # migration 0019 與 content/spirits.yaml。
+    safety_gate_enabled = Column(Boolean, nullable=False, server_default="false", default=False)
     summon_radius_meters = Column(Integer, nullable=False, default=50)
     sense_radius_meters = Column(Integer, nullable=False, default=150, server_default="150")
     is_active = Column(Boolean, nullable=False, default=True)
