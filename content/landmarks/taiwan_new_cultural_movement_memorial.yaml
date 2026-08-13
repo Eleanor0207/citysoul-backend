@@ -1,0 +1,75 @@
+# 由 scripts/landmark_md_to_yaml.py 從 citysoul-doc 的
+# landmark/taiwan_new_cultural_movement_memorial.md 產生。要改內容請改那份，不要直接改這裡。
+landmark_id: taiwan_new_cultural_movement_memorial
+name: 臺灣新文化運動紀念館
+city_id: taipei
+founding_facts:
+- year: 1921年
+  event: 臺灣文化協會成立
+  detail: 蔣渭水、林獻堂等人在大稻埕發起成立，開啟臺灣非武力抗爭與文化啟蒙新頁。
+  source: 臺灣新文化運動紀念館官網
+  confidence: official
+- year: 1933年
+  event: 臺北北警察署落成
+  detail: 於寧夏路現址建置新廳舍，由總督府官房營繕課設計，具褐色面磚與流線型外觀。
+  source: 臺北市政府文化局 / 古蹟檔案
+  confidence: official
+- year: 1945-1998年
+  event: 戰後警政機關沿革
+  detail: 戰後先後為臺北市警察局、刑警總隊及大同分局使用，半世紀作為警政執法據點。
+  source: 臺北市警察局局志
+  confidence: official
+- year: 1998年
+  event: 指定為市定古蹟
+  detail: 因見證殖民警政與新文化運動史蹟，正式公告登錄為臺北市市定古蹟。
+  source: 文化部文化資產局
+  confidence: official
+- year: 2018年
+  event: 臺灣新文化運動紀念館開幕
+  detail: 10月14日完工開館，保存扇形拘留所與水牢，轉型為文化啟蒙與人權教育紀念空間。
+  source: 臺北市政府新聞稿
+  confidence: official
+key_events:
+- year: 1923年
+  event: 治警事件與蔣渭水入獄
+  detail: 蔣渭水等因治警事件被捕，多次關押於舊北署拘留所，並寫下著名文集〈北署遊記〉。
+  source: 蔣渭水文集 / 紀念館史料
+  confidence: official
+- year: 1933年
+  event: 全景敞式扇形拘留所建置
+  detail: 廳舍內部打造全全景監視之扇形拘留所與監視臺，為臺灣現存唯一日治扇形牢房遺構。
+  source: 臺灣建築史與獄政史研究
+  confidence: official
+- year: 1933年
+  event: 水牢設施遺跡保存
+  detail: 設有高度僅約120公分之水牢設施，見證殖民警政威權統治與審訊刑求歷史記憶。
+  source: 紀念館常設展導覽資料
+  confidence: official
+- year: 2014-2018年
+  event: 舊大同分局搬遷與古蹟修復
+  detail: 臺北市政府警察局大同分局遷出新大樓，市府啟動古蹟考證與修復工程。
+  source: 臺北市文化局修復報告
+  confidence: official
+- year: 2018年起
+  event: 每年臺灣新文化運動月
+  detail: 每年10月辦理「臺灣新文化運動月」，透過戲劇、講座與文史走讀傳播啟蒙精神。
+  source: 紀念館官方公告
+  confidence: official
+cultural_significance: 臺灣新文化運動紀念館（原臺北北警察署）座落於大同區大稻埕核心，是臺灣社會從非武力抗爭邁向文化啟蒙與民權追求的歷史象徵。這座1933年落成的流線型面磚建築，曾是日治威權統治下監控與拘禁蔣渭水等文化協會先賢的警政重鎮，館內完整保存了全景敞式「扇形拘留所」與壓迫性的「水牢」遺構。2018年古蹟修復開館後，它從壓迫與拘留的威權空間，轉化為展現臺灣人追求言論自由、知識傳承與社會自主的民主紀念館。它不僅記錄了大稻埕的文風脈動，更是當代市民反思人權與文化價值的教育場域。
+common_misconceptions:
+- misconception: 蔣渭水曾經被關在現存這棟建築裡
+  correction: 蔣渭水 1931 年逝世，現存建築 1932 年動工、1933 年完工。關過他的是第一代木造北警察署（今家樂福重慶店位置），已拆除。
+  say_instead: 「關過他的是上一代的北署，那棟已經不在了」
+  source: 文資局 / `lead_decisions_v3.md
+city_tone:
+  core_tone_descriptors:
+  - 文化啟蒙
+  - 非武力抗爭
+  - 民權覺醒
+  - 歷史警示
+  - 大稻埕精神
+  shared_values:
+  - 言論自由與知識求知
+  - 人權價值維護
+  - 臺灣文化自主性
+  macro_history_summary: 大同區（特別是大稻埕一帶）是臺北近代思想與商業最蓬勃的土壤。從霞海城隍廟的信仰常民生活、迪化街郊商貿易，到臺北北警察署所見證的1920年代新文化運動與蔣渭水等先賢的覺醒呼喊，大同區展現了兼具商業活力、文化底蘊與民權精神的都市生命力。

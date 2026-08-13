@@ -1,0 +1,72 @@
+# 由 scripts/landmark_md_to_yaml.py 從 citysoul-doc 的
+# landmark/moca_taipei.md 產生。要改內容請改那份，不要直接改這裡。
+landmark_id: moca_taipei
+name: 台北當代藝術館
+city_id: taipei
+founding_facts:
+- year: 1921年（大正10年）
+  event: 建成尋常小學校落成
+  detail: 由總督府營繕課近藤十郎設計，為紅磚拱廊學院派建築，專供日籍與少數臺籍菁英子弟就讀。
+  source: 臺北市政府文化局 / 古蹟檔案
+  confidence: official
+- year: 1945年（民國34年）
+  event: 轉為臺北市政府辦公廳舍
+  detail: 二戰後由國民政府接收，作為臺北市政府辦公大樓長達半世紀，為臺北市政運作核心。
+  source: 臺北市志 / 都市發展史
+  confidence: official
+- year: 1994年
+  event: 市政府遷往信義區
+  detail: 臺北市政府搬遷至信義區新市政大樓，舊廈卸下行政功能，並規劃古蹟活化再利用。
+  source: 臺北市政府市政紀錄
+  confidence: official
+- year: 1996年
+  event: 指定為直轄市定古蹟
+  detail: 因獨特的紅磚學院派建築與歷史層疊意義，正式登錄為臺北市市定古蹟。
+  source: 文化部文化資產局
+  confidence: official
+- year: 2001年
+  event: 台北當代藝術館正式開幕
+  detail: 主體正面開闢為全臺首座當代藝術館（MOCA），兩翼為建成國中，創下美術館與學校共構先例。
+  source: MOCA 官方歷史檔案
+  confidence: official
+key_events:
+- year: 1921年
+  event: 鐘樓與對稱紅磚建築
+  detail: 採對稱兩翼、對稱拱廊與正面鐘樓設計，展現近代日本學院派經典公共建築美學。
+  source: 台灣建築史學術研究
+  confidence: official
+- year: 1950-1990年
+  event: 臺北市議會與市政重鎮
+  detail: 曾作為台北市議會與市府各局處辦公室，見證台北市戰後半世紀都市計畫與發展決策。
+  source: 台北市議會史料
+  confidence: official
+- year: 1998-2000年
+  event: 古蹟修復與美術館/學校共構
+  detail: 啟動修復工程，首創將市定古蹟正面轉化為公辦民營美術館、兩翼空間保留為建成國中校舍。
+  source: 臺北市政府教育局與文化局史料
+  confidence: official
+- year: 2001年
+  event: 臺灣第一座當代藝術館
+  detail: 定位為無常設館藏、專注前衛與當代藝術展演之機構，開啟臺灣當代視覺文化新頁。
+  source: MOCA 官方簡介
+  confidence: official
+- year: 2007年
+  event: 公辦民營營運轉型
+  detail: 由臺北市文化基金會接手營運，深化與大同區赤峰街、中山街區社區藝文之串聯。
+  source: 臺北市文化基金會報告
+  confidence: official
+cultural_significance: 台北當代藝術館（MoCA Taipei）是臺灣第一座以當代藝術為定位的藝術機構，更是古蹟活化再利用的跨時代範例。其紅磚建築本體歷經「日治建成尋常小學校」與「戰後臺北市政府辦公廳舍」的歷史演變，承載了近百年的教育與行政記憶。2001年轉型開幕後，正面作為當代藝術展館、兩翼作為建成國中校舍，創下罕見的「古蹟、學校與當代美術館」共構先例。MOCA
+  擺脫傳統美術館的典藏包袱，以前衛、實驗性與跨界的當代展演為核心，並與周邊赤峰街、中山巷弄文創聚落無縫對接，成為連結臺北歷史記憶與當代前衛視覺藝術之橋樑。
+city_tone:
+  core_tone_descriptors:
+  - 前衛實驗
+  - 古蹟活化
+  - 當代視覺
+  - 跨界對話
+  - 社區新舊融合
+  shared_values:
+  - 開放批判思考
+  - 藝術與生活無界
+  - 歷史建築再生
+  - 多元前衛包容
+  macro_history_summary: 大同區身為台北傳統舊城區，一方面保有大稻埕的茶香、廟宇與傳統常民生活；另一方面，以台北當代藝術館與赤峰街聚落為核心，展現出極富活力的新舊對話。從殖民教育、市政樞紐到當代前衛藝術空間，大同區展示了都市歷史紋理轉化為創新文化動能的深厚底蘊。

@@ -1,0 +1,57 @@
+# 由 scripts/landmark_md_to_yaml.py 從 citysoul-doc 的
+# landmark/longshan_temple.md 產生。要改內容請改那份，不要直接改這裡。
+landmark_id: longshan_temple
+name: 艋舺龍山寺
+city_id: taipei
+founding_facts:
+- year: 1738 (清乾隆三年)
+  event: 初始建廟
+  detail: 泉州晉江、惠安、南安三邑移民自安溪分靈觀音菩薩，合資於艋舺現址興建龍山寺。
+  source: 文化部文化資產局 / 廟誌
+  confidence: official
+- year: 1815 (清嘉慶二十年)
+  event: 大地震重修
+  detail: 艋舺發生強烈大地震，龍山寺嚴重毀損，後由地方紳商號召募資重新修建。
+  source: 龍山寺官方沿革
+  confidence: official
+- year: 1867 (清同治六年)
+  event: 暴風雨重修
+  detail: 遭逢暴風雨侵襲，棟樑再度毀損，由地方人士募款進行第三次重大修建。
+  source: 文化部文化資產局
+  confidence: official
+- year: 1919 (日治大正八年)
+  event: 住持發起大改建
+  detail: 住持福智大師見寺宇老舊，捐出終生積蓄並募資，聘請名匠辜婦蠢、王益順進行大改建。
+  source: 龍山寺沿革簡介
+  confidence: official
+key_events:
+- year: 1945 (日治昭和二十年)
+  event: 臺北大空襲毀損
+  detail: 5月31日盟軍空襲臺北，大雄寶殿全毀，僅觀音佛像完好屹立於廢墟中，後於戰後重建。
+  source: 臺灣歷史辭典 / 龍山寺志
+  confidence: official
+- year: 1985 (民國七十四年)
+  event: 指定為國家古蹟
+  detail: 內政部公告指定艋舺龍山寺為國家二級古蹟（現升格為國定古蹟）。
+  source: 文化部國家文化資產網
+  confidence: official
+- year: 2000 (民國八十九年)
+  event: 減香與環保改革
+  detail: 配合環保與永續推行減香政策，並於 2020 年正式全面停止焚燒金紙與香爐。
+  source: 龍山寺廟方公告 / 新聞
+  confidence: official
+cultural_significance: 艋舺龍山寺始建於 1738 年，為台北三大古廟之一，也是艋舺三邑移民的信仰與自治中心。其建築風格集清代與日治大改建時期木雕、石雕、彩繪與剪黏藝術之大成，大雄寶殿前之銅鑄螺旋藻井尤為珍貴。龍山寺不僅供奉觀世音菩薩，後端亦合祀媽祖、關聖帝君、文昌帝君與月老等多神信仰，展現台灣庶民社會極高的包容性。歷經地震、颱風與
+  1945 年臺北大空襲洗禮，大殿雖毀而觀音聖像屹立不搖，成為艋舺乃至全台北市民心靈寄託與歷史記憶之核心。
+city_tone:
+  core_tone_descriptors:
+  - 市井
+  - 信仰
+  - 包容
+  - 歲月韌性
+  - 煙火氣
+  shared_values:
+  - 鄉土凝聚
+  - 信仰寄託
+  - 歷劫重生
+  - 傳統與現代共融
+  macro_history_summary: 艋舺（今萬華）為臺北市最早發展的街市之一，依傍淡水河港口而興。龍山寺自乾隆年間建廟以來，即為漢人移民信仰中心與社會治安自治樞紐，見證了頂下郊拚的移民拓墾衝突、日治時期的傳統重修與現代化演變，以及二次大戰大空襲後的重建重生。其綿延不絕的香火紀錄了臺北近三百年來的市井百態與基層生活記憶。

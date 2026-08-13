@@ -1,0 +1,70 @@
+# 由 scripts/landmark_md_to_yaml.py 從 citysoul-doc 的
+# landmark/national_palace_museum.md 產生。要改內容請改那份，不要直接改這裡。
+landmark_id: national_palace_museum
+name: 國立故宮博物院
+city_id: taipei
+founding_facts:
+- year: 1925年
+  event: 北京故宮博物院成立
+  detail: 10月10日於北京紫禁城成立，將清宮皇家內廷典藏轉化為公眾博物館設施。
+  source: 國立故宮博物院院史
+  confidence: official
+- year: 1933-1945年
+  event: 典藏文物南遷與避難
+  detail: 為避二次大戰與戰火威脅，故宮精選文物運往南京、上海及西南大後方保存。
+  source: 故宮文物南遷紀錄史料
+  confidence: official
+- year: 1948-1949年
+  event: 精選文物運臺與北溝保存
+  detail: 精選文物分批運抵臺灣，早期暫存於臺中霧峰北溝庫房並進行維護與整理。
+  source: 國家發展委員會檔案局
+  confidence: official
+- year: 1965年
+  event: 臺北外雙溪新館落成
+  detail: 外雙溪新館於11月12日落成啟用，由黃寶瑜設計，中國傳統宮殿式建築美學。
+  source: 故宮官方公告 / 文化部
+  confidence: official
+- year: 2020年
+  event: 正館登錄為歷史建築
+  detail: 臺北外雙溪正館因反映戰後現代建築史與文化意涵，登錄為臺北市歷史建築。
+  source: 文化部文化資產局
+  confidence: official
+key_events:
+- year: 1965年
+  event: 黃寶瑜設計仿古建築
+  detail: 正館採黃牆綠瓦、中國傳統宮殿風格設計，象徵戰後傳統文化復興運動之建築典範。
+  source: 台灣建築史研究 / 歷史建築清冊
+  confidence: official
+- year: 1967-1970年
+  event: 第一期與第二期擴建
+  detail: 為因應國際展覽與龐大參觀人潮，進行多次左右兩翼擴建工程，奠定現代展覽空間基礎。
+  source: 故宮院史紀錄
+  confidence: official
+- year: 1995年
+  event: 至善園與園林設施建置
+  detail: 配合外雙溪自然山水景觀，打造宋代風格庭園「至善園」，創造博物館與園林共融環境。
+  source: 故宮導覽手冊
+  confidence: official
+- year: 2007年
+  event: 大型正館改建完工
+  detail: 完成正館展覽空間改建與動線動能升級，大幅優化展覽照明、環境控制與參觀動線。
+  source: 故宮年報 / 新聞
+  confidence: official
+- year: 2015年
+  event: 嘉義南部院區（故宮南院）開館
+  detail: 故宮南院於嘉義落成，定位為亞洲藝術文化博物館，形成南北院區雙軸展演機制。
+  source: 國立故宮博物院公告
+  confidence: official
+cultural_significance: 國立故宮博物院（臺北外雙溪正館）是全球典藏華夏歷代藝術精粹與青銅、玉器、陶瓷、書畫重寶的頂尖博物館之一。其正館建築由建築師黃寶瑜設計，於1965年落成，以中國傳統宮殿式建築結構與綠瓦黃牆造型著稱，並於2020年獲登錄為歷史建築。外雙溪故宮保存了自宋、元、明、清歷代宮廷累積的近70萬件稀世珍寶，如翠玉白菜、肉形石、毛公鼎與《富春山居圖》等。故宮不僅代表了東亞傳統工藝美學與物質文化的極致高峰，其典藏研究與數位化展演，更使其成為全世界當代視覺文化與歷史研究最重要的樞紐之一。
+city_tone:
+  core_tone_descriptors:
+  - 典藏精粹
+  - 宮殿建築
+  - 工藝高峰
+  - 山水園林
+  - 文化樞紐
+  shared_values:
+  - 文化資產保護與世代傳承
+  - 物質美學欣賞
+  - 研究與國際文化交流
+  macro_history_summary: 士林區擁抱陽明山山麓美景與外雙溪自然水系，歷史上匯聚了傳統文風、外雙溪宮殿式博物館群（故宮）、芝山岩考古史蹟以及當代夜市常民文化。國立故宮博物院以其宏偉的仿古宮殿與豐富珍藏，為士林區注入了深厚的藝術底蘊與國際級文化觀光動能。

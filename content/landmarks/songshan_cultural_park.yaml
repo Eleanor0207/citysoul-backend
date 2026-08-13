@@ -1,0 +1,75 @@
+# 由 scripts/landmark_md_to_yaml.py 從 citysoul-doc 的
+# landmark/songshan_cultural_park.md 產生。要改內容請改那份，不要直接改這裡。
+landmark_id: songshan_cultural_park
+name: 松山文創園區
+city_id: taipei
+founding_facts:
+- year: 1937年（昭和12年）
+  event: 臺灣總督府專賣局松山煙草工場動工
+  detail: 專賣局起建臺灣第一座現代化捲菸工廠，引進「工業村」概念，兼具生產與勞工福利。
+  source: 臺北市政府文化局 / 園區官方歷史
+  confidence: official
+- year: 1939年
+  event: 工廠完工投產
+  detail: 製菸工廠、辦公廳舍、倉庫及巴洛克花園完工，成為東亞規模宏偉的現代化菸草生產基地。
+  source: 臺灣總督府專賣局檔案
+  confidence: official
+- year: 1945-1947年
+  event: 戰後接收與更名
+  detail: 戰後由專賣局接收，1947年改制為「臺灣省菸酒公賣局松山菸廠」，延續香菸生產。
+  source: 臺灣省菸酒公賣局局志
+  confidence: official
+- year: 1998年
+  event: 停產關廠
+  detail: 因公賣制度改制、都市空間變遷與產能調整，松山菸廠正式停止生產，機具併入臺北菸廠。
+  source: 臺北菸廠誌 / 新聞報導
+  confidence: official
+- year: 2001年
+  event: 指定為市定古蹟
+  detail: 臺北市政府將松山菸廠登錄為第99處市定古蹟（含辦公廳舍、製菸工廠、1-5號倉庫與鍋爐房）。
+  source: 文化部文化資產局
+  confidence: official
+- year: 2011年
+  event: 松山文創園區正式開園
+  detail: 經古蹟修復與空間活化，正式以「松山文創園區」對外開放，定位為臺北市原創跨界基地。
+  source: 松山文創園區官方公告
+  confidence: official
+key_events:
+- year: 1939年
+  event: 「工業村」勞工福利設施落成
+  detail: 廠區內部設置育嬰室、食堂、診療所與巴洛克中庭花園（晚香園），為日治近代工業村典範。
+  source: 日本初現代主義建築研究
+  confidence: official
+- year: 1958年
+  event: 巴洛克花園（晚香園）美化
+  detail: 廠長陳履坦委請林元朗美化中庭，設女性雕像與噴泉，兼具觀賞與消防蓄水功能。
+  source: 松菸歷史文史調查報告
+  confidence: mainstream
+- year: 2000年代初
+  event: 松山菸廠生態池與綠洲形成
+  detail: 關廠廢棄期間自然演替形成豐富生態池與綠洲環境，成為信義區珍貴的都市綠肺與生物棲地。
+  source: 臺北市生態保育調查
+  confidence: official
+- year: 2013年
+  event: 臺北文創大樓落成營運
+  detail: 園區旁BOT案「臺北文創大樓」開幕，引進誠品生活松菸店與展演廳，串聯舊古蹟與新文創。
+  source: 臺北市文化局BOT案檔案
+  confidence: official
+- year: 2024年
+  event: 臺北大巨蛋完工與園區串聯
+  detail: 鄰近臺北體育園區（大巨蛋）全面完工，松菸轉型為結合體育、文創與時尚的東區文化樞紐。
+  source: 臺北市都市發展局公告
+  confidence: official
+cultural_significance: 松山文創園區（俗稱松菸）是臺灣近代工業遺產活化與都市空間轉型的經典地標。其前身為1937年建造的「臺灣總督府專賣局松山煙草工場」，採用日本初現代主義建築風格，以簡潔水平線條、紅磚面磚與面山環水設計著稱。廠區強調「工業村」精神，將製菸工廠與育嬰室、巴洛克花園、生態池結合，展現跨時代的勞工福利美學。關廠後，松菸浴火重生為臺北的「原創基地」，保存了連棟倉庫、高聳鍋爐房與中庭噴泉等古蹟本體，並透過跨界展演、設計品牌進駐與生態綠意，連結信義區摩天大樓群與傳統常民生活，成為兼具歷史歷史遺構與當代創意動能的都市綠洲。
+city_tone:
+  core_tone_descriptors:
+  - 工業遺構
+  - 都市綠洲
+  - 原創基地
+  - 設計跨界
+  - 新舊對比
+  shared_values:
+  - 產業遺產活化
+  - 自然生態與都市共榮
+  - 原創與設計精神
+  macro_history_summary: 信義區雖然以信義計畫區的現代金融與摩天大樓聞名，但松山文創園區與四四南村等歷史空間，提供了不可或缺的歷史層疊與文化厚度。從日治專賣局菸草工廠、戰後公賣局製菸歲月，到現代文創園區與大巨蛋體育園區的串聯，信義區展現了從工業生產轉型為時尚、文創與金融樞紐的多元包容性格。

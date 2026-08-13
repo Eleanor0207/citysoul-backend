@@ -1,0 +1,70 @@
+# 由 scripts/landmark_md_to_yaml.py 從 citysoul-doc 的
+# landmark/taipei_astronomical_museum.md 產生。要改內容請改那份，不要直接改這裡。
+landmark_id: taipei_astronomical_museum
+name: 天文台
+city_id: taipei
+founding_facts:
+- year: 1938年（昭和13年）
+  event: 公會堂天文臺起源
+  detail: 臺灣日日新報社贈送4吋折射望遠鏡與圓頂觀測臺於臺北公會堂（中山堂），次年開放。
+  source: 天文館官網館史 / 臺北市志
+  confidence: official
+- year: 1963年
+  event: 圓山天文臺竣工啟用
+  detail: 為避市區光害，於圓山風景區起建圓山天文臺，成為臺灣戰後推廣普及天文科學重鎮。
+  source: 臺北市立天文館館誌
+  confidence: official
+- year: 1980年
+  event: 圓山天象館落成
+  detail: 興建天象館與星象儀設施，為無數臺北市民與學生提供星空模擬導覽與科學啟蒙。
+  source: 教育局歷史檔案
+  confidence: official
+- year: 1996年
+  event: 改制為天文科學教育館
+  detail: 配合士林新館籌建，正式更名改制為「臺北市立天文科學教育館」。
+  source: 臺北市政府公告
+  confidence: official
+- year: 1997年
+  event: 士林基河路新館開幕
+  detail: 於士林區基河路現址盛大開幕，擁金黃半球形宇宙劇場、立體劇場與大型觀望遠鏡。
+  source: 臺北市立天文館官網
+  confidence: official
+key_events:
+- year: 1938年
+  event: 4吋折射望遠鏡歷史文物
+  detail: 臺灣日日新報社捐贈之4吋赤道儀望遠鏡，至今仍保存於新館展示，見證臺灣天文史。
+  source: 天文館典藏資料
+  confidence: official
+- year: 1986年
+  event: 哈雷彗星觀測熱潮
+  detail: 哈雷彗星回歸期間，圓山天文臺吸引數以萬計民眾排隊夜觀彗星，創下常民科普觀測紀錄。
+  source: 新聞報導 / 天文館歷史照片
+  confidence: mainstream
+- year: 1997年
+  event: 全球首創巨型半球體宇宙劇場
+  detail: 士林新館建置金黃色圓頂「宇宙劇場」，引進IMAX與全天域星象投影系統。
+  source: 天文館設施簡介
+  confidence: official
+- year: 2018年
+  event: 展示場更新與互動科技導入
+  detail: 耗資進行全館展覽更新，導入AR/VR、互動多媒體與太空探索主題展區。
+  source: 臺北市政府新聞稿
+  confidence: official
+- year: 2020年
+  event: 日環食觀測與國際直播
+  detail: 辦理百年難得一見之日環食特展與全國連線觀測，吸引數百萬線上與現場民眾參與。
+  source: 天文館官方紀錄
+  confidence: official
+cultural_significance: 臺北市立天文科學教育館（臺北天文館）是臺灣最具代表性的科普教育地標與天文研究啟蒙重鎮。其歷史源自1938年臺北公會堂（中山堂）屋頂的4吋望遠鏡，歷經圓山天文臺時期半個世紀的夜觀歲月，於1997年遷至士林區現址。標誌性的金黃色半球體「宇宙劇場」建物已成為士林地標。天文館不僅典藏了歷史悠久的觀測儀器，更透過星象模擬、立體劇場與大型口徑望遠鏡，將浩瀚宇宙與常民生活距離拉近。它承載了跨世代臺北市民夜觀星空與探索未知的童年記憶，展現了理性好奇與科學探索的文化價值。
+city_tone:
+  core_tone_descriptors:
+  - 浩瀚探索
+  - 理性科普
+  - 星空啟蒙
+  - 童年記憶
+  - 金黃地標
+  shared_values:
+  - 科學探索與求知精神
+  - 理性客觀與宇宙觀
+  - 跨世代科普傳承
+  macro_history_summary: 士林區作為臺北重要的文教與科普核心，集結了天文館、科教館、兒童新樂園與士林官邸。從日治時期公會堂與圓山山腳的天文觀測，到基河路現代化天文科學教育館的落成，士林展現了自然山水、科學理性與童趣探索交織的都市氣質。

@@ -1,0 +1,75 @@
+# 由 scripts/landmark_md_to_yaml.py 從 citysoul-doc 的
+# landmark/bopiliao_historic_block.md 產生。要改內容請改那份，不要直接改這裡。
+landmark_id: bopiliao_historic_block
+name: 剝皮寮歷史街區
+city_id: taipei
+founding_facts:
+- year: 1763年（乾隆28年）
+  event: 「北皮藔街」記載
+  detail: 地契文書中首度出現「北皮藔街」名稱，為剝皮寮聚落發展的最早官方史料依據。
+  source: 臺北市政府文化局 / 古文書史料
+  confidence: official
+- year: 1799年（嘉慶4年）
+  event: 清代商街發展
+  detail: 清代艋舺至古亭庄之間形成縱貫連棟店屋商路，稱為福皮藔街，商業活動日趨繁盛。
+  source: 艋舺縣志 / 鄉土教育中心
+  confidence: official
+- year: 1910-1922年
+  event: 日治市區改正
+  detail: 配合市區改正開闢廣州街與康定路，古街轉為後巷（康定路173巷），面街店屋興建亭仔腳與巴洛克牌樓。
+  source: 臺北市志 / 臺灣總督府官報
+  confidence: official
+- year: 1941-1945年
+  event: 劃入學校預定地禁建
+  detail: 太平洋戰爭期間劃入老松國小擴建預定地實施嚴格禁建，意外完整保存清代與日治混合街廓。
+  source: 臺北市都市計畫沿革
+  confidence: official
+- year: 1999-2003年
+  event: 徵收搬遷與風貌保存
+  detail: 臺北市政府完成居民徵收搬遷，成立「剝皮寮歷史風貌特定區」，進行歷史建築修復再利用。
+  source: 臺北市政府文化局公告
+  confidence: official
+- year: 2010年
+  event: 登錄文化資產
+  detail: 臺北市政府正式將剝皮寮街區登錄為「歷史建築」，分為鄉土教育中心與文化展演區。
+  source: 文化部文化資產局
+  confidence: official
+key_events:
+- year: 1880年代
+  event: 土炭市集散地
+  detail: 康定路與廣州街口形成木炭、煤炭交易集散地，民間俗稱為「土炭市」，為艋舺庶民生活重要樞紐。
+  source: 萬華區誌 / 地方采風錄
+  confidence: mainstream
+- year: 1920年代
+  event: 太陽製本所與印刷業
+  detail: 太陽製本所等傳統裝訂與印刷廠進駐，使剝皮寮成為萬華印刷出版產業的重要發源地之一。
+  source: 鄉土教育中心展示史料
+  confidence: mainstream
+- year: 1940-1970年代
+  event: 茶桌仔店與庶民娛樂
+  detail: 秀英茶室、長壽號等「茶桌仔店」興起，成為勞動階層與居民聚會交流、傳遞政經與社區資訊的社交核心。
+  source: 剝皮寮口述歷史調查報告
+  confidence: mainstream
+- year: 1950年代
+  event: 販仔間旅社時代
+  detail: 日祥旅社等「販仔間」營運，提供來臺北打拼的苦力、搬運工與外地商販廉價住宿，反映移民城市基層記憶。
+  source: 鄉土教育中心導覽資料
+  confidence: mainstream
+- year: 1998年
+  event: 促進會成立與保存運動
+  detail: 居民與文史工作者組成「剝皮寮歷史風貌特定區促進會」，搶救舊街巷，開啟文化保存與都市更新對話。
+  source: 台灣文化資產保存運動史料
+  confidence: official
+cultural_significance: 剝皮寮歷史街區是艋舺（萬華）都市發展的活化石。它獨特的彎曲巷弄紋理保存了清代縱貫道路的聚落脈絡，而廣州街一側帶有亭仔腳與裝飾山牆的牌樓厝，則記錄了日治市區改正的近代化軌跡。因長期劃為學校預定地禁建，使這裡意外凍結了跨越兩百年的建築風格——從清代紅磚土角厝、日治洋樓到戰後常民生活痕跡完好並存。剝皮寮不僅代表煤炭市集、印刷廠、茶桌仔店與販仔間所交織的庶民勞動記憶，更見證了臺灣文化資產保存與都市更新共存的轉型歷程。
+city_tone:
+  core_tone_descriptors:
+  - 庶民生活
+  - 歷史層疊
+  - 勞動記憶
+  - 傳統茶桌文化
+  - 聚落活化石
+  shared_values:
+  - 包容移民與勞動階層
+  - 歷史紋理保存與再利用
+  - 常民文化生命力
+  macro_history_summary: 萬華作為臺北最早發展的港埠聚落，以龍山寺為宗教信仰中心，剝皮寮則為周邊商業與庶民生活的延伸。從清代郊商貨運通道、日治市區改正開闢新路，到戰後禁建凍結與老街保存運動，萬華展現了極具韌性的市井生命力與多元歷史層疊。

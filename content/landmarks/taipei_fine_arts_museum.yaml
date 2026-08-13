@@ -1,0 +1,70 @@
+# 由 scripts/landmark_md_to_yaml.py 從 citysoul-doc 的
+# landmark/taipei_fine_arts_museum.md 產生。要改內容請改那份，不要直接改這裡。
+landmark_id: taipei_fine_arts_museum
+name: 臺北市立美術館
+city_id: taipei
+founding_facts:
+- year: 1978年
+  event: 奉准籌建北美館
+  detail: 臺北市政府為推動現代藝術發展，核定於圓山中山美術公園起建臺灣首座公立現代美術館。
+  source: 臺北市政府文化局 / 北美館館史
+  confidence: official
+- year: 1983年
+  event: 開館啟用
+  detail: 12月24日正式開館，由高而潘建築師設計，標誌臺灣現代美術展覽與典藏體制邁入新里程。
+  source: 北美館官方歷史紀錄
+  confidence: official
+- year: 1995年
+  event: 主辦威尼斯雙年展臺灣館
+  detail: 首度以「臺灣館」名義參展威尼斯雙年展，成為臺灣當代藝術面向國際對話的重要平台。
+  source: 威尼斯雙年展臺灣館檔案
+  confidence: official
+- year: 1998年
+  event: 首屆臺北雙年展
+  detail: 開辦「臺北雙年展」，邀請國際策展人與藝術家參展，奠定臺灣當代藝術之國際樞紐地位。
+  source: 北美館雙年展檔案
+  confidence: official
+- year: 2021-2022年
+  event: 北美館擴建（二館）案
+  detail: 啟動擴建計畫，規劃地下化當代藝術展演空間與地景公園，深化新世紀跨域展演動能。
+  source: 臺北市政府新聞稿 / 北美館
+  confidence: official
+key_events:
+- year: 1983年
+  event: 高而潘懸臂飛廊與「井」字結構
+  detail: 採國際現代主義風格，將傳統「斗拱」轉化為「井」字形懸臂堆疊結構，象徵文化活水泉源。
+  source: 臺灣建築史研究 / 高而潘建築專輯
+  confidence: official
+- year: 1980年代起
+  event: 臺灣現當代美術典藏建立
+  detail: 系統性典藏日治時期至今臺灣美術史重要作品（如陳澄波、廖繼春、郭雪湖等畫家經典）。
+  source: 北美館典藏目錄
+  confidence: official
+- year: 1996年
+  event: 轉型為當代展演與跨域實驗
+  detail: 從傳統美術展覽延伸至錄像、裝置、新媒體與跨領域當代藝術展演。
+  source: 北美館年報
+  confidence: official
+- year: 2017-2018年
+  event: 館舍修復與空調典藏環境升級
+  detail: 進行成立以來最大規模休館修復工程，升級展覽照明、恆溫恆濕與典藏維護系統。
+  source: 北美館官方公告
+  confidence: official
+- year: 2020年代
+  event: 園區綠意與圓山文化景觀串聯
+  detail: 結合花博公園圓山園區、臺北故事館，形成中山區圓山藝文與生態景觀核心。
+  source: 臺北市都市發展局
+  confidence: official
+cultural_significance: 臺北市立美術館（北美館，TFAM）於1983年落成啟用，是臺灣第一座公立現代美術館，開創了國內現代與當代藝術展覽、典藏與研究的制度先河。正館建築由建築師高而潘設計，將傳統建築「斗拱」元素融匯為現代主義懸臂飛廊與「井」字形結構，象徵藝文活水源源不絕。北美館不僅完整典藏了臺灣近現代美術史的脈絡成果，更透過主辦「臺北雙年展」與「威尼斯雙年展臺灣館」，成功將臺灣當代藝術推向國際舞台。它既是市民賞析藝術與自然光影的美學空間，更是東亞當代視覺文化重要的前衛實驗基地。
+city_tone:
+  core_tone_descriptors:
+  - 現代主義
+  - 前衛實驗
+  - 國際對話
+  - 光影建築
+  - 藝術活水
+  shared_values:
+  - 自由審美與批判思考
+  - 臺灣美術史保護與傳承
+  - 國際文化交流
+  macro_history_summary: 中山區擁抱淡水河與基隆河交會的圓山門戶，歷史上匯聚了美軍協防時代的國際記憶、當代藝文樞紐（北美館）、條通與晴光商圈的常民文化。臺北市立美術館以其前衛的現代建築與雙年展國際視野，為中山區注入了前瞻、開放且深具美學思維的當代都市性格。

@@ -1,0 +1,75 @@
+# 由 scripts/landmark_md_to_yaml.py 從 citysoul-doc 的
+# landmark/ximen_red_house.md 產生。要改內容請改那份，不要直接改這裡。
+landmark_id: ximen_red_house
+name: 西門町紅樓
+city_id: taipei
+founding_facts:
+- year: 1908年（明治41年）
+  event: 西門市場落成
+  detail: 由臺灣總督府營繕課近藤十郎設計，為臺灣第一座官方興建的洋風公營市場（新起街市場）。
+  source: 臺北市政府文化局 / 古蹟定案公告
+  confidence: official
+- year: 1945年（民國34年）
+  event: 戰後接管轉型
+  detail: 戰後由上海來臺人士接手營運，改稱「滬園劇場」，引進京劇、越劇與說書表演。
+  source: 臺北市志 / 展演歷史檔案
+  confidence: official
+- year: 1963年
+  event: 轉型紅樓戲院
+  detail: 改名「紅樓戲院」，專門放映國語老片與二輪西洋電影，成為西門町繁華電影街核心之一。
+  source: 臺灣電影資料庫
+  confidence: official
+- year: 1997年
+  event: 登錄為古蹟
+  detail: 因獨特的八角堂與十字樓建築結構，由內政部指定為三級古蹟（現為直轄市定古蹟）。
+  source: 文化部文化資產局
+  confidence: official
+- year: 2000年
+  event: 大火與復育重構
+  detail: 南側違章建築與十字樓遭遇重大火災，政府藉修復工程清理周邊空間，開啟古蹟再造計畫。
+  source: 臺北市文化基金會 / 新聞報導
+  confidence: official
+- year: 2007年
+  event: 轉型文創與展演平台
+  detail: 由臺北市文化基金會營運，設「16工房」文創基地、紅樓劇場與創意市集，成為西門町指標景點。
+  source: 西門紅樓官方歷史紀錄
+  confidence: official
+key_events:
+- year: 1908年
+  event: 八角堂與十字樓設計
+  detail: 採「八卦祈福、十字架鎮邪」大膽幾何構造設計，八角堂為入口洋樓，十字樓為市場販售主體。
+  source: 日本建築學會誌 / 建築師近藤十郎研究
+  confidence: mainstream
+- year: 1950-1960年代
+  event: 紅樓書場與常民說唱
+  detail: 「紅樓書場」與評書相聲盛行，為戰後外省移民與本省常民情感寄託與文化娛樂交會點。
+  source: 西門町文史采風紀錄
+  confidence: mainstream
+- year: 1970-1990年代
+  event: 性別次文化聚落形成
+  detail: 紅樓周邊與露天酒吧區逐漸發展為臺北性別友善與LGBTQ+次文化聚落，見證多樣包容的城市記憶。
+  source: 臺灣性別運動史料 / 當代社會學研究
+  confidence: mainstream
+- year: 1994年
+  event: 「紅樓夢．西門情」文化保存
+  detail: 居民與藝文團體舉辦社區保存活動，擋下拆除計畫，引發台北市民對紅樓文化資產活化的關注。
+  source: 紙風車文教基金會歷史檔案
+  confidence: official
+- year: 2008年代起
+  event: 週末創意市集啟動
+  detail: 北廣場開始舉辦每週末「西門紅樓創意市集」，扶植無數臺灣獨立手作與設計品牌。
+  source: 臺北市文化基金會史料
+  confidence: official
+cultural_significance: 西門紅樓是臺北西區跨越百年的娛樂文化與常民生活縮影。從日治時期臺灣第一座公營市場「新起街市場」，到戰後京劇滬園劇場、說書紅樓書場、放映二輪國片與洋片的紅樓戲院，紅樓始終屹立於西門町流行文化的浪潮中心。其大膽的八角堂與十字樓建築結構，融匯了西洋近代鋼骨結構與傳統鎮邪寓意。進入21世紀後，紅樓從大火殘垣中浴火重生，轉化為文創孵育基地與多元性別包容的露天聚落。它不僅是一座古蹟，更是一座持續吸納新舊文化、交織族群與次文化的當代城市地標。
+city_tone:
+  core_tone_descriptors:
+  - 次文化聚落
+  - 流行潮流
+  - 新舊混血
+  - 多元包容
+  - 展演劇場
+  shared_values:
+  - 自由與多元包容
+  - 流行與傳統共融
+  - 藝文創意生命力
+  macro_history_summary: 西門町自日治時期起即被規劃為日人娛樂與商業中心，戰後承接了來自大江南北的影視、飲食與商場文化，並逐漸演化為青少年次文化與性別友善的潮流重鎮。西門紅樓以其多重身分的演變，展現了西門町百變、前衛且包容萬象的都市性格。
