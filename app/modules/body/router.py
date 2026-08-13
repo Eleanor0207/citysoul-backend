@@ -35,7 +35,11 @@ from app.modules.body.resonance import (
 from app.modules.body.sense_tokens import SENSE_TOKEN_HEADER, require_sense_token
 from app.modules.body.sense_tokens import issue_sense_token
 from app.modules.body.tokens import issue_session_token
-from app.modules.brain.gemini import GeminiClient, VertexAIGeminiClient
+from app.modules.brain.gemini import (
+    GeminiClient,
+    VertexAIGeminiClient,
+    split_into_segments,
+)
 from app.modules.brain.landmark_recognition import (
     LandmarkRecognizer,
     VertexAILandmarkRecognizer,
@@ -366,7 +370,12 @@ def dialogue(
     append_session_turn(str(session_player_id), place_id, {"role": "user", "text": payload.user_input})
     append_session_turn(str(session_player_id), place_id, {"role": "assistant", "text": reply_text})
 
-    return schemas.DialogueResponse(reply_text=reply_text, source=source, tts=audio)
+    return schemas.DialogueResponse(
+        reply_text=reply_text,
+        source=source,
+        segments=split_into_segments(reply_text),
+        tts=audio,
+    )
 
 
 @router.get(

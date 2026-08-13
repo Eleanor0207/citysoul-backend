@@ -193,9 +193,18 @@ def test_inactive_spirit_returns_404(client, spirit, player, db_session):
 
 
 def test_response_shape(client, spirit, player, active_card):
-    """SDD v2.1 §10.1：`{ reply_text, tts: { audio_url } }`（＋除錯用的 source）。"""
+    """
+    SDD v2.1 §10.1：`{ reply_text, tts: { audio_url } }`（＋除錯用的 source）。
+
+    `segments` 是附加欄位：把 `reply_text` 依空行切好，讓客戶端能逐段推播。
+    **它不取代 `reply_text`**——舊版客戶端忽略它仍然正確。
+    """
     pid, sess = player
     enc = issue_encounter_token(pid, spirit.spirit_id)
     body = _say(client, spirit, sess, enc, "你好").json()
 
-    assert set(body) == {"reply_text", "source", "tts"}
+    assert set(body) == {"reply_text", "source", "segments", "tts"}
+    # 分段是 reply_text 的切片，不是另一份內容
+    assert body["segments"]
+    for seg in body["segments"]:
+        assert seg in body["reply_text"]

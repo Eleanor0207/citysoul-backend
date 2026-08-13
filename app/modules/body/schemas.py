@@ -167,6 +167,14 @@ class DialogueResponse(BaseModel):
     # 'fallback' = 生成失敗或無法組裝，回人工預寫台詞。
     # 客戶端不需要據此改變行為，但除錯與觀察命中率時很有用。
     source: str
+    # 依空行切好的段落，供客戶端逐段推播（一次跳出整段文字像在讀說明書）。
+    #
+    # `reply_text` 保留完整內容且**不會消失**——分段是額外資訊，不是替代品。
+    # 舊版客戶端忽略這個欄位仍然正確，這是刻意的相容性設計。
+    #
+    # ⚠️ 分段不代表內容完整。回應若被 token 上限截斷，這裡就是幾段加起來仍然
+    # 少了結尾——完整性由 prompt 的長度指示與 `gemini_max_output_tokens` 負責。
+    segments: list[str] = []
     tts: TTSResult | None = None
 
 

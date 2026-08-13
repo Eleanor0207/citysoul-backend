@@ -8,7 +8,8 @@ B2．Prompt 組裝引擎（issue #12）。
       2. 行政區基調（`brain.districts`，僅 active）
       3. 地標史實（`brain.landmark_souls`）
       4. 史實邊界規則（B5）
-      5. ——安全邊界（B4）刻意**不在這裡**——
+      5. 回話長度與分段
+      6. ——安全邊界（B4）刻意**不在這裡**——
 
     User Turn:
       1. 當日情境摘要（B9，若今天有）
@@ -259,6 +260,28 @@ def _landmark_section(landmark) -> str | None:
     return f"你是「{name}」這個地方本身累積下來的記憶。\n\n" + "\n\n".join(blocks)
 
 
+def _length_section() -> str:
+    """
+    最後一段：怎麼回話。**形式的限制，不是內容的限制。**
+
+    排在最後是刻意的：它管的是輸出長什麼樣子，而不是角色是誰或知道什麼。放前面
+    會跟人格描述搶權重，讓「簡短」變成人格的一部分——那會讓角色顯得冷淡。
+
+    為什麼需要這一段：`gemini_max_output_tokens` 是硬牆，撞到就從句子中間切斷。
+    模型不知道牆在哪裡，只能靠指示讓它自己收在牆之前。上限調高只是把牆往後移，
+    沒有指示的話它照樣會寫到撞牆為止。
+
+    「分段」是寫給客戶端用的：回應會依空行切成段落逐段推播，所以段落是實際的
+    呈現單位，不只是排版。
+    """
+    return (
+        "回話的方式：\n"
+        "- 一次講 2 到 3 個段落，段落之間空一行。整體在 150 字以內。\n"
+        "- 說完一個完整的意思就停，不要為了湊長度把話講滿。\n"
+        "- 玩家想知道更多會再問，你不需要一次講完所有你記得的事。"
+    )
+
+
 def build_system_instruction(persona, landmark=None, district=None) -> str:
     """
     人格 → 地標史實 → 史實邊界規則。順序見模組註解。
@@ -284,6 +307,7 @@ def build_system_instruction(persona, landmark=None, district=None) -> str:
         sections.append(landmark_section)
 
     sections.append(factual_boundary_for_persona(persona))
+    sections.append(_length_section())
     return "\n\n".join(sections)
 
 

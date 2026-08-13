@@ -392,8 +392,26 @@ async function sendMessage() {
   //   fallback  = 沒有生效人格卡，或模型失敗
   // 看到 fallback 不代表壞掉——seed 的人格卡是未審核草稿（active=False），
   // 在審核通過之前所有對話都會走這條路。
-  bubble(payload.reply_text, false, payload.source);
-  setStatus($('chatStatus'), '回應來源：' + payload.source, payload.source === 'generated' ? 'ok' : 'warn');
+  // 逐段推播。後端已經依空行把回應切成 `segments`，這裡一段一個泡泡、
+  // 隔一小段時間才出現下一段——一次跳出三段文字像在讀說明書，逐段出現才像
+  // 有人在講話。客戶端（Unity F5）之後會做同一件事，這裡先驗節奏。
+  //
+  // 舊版回應沒有 segments，退回整段顯示。
+  const segments = (payload.segments && payload.segments.length)
+    ? payload.segments
+    : [payload.reply_text];
+
+  segments.forEach((seg, i) => {
+    // 只在最後一段標 source，不然三個泡泡會掛三個一樣的標籤。
+    setTimeout(
+      () => bubble(seg, false, i === segments.length - 1 ? payload.source : null),
+      i * 900
+    );
+  });
+
+  const note = segments.length > 1 ? `（${segments.length} 段）` : '';
+  setStatus($('chatStatus'), '回應來源：' + payload.source + note,
+            payload.source === 'generated' ? 'ok' : 'warn');
 }
 
 /* ── 資料查詢按鈕 ───────────────────────────────────── */

@@ -36,6 +36,8 @@ from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import wait as futures_wait
 from typing import Any, Callable
 
+import re
+
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -243,3 +245,22 @@ class FakeGeminiClient(GeminiClient):
     @property
     def call_count(self) -> int:
         return len(self.prompts)
+
+def split_into_segments(text: str) -> list[str]:
+    """
+    把回應依空行切成段落，給客戶端逐段推播。
+
+    ⚠️ **分段不會修好被截斷的回應。** 半句話切成兩段還是半句話——那是
+    `max_output_tokens` 與 prompt 長度指示要解決的問題（見 `_length_section`）。
+    這裡只負責呈現節奏：一次跳出三段文字很像在讀說明書，逐段出現才像有人在講話。
+
+    切空行而不是切句號：段落是模型自己分的意群，句號會把一段話剁成零碎的短句，
+    反而讓節奏變得急促。
+
+    永遠回傳至少一個元素——空字串進來就回傳空清單，讓呼叫端不必分辨
+    「沒有段落」與「一個空段落」。
+    """
+    if not text or not text.strip():
+        return []
+    parts = [p.strip() for p in re.split(r"\n[ \t]*\n", text.strip())]
+    return [p for p in parts if p]

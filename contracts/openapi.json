@@ -93,6 +93,14 @@
             "title": "Reply Text",
             "type": "string"
           },
+          "segments": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Segments",
+            "type": "array"
+          },
           "source": {
             "title": "Source",
             "type": "string"

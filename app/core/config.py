@@ -57,9 +57,17 @@ class Settings(BaseSettings):
     # 預設不傳。
     gemini_thinking_level: str | None = None
 
-    # 模型輸出上限。放在設定而不是 prompt 文字裡——靠 prompt 請模型「請簡短回答」
+    # 模型輸出上限。放在設定而不是只寫在 prompt 裡——靠 prompt 請模型「請簡短回答」
     # 是沒有保證的，而這個值直接決定成本上限（🔴 高風險「AI 對話成本與延遲」）。
-    gemini_max_output_tokens: int = 256
+    #
+    # 256 → 512（2026-08-14）。人格卡上線、prompt 補上史實與基調之後，模型的回答
+    # 從兩三句變成三四段，實測 317 與 331 字都**斷在句子中間**。上限是硬牆，撞到
+    # 就是把已經付費生成的內容丟掉，然後給玩家半句話。
+    #
+    # 真正的修正是在 prompt 裡給長度指示（見 prompt_builder 的 `_length_section`）；
+    # 這個值調高是那道指示的安全網，不是替代品。兩者一起做之後，典型輸出反而比
+    # 以前短——以前是每次都寫到撞牆為止。
+    gemini_max_output_tokens: int = 512
     gemini_timeout_seconds: float = 8.0
 
     # B2 Prompt 組裝（#12）。SDD §10 標明這兩個數字**待實測調整**，所以它們是
