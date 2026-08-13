@@ -70,6 +70,17 @@ class LandmarkSoul(Base):
     founding_facts = Column(JSONB, nullable=False)  # [{year, event, detail}, ...]
     key_events = Column(JSONB, nullable=True)
     cultural_significance = Column(Text, nullable=True)
+    # 廣為流傳但經查證為錯的說法，[{misconception, correction, say_instead, source}, ...]
+    #
+    # ⚠️ **不要為了少一個欄位就併進 `key_events`。** 三層設定是整段注入 prompt 的，
+    # `key_events` 裡的每一條模型都會當成可以直接講的事實。誤解是負面內容——即使
+    # 旁邊註明它是錯的，模型也沒有可靠的訊號知道要否定它，很可能就照著講了。分開
+    # 存放，prompt 才能把它渲染成「這些是常見誤解，被問到時這樣講」。
+    #
+    # 跟 `CharacterPersona.taboos` 也是兩件事：taboos 說「不談什麼」，這裡說「談的
+    # 時候不能講錯」。因此它在史實層而不是有版本的人格層——事實更正不隨人格改版
+    # 而變，放進人格表等於每改一版都要複製一次。
+    common_misconceptions = Column(JSONB, nullable=True)
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
