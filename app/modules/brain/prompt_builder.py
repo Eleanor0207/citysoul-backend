@@ -5,8 +5,9 @@ B2．Prompt 組裝引擎（issue #12）。
 
     System Instruction:
       1. 人格（B3）
-      2. 史實邊界規則（B5）
-      3. ——安全邊界（B4）刻意**不在這裡**——
+      2. 地標史實（`brain.landmark_souls`）
+      3. 史實邊界規則（B5）
+      4. ——安全邊界（B4）刻意**不在這裡**——
 
     User Turn:
       1. 當日情境摘要（B9，若今天有）
@@ -16,9 +17,16 @@ B2．Prompt 組裝引擎（issue #12）。
 
 ## 順序是有意義的，不是排版
 
-模型對 System Instruction 前段的內容給予較高權重。人格排在史實規則之前，是
-因為「你是誰」決定了「你怎麼說」，而史實規則是對說話方式的**限制**——限制放在
-被限制的對象之後才讀得懂。倒過來排，模型會先看到一串禁令，然後才知道那是給誰的。
+模型對 System Instruction 前段的內容給予較高權重。三段是「你是誰 → 你知道什麼
+→ 你不能怎麼講」：
+
+人格排在最前，因為「你是誰」決定了「你怎麼說」。史實邊界規則排在最後，因為它是
+對前兩段的**限制**——限制放在被限制的對象之後才讀得懂。倒過來排，模型會先看到
+一串禁令，然後才知道那是給誰的、在管什麼。
+
+史實夾在中間而不是放進 User Turn：它是**每次對話都相同的知識**，跟當日情境、
+記憶那種每次不同的東西不是同一類。放 User Turn 會讓模型把恆定的史實當成「這次
+特別提到的資訊」。
 
 ## B4 為什麼不在 System Instruction 裡
 
@@ -28,9 +36,18 @@ B2．Prompt 組裝引擎（issue #12）。
 真正的差別在於：塞進 System Instruction 是**請求模型自律**，而自律是機率性的；
 輸入端過濾是**下游根本不會被呼叫**。兩者不是同一件事的兩種寫法。
 
+## 城市層與行政區層還沒接進來
+
+`brain.city_souls` 的內容目前還是 `PENDING_NARRATIVE_REVIEW` 佔位，沒有人在寫；
+`brain.districts` 的區級基調有內容，但接不接、以及「人格 / 區 / 市」的覆蓋順序
+要等第二個行政區真的上線、能比較生成結果時才驗得了。
+
+**每多注入一層，每一次對話都多付一段 token，而且多一個彼此矛盾的地方。** 目前
+首發只有萬華，多這兩層講出來的話不會有差別。
+
 ## 缺項一律優雅省略
 
-當日情境、長期記憶、短期記憶三者都可能不存在（今天沒排程／冷啟動／首次對話）。
+地標史實、當日情境、長期記憶、短期記憶都可能不存在（今天沒排程／冷啟動／首次對話）。
 缺的那段直接不出現，**不留空白佔位符**——一個寫著「（無）」的段落會讓模型以為
 那是一個需要被解釋的狀態，而它其實只是還沒有資料。
 
@@ -62,7 +79,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.redis_client import get_session
 from app.modules.brain.historical_boundary import factual_boundary_for_persona
-from app.modules.brain.loader import load_active_persona
+from app.modules.brain.loader import load_active_persona, load_landmark_soul
 from app.modules.brain.memory import retrieve_similar_memories
 
 logger = logging.getLogger(__name__)
@@ -115,19 +132,109 @@ def _persona_section(persona) -> str:
     return "\n".join(lines)
 
 
-def build_system_instruction(persona) -> str:
+def _format_fact(fact) -> str | None:
     """
-    人格 → 史實邊界規則。順序見模組註解。
+    一條史實。`{year, event, detail, source, confidence}`。
+
+    **`source` 與 `confidence` 不進 prompt。** 它們是給審查流程看的（哪裡查來的、
+    能不能收），對角色怎麼講這件事沒有幫助——列出來反而會誘導模型講出「根據文化部
+    資料……」這種像導覽員而不像地標記憶的句子。
+
+    對格式寬鬆：JSONB 沒有 schema 約束，某一筆缺欄位不該讓整次組裝失敗。
+    """
+    if not isinstance(fact, dict):
+        return None
+
+    detail = fact.get("detail")
+    if not detail:
+        return None
+
+    head = "，".join(x for x in (fact.get("year"), fact.get("event")) if x)
+    return f"- {head}：{detail}" if head else f"- {detail}"
+
+
+def _misconception_lines(items) -> list[str]:
+    """
+    常見誤解。**渲染方式跟史實刻意不同。**
+
+    這一段裡的 `misconception` 欄位放的**就是那句錯的話**。跟史實用同一種列點格式
+    呈現，模型沒有可靠的訊號知道要否定它——很可能就照著講了。所以每一條都寫成
+    「有人以為 X／實際上 Y／可以這樣說 Z」的三段句，讓否定關係落在句子結構裡，
+    而不是靠模型自己讀出來。
+
+    `say_instead` 是重點：糾正玩家很容易講成訓話，預先給一句站得住的說法，
+    比只給正確答案有用。
+    """
+    lines = []
+    for item in items or []:
+        if not isinstance(item, dict) or not item.get("misconception"):
+            continue
+        parts = [f"- 有人以為「{item['misconception']}」"]
+        if item.get("correction"):
+            parts.append(f"實際上：{item['correction']}")
+        if item.get("say_instead"):
+            parts.append(f"被問到時可以這樣說：{item['say_instead']}")
+        lines.append("　".join(parts))
+    return lines
+
+
+def _landmark_section(landmark) -> str | None:
+    """
+    第 2 段：地標史實。決定角色「知道什麼」。
+
+    整段注入，不做檢索——三層設定的資料量有界（一個地標十來條），RAG 是給
+    `memory_embeddings` 那種會無限成長的東西用的。
+
+    沒有任何內容時回傳 None，讓整段消失，而不是印一個空標題。
+    """
+    if landmark is None:
+        return None
+
+    blocks: list[str] = []
+
+    facts = [x for x in (_format_fact(f) for f in (landmark.founding_facts or [])) if x]
+    events = [x for x in (_format_fact(f) for f in (landmark.key_events or [])) if x]
+    timeline = facts + events
+    if timeline:
+        blocks.append("你記得這些事：\n" + "\n".join(timeline))
+
+    if landmark.cultural_significance:
+        blocks.append(f"這個地方對人們的意義：{landmark.cultural_significance}")
+
+    misconceptions = _misconception_lines(landmark.common_misconceptions)
+    if misconceptions:
+        blocks.append(
+            "以下是常被誤傳的說法。**你不會主動提起這些錯誤說法**，"
+            "但玩家提到時要溫和地把事實講清楚，不要糾正得像在指正對方：\n"
+            + "\n".join(misconceptions)
+        )
+
+    if not blocks:
+        return None
+
+    name = landmark.name or "這個地方"
+    return f"你是「{name}」這個地方本身累積下來的記憶。\n\n" + "\n\n".join(blocks)
+
+
+def build_system_instruction(persona, landmark=None) -> str:
+    """
+    人格 → 地標史實 → 史實邊界規則。順序見模組註解。
+
+    `landmark` 預設 None：史實層與人格層各自獨立缺席（見 loader 的
+    `load_landmark_soul`），少了史實仍然組得出可用的 prompt——角色只是不知道這座
+    地標的往事，而不是不能講話。
 
     B5 的規則已經把人格自己的 `imagination_license` 疊進去了，所以這裡不需要、
     也不應該再列一次。
     """
-    return "\n\n".join(
-        [
-            _persona_section(persona),
-            factual_boundary_for_persona(persona),
-        ]
-    )
+    sections = [_persona_section(persona)]
+
+    landmark_section = _landmark_section(landmark)
+    if landmark_section:
+        sections.append(landmark_section)
+
+    sections.append(factual_boundary_for_persona(persona))
+    return "\n\n".join(sections)
 
 
 def _format_turn(turn) -> str | None:
@@ -207,6 +314,11 @@ def build_prompt(
         logger.info("靈魂 %s 沒有生效中的人格卡，無法組裝 prompt", spirit_id)
         return None
 
+    # 史實層缺席不阻擋組裝：人格過審了但研究還沒匯入，是實際會出現的狀態。
+    landmark = load_landmark_soul(db, spirit_id)
+    if landmark is None:
+        logger.info("靈魂 %s 沒有對應的史實層，prompt 不含地標史實", spirit_id)
+
     k = settings.prompt_memory_top_k if top_k is None else top_k
     turns_limit = settings.prompt_recent_turns if recent_turns is None else recent_turns
 
@@ -227,7 +339,7 @@ def build_prompt(
     recent = history[-turns_limit:] if turns_limit > 0 else []
 
     return Prompt(
-        system_instruction=build_system_instruction(persona),
+        system_instruction=build_system_instruction(persona, landmark),
         user_turn=build_user_turn(
             user_input=user_input,
             daily_context=daily_context,

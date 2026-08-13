@@ -470,3 +470,113 @@ def test_historical_rules_are_the_shared_ones(db_session, spirit_with_persona, p
 
     general = get_historical_boundary_rules()
     assert general in prompt.system_instruction
+
+
+# ── 地標史實層（brain.landmark_souls）────────────────────────────────
+
+class _Landmark:
+    """史實層替身，欄位名跟 `brain.landmark_souls` 一致。"""
+
+    name = "艋舺龍山寺"
+    founding_facts = [
+        {
+            "year": "1738",
+            "event": "初始建廟",
+            "detail": "三邑移民合資於艋舺現址興建龍山寺。",
+            "source": "文化部文化資產局",
+            "confidence": "official",
+        }
+    ]
+    key_events = [
+        {
+            "year": "1945",
+            "event": "臺北大空襲毀損",
+            "detail": "大雄寶殿全毀，戰後重建。",
+            "source": "臺灣歷史辭典",
+            "confidence": "official",
+        }
+    ]
+    cultural_significance = "台北三大古廟之一，艋舺移民的信仰中心。"
+    common_misconceptions = [
+        {
+            "misconception": "蔣渭水曾被關在現存這棟建築裡",
+            "correction": "他 1931 年逝世，現存建築 1933 年完工。",
+            "say_instead": "關過他的是上一代的北署，那棟已經不在了",
+            "source": "文資局",
+        }
+    ]
+
+
+def test_facts_sit_between_the_persona_and_the_rules():
+    """
+    三段的順序是「你是誰 → 你知道什麼 → 你不能怎麼講」。
+
+    史實排在規則之前，理由跟人格排在規則之前一樣：規則是對史實怎麼被講出來的
+    限制，限制放在被限制的對象之後才讀得懂。
+    """
+    text = build_system_instruction(_Persona(), _Landmark())
+
+    persona_at = text.index("沉靜、耐心的守望者")
+    facts_at = text.index("三邑移民合資")
+    rules_at = text.index("談到歷史時")
+
+    assert persona_at < facts_at < rules_at
+
+
+def test_founding_facts_and_key_events_both_appear():
+    text = build_system_instruction(_Persona(), _Landmark())
+
+    assert "三邑移民合資" in text        # founding_facts
+    assert "大雄寶殿全毀" in text        # key_events
+    assert "台北三大古廟之一" in text     # cultural_significance
+
+
+def test_source_and_confidence_stay_out_of_the_prompt():
+    """
+    來源與可信度是給審查流程看的，不是給角色講的。
+
+    列進去會誘導模型講出「根據文化部資料……」這種像導覽員而不像地標記憶的句子，
+    而且平白多付 token。
+    """
+    text = build_system_instruction(_Persona(), _Landmark())
+
+    assert "文化部文化資產局" not in text
+    assert "臺灣歷史辭典" not in text
+    assert "official" not in text
+
+
+def test_a_missing_landmark_layer_still_builds_a_usable_prompt():
+    """
+    史實層與人格層各自獨立缺席。人格過審了但研究還沒匯入是實際會出現的狀態，
+    那時角色只是不知道地標的往事，不是不能講話。
+    """
+    text = build_system_instruction(_Persona(), None)
+
+    assert "沉靜、耐心的守望者" in text
+    assert "談到歷史時" in text
+    assert "你記得這些事" not in text     # 不留空標題
+
+
+def test_misconceptions_are_rendered_as_corrections_not_as_facts():
+    """
+    ⚠️ 這一段裡放的**就是那句錯的話**。
+
+    跟史實用同一種列點格式呈現，模型沒有可靠的訊號知道要否定它——很可能就照著
+    講了。所以否定關係必須落在句子結構裡，而且 `say_instead` 要一起出現。
+    """
+    text = build_system_instruction(_Persona(), _Landmark())
+
+    line = next(ln for ln in text.splitlines() if "蔣渭水" in ln)
+
+    assert line.startswith("- 有人以為「")
+    assert "實際上：" in line
+    assert "被問到時可以這樣說：" in line
+    # 錯誤說法不能單獨成為一個看起來像事實的列點
+    assert not line.startswith("- 蔣渭水")
+
+
+def test_the_character_does_not_volunteer_misconceptions():
+    """被動澄清，不主動提起——否則角色會沒事就開始糾正沒有人問的事。"""
+    text = build_system_instruction(_Persona(), _Landmark())
+
+    assert "你不會主動提起這些錯誤說法" in text

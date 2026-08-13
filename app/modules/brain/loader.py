@@ -11,7 +11,7 @@ CONTEXT.md 定義：人格是「經人工審核的角色定義」，LLM 只能�
 from sqlalchemy.orm import Session
 
 from app.modules.body.models import Spirit
-from app.modules.brain.models import CannedGreeting, CharacterPersona
+from app.modules.brain.models import CannedGreeting, CharacterPersona, LandmarkSoul
 
 
 def character_id_for_spirit(db: Session, spirit_id: str) -> str | None:
@@ -54,3 +54,21 @@ def load_canned_greetings(db: Session, persona: CharacterPersona) -> list[Canned
         .filter_by(character_id=persona.character_id, version=persona.version)
         .all()
     )
+
+
+def load_landmark_soul(db: Session, spirit_id: str) -> LandmarkSoul | None:
+    """
+    地標靈魂 → 史實層。
+
+    跟 `load_active_persona()` 一樣是兩次查詢而不是 join：`spirits.landmark_id`
+    是值關聯而非外鍵（WBS-API 決策4），身體的表與腦袋的表不在同一個關聯圖上。
+
+    找不到就回傳 None。史實層跟人格層是**各自獨立缺席**的——有人格沒史實
+    （人格卡先寫好、研究還沒匯入）與有史實沒人格（研究匯入了、人格還沒過審）
+    都是實際會發生的狀態，呼叫端要能分別處理，不能假設兩者同進同出。
+    """
+    spirit = db.query(Spirit).filter_by(spirit_id=spirit_id).first()
+    if spirit is None or not spirit.landmark_id:
+        return None
+
+    return db.query(LandmarkSoul).filter_by(landmark_id=spirit.landmark_id).first()
