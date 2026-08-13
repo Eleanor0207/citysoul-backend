@@ -110,6 +110,7 @@ class VertexAIGeminiClient(GeminiClient):
 
         self.last_failure_reason: str | None = None
         self.last_truncated: bool = False
+        self.last_latin_leak: list[str] = []
 
     def _create_client(self):
         import google.auth
@@ -153,6 +154,7 @@ class VertexAIGeminiClient(GeminiClient):
     def generate(self, prompt: str) -> str:
         self.last_failure_reason = None
         self.last_truncated = False
+        self.last_latin_leak = []
 
         try:
             client = self._ensure_client()
@@ -207,12 +209,41 @@ class VertexAIGeminiClient(GeminiClient):
             # 中文標點之後的空白，「1945 年」的空格保留）。**不做其他修剪**——
             # 這裡是模型輸出，動得愈少愈好，切句號、補標點那類 heuristic 只會
             # 把生成品質的問題藏起來。
-            return strip_fold_spaces(text)
+            text = strip_fold_spaces(text)
+            self._warn_if_latin_leaked(text)
+            return text
 
         except Exception as exc:  # noqa: BLE001
             # 刻意攔截所有例外。這裡不該有「哪些例外算預期」的清單——
             # 任何未預期的例外都不是讓召喚流程中斷的理由，而清單一定會漏。
             return self._fall_back(f"{type(exc).__name__}: {exc}")
+
+    # 專有名詞白名單。這些出現在回應裡是正常的——地標本身就叫這個名字。
+    _ALLOWED_LATIN = {"moca", "imax", "ar", "vr", "bot", "led"}
+
+    def _warn_if_latin_leaked(self, text: str) -> None:
+        """
+        回應裡混進英文單字時留下紀錄。**只記錄，不修改。**
+
+        prompt 已經明說「整段回話裡不出現任何英文字母」，但那是請求不是保證：
+        實測 40 輪仍有 1 次漏出（松山文創的「machines 轟轟響」）。
+
+        不在這裡用正規表示式砍掉，理由跟截斷偵測一樣——會誤傷 MOCA、IMAX 這種
+        地標本身就有的名字，而且把訊號藏起來之後就沒有人知道漏出率是多少了。
+        這個 log 的正確處置是調整 prompt 或換模型，不是在輸出端修剪。
+        """
+        leaked = [
+            w for w in re.findall(r"[A-Za-z]{2,}", text)
+            if w.lower() not in self._ALLOWED_LATIN
+        ]
+        if leaked:
+            self.last_latin_leak = leaked
+            logger.warning(
+                "回應混進英文單字 %s（模型 %s）。prompt 已要求全中文，"
+                "這是機率性殘留——漏出率變高時要調整 prompt 或換模型。",
+                leaked,
+                self._model_name,
+            )
 
     @staticmethod
     def _was_truncated(response) -> bool:
