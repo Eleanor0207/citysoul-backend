@@ -60,7 +60,7 @@ _EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="gemini")
 # 這句話跟 router.py 的 FALLBACK_REPLY 是同一句，但**刻意各自持有**：
 # 那邊是「沒命中預寫招呼」的回答，這邊是「模型失敗」的回答。兩者現在恰好
 # 相同，但它們會因為不同的理由被改寫。
-FALLBACK_REPLY = "（城市靈魂安靜地看著你）……這件事我還沒想清楚。要不要先跟我說說你眼前看到的？"
+FALLBACK_REPLY = "這件事我還沒想清楚。要不要先跟我說說你眼前看到的？"
 
 
 class GeminiClient(ABC):

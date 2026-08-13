@@ -56,7 +56,7 @@ from app.modules.brain.tts import GcsAudioStorage, GoogleCloudTTSClient, TTSClie
 # CONTEXT.md：「無合格輸入或生成失敗時使用人工預寫台詞」。在 Gemini（#8）接上
 # 之前，**所有**未命中都會走到這裡——這是刻意的，讓端到端流程在沒有 GCP 憑證的
 # 情況下也能完整跑通。接上 B1 之後，這句話會退回它原本的角色：只在模型失敗時出現。
-FALLBACK_REPLY = "（城市靈魂安靜地看著你）……這件事我還沒想清楚。要不要先跟我說說你眼前看到的？"
+FALLBACK_REPLY = "這件事我還沒想清楚。要不要先跟我說說你眼前看到的？"
 
 logger = logging.getLogger(__name__)
 

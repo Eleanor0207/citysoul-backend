@@ -32,7 +32,7 @@ WRAPPER_REVIEW_STATUS = "PENDING_NARRATIVE_REVIEW"
 #
 # 刻意不提「任務」兩個字——玩家剛完成的是一件在現場做到的事，用系統詞彙包裝它
 # 會把人從情境裡拉出來。
-_FALLBACK_WRAPPER = "（城市靈魂點了點頭）你做到了。這種事我看多了，但每一次還是不太一樣。"
+_FALLBACK_WRAPPER = "你做到了。這種事我看多了，但每一次還是不太一樣。"
 
 
 def build_quest_wrapper_prompt(spirit_id: str, quest_id: str) -> str:
