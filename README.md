@@ -430,7 +430,14 @@ gcloud run deploy citysoul-backend \
   --allow-unauthenticated --max-instances=2 --memory=512Mi
 ```
 
-目前的服務網址：<https://citysoul-backend-1096472835040.asia-east1.run.app>
+目前的服務網址：<https://citysoul-backend-gkoatlfdwa-de.a.run.app>
+
+Cloud Run 給同一個服務兩個網址，兩個都通、都指向同一個修訂版：
+`...gkoatlfdwa-de.a.run.app`（`gcloud run services describe` 回報的那個，也是
+`citysoul-client` 的 `env.json` 用的）與
+`...1096472835040.asia-east1.run.app`（含專案編號的舊格式，`services replace`
+執行完會印這個）。**以前者為準**——兩邊混用時，看 log 或比對客戶端設定會多花
+一次「這是不是同一個服務」的確認。
 
 > ⚠️ `--allow-unauthenticated` 表示這個網址**任何人都打得到**。玩家用的 API
 > 本來就要公開，但在還沒有正式流量的階段，它也是任何人都能建匿名玩家、消耗
@@ -448,14 +455,25 @@ postgresql+psycopg://<user>:<pass>@/<db>?host=/cloudsql/citysoul:asia-east1:city
 ### 4. 驗一下
 
 ```bash
-U=https://citysoul-backend-1096472835040.asia-east1.run.app
+U=https://citysoul-backend-gkoatlfdwa-de.a.run.app
 curl -s $U/health
+curl -s $U/api/v1/spirits
 curl -s $U/api/v1/spirits/longshan_temple
 curl -s -X POST $U/api/v1/players -H "Content-Type: application/json" \
   -d '{"device_id":"smoke-001"}'
 ```
 
-三個都通表示映像檔、Cloud SQL 連線、Secret Manager 掛載、seed data 這條鏈是通的。
+四個都通表示映像檔、Cloud SQL 連線、Secret Manager 掛載、seed data 這條鏈是通的。
+`GET /api/v1/spirits` 要回九筆——地圖上的召喚點就是這份清單，回一筆代表只有
+垂直切片的龍山寺進了資料庫，其餘八個沒有匯入（`scripts/import_spirits.py`）。
+
+⚠️ **`Done` 不等於上線。** `gcloud run services replace` 比對的是 yaml 內容，
+`scripts/gcp/service.yaml` 裡的映像檔 digest 沒換的話，它會判定「設定沒有變更」、
+不建新修訂版，**然後照樣印出 `Done`**。驗收時看 revision 編號有沒有跳：
+
+```bash
+gcloud run revisions list --service=citysoul-backend --region=asia-east1 --limit=3
+```
 
 ### 還沒做完的部分
 
