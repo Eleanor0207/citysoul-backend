@@ -102,3 +102,58 @@ def test_inactive_spirit_returns_404(client, db_session, spirit):
     db_session.commit()
 
     assert client.get(f"/api/v1/spirits/{spirit.spirit_id}").status_code == 404
+
+
+# ── GET /api/v1/spirits（清單）──────────────────────────────────────────
+
+def _entry(body, spirit_id):
+    """清單裡的那一筆，找不到回 None。"""
+    return next((item for item in body if item["place_id"] == spirit_id), None)
+
+
+def test_list_includes_active_spirit(client, spirit):
+    resp = client.get("/api/v1/spirits")
+
+    assert resp.status_code == 200
+    entry = _entry(resp.json(), spirit.spirit_id)
+    assert entry is not None
+    # 地圖畫 pin 只需要這幾個欄位，全部都要在——少一個，客戶端就得再打一次
+    # 單筆端點，九個召喚點等於九次往返。
+    assert entry["name"] == "測試地標"
+    assert entry["latitude"] == pytest.approx(_LAT)
+    assert entry["longitude"] == pytest.approx(_LON)
+    assert entry["summon_radius_m"] == 50
+    assert entry["sense_radius_m"] == 150
+
+
+def test_list_omits_inactive_spirits(client, db_session, spirit):
+    """
+    下架的靈魂不進清單，跟 `GET /spirits/{placeId}` 回 404 是同一個判斷。
+
+    畫成 pin 等於邀請玩家走過去撞一個 404——那是最糟的一種失敗，因為玩家已經
+    走到現場了才知道沒有東西。
+
+    ⚠️ `/dev/spirits` 刻意相反（下架的也回，帶 `is_active`），因為測試的人需要
+    看得到「為什麼這個地標打 404」。兩支的讀者不同，不要把它們對齊。
+    """
+    spirit.is_active = False
+    db_session.commit()
+
+    assert _entry(client.get("/api/v1/spirits").json(), spirit.spirit_id) is None
+
+
+def test_list_is_sorted_by_id(client, spirit):
+    body = client.get("/api/v1/spirits").json()
+
+    ids = [item["place_id"] for item in body]
+    assert ids == sorted(ids)
+
+
+def test_list_needs_no_token(client, spirit):
+    """
+    清單不帶 session token 也拿得到。
+
+    它就是一份公開的地標座標表，跟站在路口看見廟在哪個方向是同一件事。要求登入
+    才能看地圖，等於在玩家還沒有理由註冊之前先擋住他。
+    """
+    assert client.get("/api/v1/spirits").status_code == 200

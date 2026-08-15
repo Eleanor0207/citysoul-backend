@@ -1472,6 +1472,32 @@
         ]
       }
     },
+    "/api/v1/spirits": {
+      "get": {
+        "description": "對應對外 API 清單：GET /api/v1/spirits。\n\n地圖上要畫出所有召喚點，而畫 pin 只需要經緯度——「所有層級所有地標都放，\n不然無法指路」（2026-08-12）。只畫腳下那一個，等於只告訴玩家他站在哪裡；\n地圖要能指路，就得同時看得見別的地標在哪個方向。\n\n## 為什麼原本沒有這一支，現在有了\n\n`app/modules/dev/router.py` 的開頭寫著「正式 API 只有\n`GET /spirits/{placeId}`，因為客戶端是從地圖上點選的」。那句話成立的前提是\n**客戶端自己手上有那份清單**——召喚點的經緯度過去打包在\n`Assets/StreamingAssets/tiles/near/index.json` 裡。\n\n近景層改走即時 mesh 之後那批圖磚整組退場，那份索引跟著沒有了，前提不再成立。\n清單只剩後端有，所以它必須是正式 API 的一部分，不是主控台的方便功能。\n\n## 跟 /dev/spirits 的差別\n\n這裡**只回 `is_active` 的靈魂**，跟 `/sense`、`/summon`、`/dialogue`、\n`GET /spirits/{placeId}` 對齊：下架的靈魂對玩家來說就是不存在，畫成 pin 等於\n邀請玩家走過去撞一個 404。主控台那支會把下架的一起回，因為測試的人需要看得到\n「為什麼這個地標打 404」——兩者的讀者不同，所以行為不同。",
+        "operationId": "list_spirits_api_v1_spirits_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SpiritResponse"
+                  },
+                  "title": "Response List Spirits Api V1 Spirits Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Spirits",
+        "tags": [
+          "body"
+        ]
+      }
+    },
     "/api/v1/spirits/{place_id}": {
       "get": {
         "description": "對應對外 API 清單：GET /api/v1/spirits/{placeId}。\n\n回應含 `orientation`（SDD v2.1 §10.2）：客戶端 S14 的 3DoF 定向服務靠它\n決定把角色固定在哪個方位，少了它城市靈魂只能永遠黏在螢幕正中央。",

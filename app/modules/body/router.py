@@ -404,6 +404,42 @@ def dialogue(
     )
 
 
+@router.get("/spirits", response_model=list[schemas.SpiritResponse])
+def list_spirits(db: Session = Depends(get_db)):
+    """
+    對應對外 API 清單：GET /api/v1/spirits。
+
+    地圖上要畫出所有召喚點，而畫 pin 只需要經緯度——「所有層級所有地標都放，
+    不然無法指路」（2026-08-12）。只畫腳下那一個，等於只告訴玩家他站在哪裡；
+    地圖要能指路，就得同時看得見別的地標在哪個方向。
+
+    ## 為什麼原本沒有這一支，現在有了
+
+    `app/modules/dev/router.py` 的開頭寫著「正式 API 只有
+    `GET /spirits/{placeId}`，因為客戶端是從地圖上點選的」。那句話成立的前提是
+    **客戶端自己手上有那份清單**——召喚點的經緯度過去打包在
+    `Assets/StreamingAssets/tiles/near/index.json` 裡。
+
+    近景層改走即時 mesh 之後那批圖磚整組退場，那份索引跟著沒有了，前提不再成立。
+    清單只剩後端有，所以它必須是正式 API 的一部分，不是主控台的方便功能。
+
+    ## 跟 /dev/spirits 的差別
+
+    這裡**只回 `is_active` 的靈魂**，跟 `/sense`、`/summon`、`/dialogue`、
+    `GET /spirits/{placeId}` 對齊：下架的靈魂對玩家來說就是不存在，畫成 pin 等於
+    邀請玩家走過去撞一個 404。主控台那支會把下架的一起回，因為測試的人需要看得到
+    「為什麼這個地標打 404」——兩者的讀者不同，所以行為不同。
+    """
+    spirits = (
+        db.query(models.Spirit)
+        .filter(models.Spirit.is_active.is_(True))
+        .order_by(models.Spirit.spirit_id)
+        .all()
+    )
+
+    return [schemas.SpiritResponse.from_spirit(spirit) for spirit in spirits]
+
+
 @router.get(
     "/spirits/{place_id}",
     response_model=schemas.SpiritResponse,
