@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.modules.body.quota import QuotaExceededError
 from app.modules.body.router import router as body_router
+from app.modules.body.router_ui import router as body_ui_router
 
 app = FastAPI(title="城市靈魂 AR — Backend", version="0.1.0-sprint1")
 
@@ -54,6 +55,9 @@ if settings.app_env == "local":
     )
 
 app.include_router(body_router)
+# 介面視窗的查詢端點（聊天紀錄，之後還有收藏／地區）。獨立一支 router 是為了
+# 避開 `router.py` 與 feature/brain 那 929 行重寫的衝突面，見 router_ui 的說明。
+app.include_router(body_ui_router)
 
 if settings.dev_console_enabled:
     # 開發測試主控台。整組 `include_in_schema=False`，所以它不會進

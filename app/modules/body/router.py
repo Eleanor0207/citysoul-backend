@@ -17,7 +17,7 @@ from app.modules.body.encounter_tokens import (
 )
 from app.core.redis_client import append_session_turn
 from app.modules.body.geo import haversine_distance_m
-from app.modules.body import daily_event_service, push, queries, quests
+from app.modules.body import daily_event_service, dialogue_log, push, queries, quests
 from app.modules.body.quests import evaluate_on_summon
 from app.modules.body.quota import (
     RESOURCE_DIALOGUE,
@@ -395,6 +395,25 @@ def dialogue(
     # 同一個 key 是這件事成立的原因。
     append_session_turn(str(session_player_id), place_id, {"role": "user", "text": payload.user_input})
     append_session_turn(str(session_player_id), place_id, {"role": "assistant", "text": reply_text})
+
+    # ── 對話日誌（永久）────────────────────────────────────────────────
+    #
+    # 上面那兩行是 B7 短期記憶，寫進 Redis 且 **30 分鐘 TTL**——那是餵給模型的
+    # 上下文，不是紀錄。玩家的「聊天紀錄」視窗要的是永久的那一份，所以另外寫進
+    # `dialogue_turns`。
+    #
+    # ⚠️ role 的字串兩邊不一樣：Redis 是 user/assistant，資料表的 CHECK 約束只收
+    # player/spirit。轉換在 `dialogue_log` 裡，這裡不要自己拼字串。
+    #
+    # 這一支**永遠不拋例外**。回覆已經生成、配額已經扣了，日誌寫不進去不該讓這次
+    # 對話變成 500——那等於玩家付了配額卻什麼都沒拿到。
+    dialogue_log.record_turns(
+        db,
+        player_id=session_player_id,
+        spirit_id=place_id,
+        user_input=payload.user_input,
+        reply_text=reply_text,
+    )
 
     return schemas.DialogueResponse(
         reply_text=reply_text,

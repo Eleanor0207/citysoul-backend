@@ -92,6 +92,12 @@ EXPECTED_RESPONSE_CODES = {
     ("get", "/api/v1/resonance/{spirit_id}"): {"200", "401", "404", "422"},
     ("get", "/api/v1/profile"): {"200", "401"},
     ("get", "/api/v1/players/me/memory-summary"): {"200", "401"},
+    # ── 聊天紀錄（router_ui.py）──
+    # 第一層不吃任何參數，所以沒有 422；一句都沒聊過回空陣列，所以沒有 404。
+    ("get", "/api/v1/dialogue-history/spirits"): {"200", "401"},
+    # 第二層有 path 參數與 limit/before 的範圍檢查，所以有 422。
+    # 404 是「根本沒有這個靈魂」，跟「有這個靈魂但我沒聊過」（回空陣列）刻意分開。
+    ("get", "/api/v1/spirits/{place_id}/dialogue-history"): {"200", "401", "404", "422"},
     # #38：資產位置不是玩家資料，無需驗證。
     ("get", "/api/v1/assets/{avatar_id}"): {"200", "404", "422"},
     # #39：只需要 session token。

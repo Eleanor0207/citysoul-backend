@@ -70,6 +70,39 @@
         "title": "DailyEventResponse",
         "type": "object"
       },
+      "DialogueHistoryResponse": {
+        "description": "某個靈魂的對話，`turns` **由舊到新**（畫面由上往下讀）。\n\n分頁往「更舊」的方向走：把 `next_before` 原封不動放進下一次請求的 `before`。",
+        "properties": {
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "next_before": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Before"
+          },
+          "turns": {
+            "items": {
+              "$ref": "#/components/schemas/DialogueTurnItem"
+            },
+            "title": "Turns",
+            "type": "array"
+          }
+        },
+        "required": [
+          "turns",
+          "has_more"
+        ],
+        "title": "DialogueHistoryResponse",
+        "type": "object"
+      },
       "DialogueRequest": {
         "description": "對話請求（SDD 第8.5節）。\n\n`user_input` 的長度上限先用保守值。SDD 提到 `prompt_max_chars` 會依實測調整，\n但那要等真的接上 Gemini、看到成本數據之後才有依據。",
         "properties": {
@@ -121,6 +154,100 @@
           "source"
         ],
         "title": "DialogueResponse",
+        "type": "object"
+      },
+      "DialogueThreadItem": {
+        "description": "聊天紀錄第一層：跟這個靈魂的對話摘要。",
+        "properties": {
+          "last_at": {
+            "format": "date-time",
+            "title": "Last At",
+            "type": "string"
+          },
+          "last_message": {
+            "title": "Last Message",
+            "type": "string"
+          },
+          "last_role": {
+            "enum": [
+              "player",
+              "spirit"
+            ],
+            "title": "Last Role",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "spirit_id": {
+            "title": "Spirit Id",
+            "type": "string"
+          },
+          "turn_count": {
+            "title": "Turn Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "spirit_id",
+          "name",
+          "last_message",
+          "last_role",
+          "last_at",
+          "turn_count"
+        ],
+        "title": "DialogueThreadItem",
+        "type": "object"
+      },
+      "DialogueThreadsResponse": {
+        "description": "一句都沒聊過時 `threads` 是空陣列，不是 404——冷啟動是正常狀態。",
+        "properties": {
+          "threads": {
+            "items": {
+              "$ref": "#/components/schemas/DialogueThreadItem"
+            },
+            "title": "Threads",
+            "type": "array"
+          }
+        },
+        "required": [
+          "threads"
+        ],
+        "title": "DialogueThreadsResponse",
+        "type": "object"
+      },
+      "DialogueTurnItem": {
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "player",
+              "spirit"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "turn_id": {
+            "title": "Turn Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "turn_id",
+          "role",
+          "content",
+          "created_at"
+        ],
+        "title": "DialogueTurnItem",
         "type": "object"
       },
       "ErrorResponse": {
@@ -857,6 +984,43 @@
           }
         },
         "summary": "Get Avatar Asset",
+        "tags": [
+          "body"
+        ]
+      }
+    },
+    "/api/v1/dialogue-history/spirits": {
+      "get": {
+        "description": "聊天紀錄第一層：我跟哪些靈魂聊過。\n\n🔒 **只回自己的。** 過濾條件是 session token 解出來的 `player_id`，沒有任何\n路徑或查詢參數能指定別人——這是設計，不是驗證不足。",
+        "operationId": "list_dialogue_threads_api_v1_dialogue_history_spirits_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DialogueThreadsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Session token 無效或未提供"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Dialogue Threads",
         "tags": [
           "body"
         ]
@@ -1729,6 +1893,107 @@
           }
         ],
         "summary": "Dialogue",
+        "tags": [
+          "body"
+        ]
+      }
+    },
+    "/api/v1/spirits/{place_id}/dialogue-history": {
+      "get": {
+        "description": "聊天紀錄第二層：跟某個靈魂的對話內文，由舊到新。\n\n## 為什麼靈魂不存在要回 404，而不是空陣列\n\n「這個靈魂我沒聊過」與「根本沒有這個靈魂」是兩種不同的情況，客戶端要能分開：\n前者顯示「還沒有聊過」，後者代表客戶端拿著一個過期的 id 在問——那是 bug，\n不該被偽裝成一個平靜的空畫面。對齊 `GET /resonance/{spirit_id}` 的做法。\n\n下架的靈魂也回 404（跟其他所有靈魂查詢端點一致）。**但已經存在的對話紀錄\n本身不會被藏起來**，它們仍然出現在第一層的清單裡——見\n`dialogue_log.threads()` 的說明。",
+        "operationId": "get_dialogue_history_api_v1_spirits__place_id__dialogue_history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "place_id",
+            "required": true,
+            "schema": {
+              "title": "Place Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "一次回幾句。",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "一次回幾句。",
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "只回 turn_id 比這個小的（更舊的）。第一頁不要帶。",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "只回 turn_id 比這個小的（更舊的）。第一頁不要帶。",
+              "title": "Before"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DialogueHistoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Session token 無效或未提供"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "靈魂不存在，或已下架（is_active=false）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Dialogue History",
         "tags": [
           "body"
         ]

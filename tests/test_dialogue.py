@@ -62,6 +62,10 @@ def spirit(db_session, unique_spirit_id):
 
     db_session.query(CannedGreeting).filter_by(character_id=character_id).delete()
     db_session.query(CharacterPersona).filter_by(character_id=character_id).delete()
+    # ⚠️ dialogue_turns 要先刪。那張表對 spirits.spirit_id 有外鍵，而 /dialogue
+    # 從 2026-08-16 起會寫進去（見 dialogue_log.record_turns）——留著列的話下面
+    # 那行 delete(row) 會撞上外鍵違反，錯誤出現在 teardown，跟被測行為毫無關係。
+    db_session.query(models.DialogueTurn).filter_by(spirit_id=unique_spirit_id).delete()
     db_session.delete(row)
     db_session.query(Character).filter_by(character_id=character_id).delete()
     db_session.query(LandmarkSoul).filter_by(landmark_id=landmark_id).delete()
