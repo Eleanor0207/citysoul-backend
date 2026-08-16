@@ -13,6 +13,15 @@
 
 兩張表在不同 schema，但都在同一個交易裡。
 
+## `is_active: false` 是「先不出貨」，不是刪除
+
+YAML 沒寫就是 `true`。寫 `false` 的靈魂照樣進資料庫、照樣被這支腳本管理，只是
+召喚不到——史實與人格都留著，要放行只需要把旗標翻回來重跑一次。
+
+刻意不提供刪除路徑：這支腳本只認得 YAML 裡有的東西，「不在清單裡」跟「要刪掉」
+從它的角度看是同一件事，而那兩者的後果差很多。真的要移除一個靈魂，是人去下
+DELETE，不是靠某一次匯入順手做掉。
+
 ## 這支腳本不碰人格
 
 `brain.characters` 只有識別與歸屬，沒有內容。人格走 `import_personas.py`，
@@ -53,13 +62,14 @@ UPSERT_SPIRIT = text(
          summon_radius_meters, sense_radius_meters, is_active, safety_gate_enabled)
     VALUES
         (:spirit_id, :display_name, :character_id, :landmark_id, :latitude, :longitude,
-         :summon_radius, :sense_radius, true, :safety_gate)
+         :summon_radius, :sense_radius, :is_active, :safety_gate)
     ON CONFLICT (spirit_id) DO UPDATE SET
         display_name  = EXCLUDED.display_name,
         character_id  = EXCLUDED.character_id,
         landmark_id   = EXCLUDED.landmark_id,
         latitude      = EXCLUDED.latitude,
         longitude     = EXCLUDED.longitude,
+        is_active     = EXCLUDED.is_active,
         safety_gate_enabled = EXCLUDED.safety_gate_enabled
     """
 )
@@ -95,7 +105,8 @@ def main() -> int:
 
     for e in entries:
         gate = "  [B4 安全閘]" if e.get("safety_gate") else ""
-        print(f"  {e['spirit_id']:36s} {e['display_name']:12s} → {e['character_id']}{gate}")
+        off = "  [停用]" if not e.get("is_active", True) else ""
+        print(f"  {e['spirit_id']:36s} {e['display_name']:12s} → {e['character_id']}{gate}{off}")
 
     if args.dry_run:
         print("\n--dry-run：沒有寫入資料庫")
@@ -118,6 +129,7 @@ def main() -> int:
                     "longitude": e["longitude"],
                     "summon_radius": SUMMON_RADIUS_M,
                     "sense_radius": SENSE_RADIUS_M,
+                    "is_active": bool(e.get("is_active", True)),
                     "safety_gate": bool(e.get("safety_gate", False)),
                 },
             )
