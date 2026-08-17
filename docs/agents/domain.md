@@ -6,7 +6,7 @@ How the engineering skills should consume this repo's domain documentation when 
 
 - **`CONTEXT.md`** at the repo root — the canonical product glossary. Also mirrored at `docs/CONTEXT.md` (identical copy); treat the two as one source.
 - **`docs/city_soul_AR_document_index.md`** — reading-order map and "supersedes" table across all the spec documents in `docs/`. Consult it before trusting any individual spec file's content, since later documents override earlier ones.
-- **`SDD_v2.1_Unity_3D.md` — in the [`citysoul-doc`](https://github.com/city-soul-taipei/citysoul-doc) repo, not here.** **The single authority.** Anything conflicting with it loses, including `docs/SDD.md` (v1), which is superseded: v1 describes a Flutter + 2.5D Billboard client that no longer exists. v2.1's §1 carries the full overturn table; read it before trusting any older spec. `SDD.md` at this repo root is only a pointer.
+- **`SDD_v2.2_Unity_3D.md` — in the [`citysoul-doc`](https://github.com/city-soul-taipei/citysoul-doc) repo, not here.** **The single authority.** Anything conflicting with it loses, including `docs/SDD.md` (v1), which is superseded: v1 describes a Flutter + 2.5D Billboard client that no longer exists. v2.1's §1 carries the full overturn table; read it before trusting any older spec. `SDD.md` at this repo root is only a pointer.
 - **`docs/SDD.md`** — v1, **superseded**. Kept only for historical context on decisions that v2.1 explicitly says to carry over unchanged (business rules, API contracts, DB schema).
 - **`docs/adr/`** — read ADRs that touch the area you're about to work in.
 
@@ -18,7 +18,7 @@ Single-context repo:
 
 ```text
 citysoul-doc/                               ← the authority, separate repo
-└── SDD_v2.1_Unity_3D.md                    ← single source of truth
+└── SDD_v2.2_Unity_3D.md                    ← single source of truth
 
 citysoul-backend/                           ← this repo
 ├── CONTEXT.md                              product glossary (complements the SDD)
