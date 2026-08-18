@@ -4,10 +4,11 @@ from functools import lru_cache
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.modules.body import models, schemas
+from app.modules.body import districts, models, schemas
 from app.modules.body.anticheat import run_observation_checks
 from app.modules.body.auth import require_session_token
 from app.modules.body.encounter_tokens import (
@@ -46,6 +47,7 @@ from app.modules.brain.landmark_recognition import (
     VertexAILandmarkRecognizer,
     recognize_landmark,
 )
+from app.modules.brain.models import StoryArc
 from app.modules.brain.greetings import match_canned_greeting
 from app.modules.brain.loader import load_active_persona
 from app.modules.brain.prompt_builder import build_prompt
@@ -201,6 +203,72 @@ def sense(
     return schemas.SenseResponse(
         sense_token=issue_sense_token(player_id, spirit.spirit_id),
         spirit_id=spirit.spirit_id,
+    )
+
+
+_DISTRICT_ENTRY_ITEMS = {
+    "wanhua": "item_wanhua_letter",
+}
+
+
+def _grant_district_entry_item(
+    db: Session, *, player_id: uuid.UUID, district_id: str
+) -> bool:
+    """Insert the district item once, using the inventory unique index."""
+    item_id = _DISTRICT_ENTRY_ITEMS.get(district_id)
+    if item_id is None:
+        return False
+
+    statement = pg_insert(models.PlayerInventory).values(
+        player_id=player_id,
+        item_type="story_document",
+        item_id=item_id,
+    )
+    statement = statement.on_conflict_do_nothing(
+        index_elements=["player_id", "item_id"]
+    ).returning(models.PlayerInventory.inventory_id)
+    inserted = db.execute(statement)
+    inventory_id = inserted.scalar_one_or_none()
+    db.commit()
+    return inventory_id is not None
+
+
+@router.post(
+    "/districts/check-entry",
+    response_model=schemas.DistrictEntryResponse,
+    responses={**_UNAUTHORIZED},
+)
+def check_district_entry(
+    payload: schemas.DistrictEntryRequest,
+    player_id: uuid.UUID = Depends(require_session_token),
+    db: Session = Depends(get_db),
+):
+    """Evaluate one GPS fix and grant a district arc entry item if new."""
+    district_id = districts.check_player_in_district(
+        db, latitude=payload.latitude, longitude=payload.longitude
+    )
+    if district_id is None:
+        return schemas.DistrictEntryResponse(
+            district_id=None,
+            entry_granted=False,
+            arc_id=None,
+        )
+
+    arc = (
+        db.query(StoryArc)
+        .filter_by(district_id=district_id)
+        .order_by(StoryArc.arc_id)
+        .first()
+    )
+    arc_id = arc.arc_id if arc is not None else None
+    entry_granted = _grant_district_entry_item(
+        db, player_id=player_id, district_id=district_id
+    )
+
+    return schemas.DistrictEntryResponse(
+        district_id=district_id,
+        entry_granted=entry_granted,
+        arc_id=arc_id,
     )
 
 

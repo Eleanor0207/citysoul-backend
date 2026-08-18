@@ -98,6 +98,21 @@ class SenseResponse(BaseModel):
     spirit_id: str
 
 
+class DistrictEntryRequest(BaseModel):
+    """Coordinates used for one server-side district entry evaluation."""
+
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+
+
+class DistrictEntryResponse(BaseModel):
+    """Result of a district check; no boundary or raw coordinates are returned."""
+
+    district_id: str | None
+    entry_granted: bool
+    arc_id: str | None
+
+
 # 任務狀態的合法值，會在 OpenAPI 產出真正的 `enum`。
 #
 # 以前這三個值只活在中文註解裡，`status` 產出的是裸 `type: string`——客戶端在

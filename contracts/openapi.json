@@ -123,6 +123,67 @@
         "title": "DialogueResponse",
         "type": "object"
       },
+      "DistrictEntryRequest": {
+        "description": "Coordinates used for one server-side district entry evaluation.",
+        "properties": {
+          "latitude": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Longitude",
+            "type": "number"
+          }
+        },
+        "required": [
+          "latitude",
+          "longitude"
+        ],
+        "title": "DistrictEntryRequest",
+        "type": "object"
+      },
+      "DistrictEntryResponse": {
+        "description": "Result of a district check; no boundary or raw coordinates are returned.",
+        "properties": {
+          "arc_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Arc Id"
+          },
+          "district_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "District Id"
+          },
+          "entry_granted": {
+            "title": "Entry Granted",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "district_id",
+          "entry_granted",
+          "arc_id"
+        ],
+        "title": "DistrictEntryResponse",
+        "type": "object"
+      },
       "ErrorResponse": {
         "description": "所有錯誤回應的統一形狀（SDD v2.1 §11.2.1）。\n\n**這不是新的錯誤格式，是對既有格式的描述。** 形狀刻意對齊 FastAPI\n`HTTPException` 本來就會產出的 `{\"detail\": \"...\"}`，一個位元組都沒改。\n\n存在的理由是讓契約說得出錯誤長什麼樣。在這之前，錯誤回應完全不在 OpenAPI\n文件裡——SDD v2.1 §10.3 明訂「錯誤碼全數不變」代表錯誤碼是契約的一部分，\n但機器可讀的那份契約看不到它們，客戶端只能回頭讀規格散文，這正好違背\n「單一真相來源」的初衷。\n\n具名之後，客戶端 codegen 會產出**單一**錯誤 DTO，錯誤處理可以寫成一份共用\n程式碼，而不是每支端點各寫一次。",
         "properties": {
@@ -857,6 +918,63 @@
           }
         },
         "summary": "Get Avatar Asset",
+        "tags": [
+          "body"
+        ]
+      }
+    },
+    "/api/v1/districts/check-entry": {
+      "post": {
+        "description": "Evaluate one GPS fix and grant a district arc entry item if new.",
+        "operationId": "check_district_entry_api_v1_districts_check_entry_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DistrictEntryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DistrictEntryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Session token 無效或未提供"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Check District Entry",
         "tags": [
           "body"
         ]

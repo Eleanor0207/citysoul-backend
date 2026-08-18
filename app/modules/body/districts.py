@@ -1,9 +1,9 @@
 """
 地理圍欄查詢（`brain.districts` 的前置）。
 
-目前只有一支通用的多邊形內含判定。`districts` 表本身還沒建（見 #46 被擋住的
-清單），所以這裡刻意不寫 `check_player_in_district()`——那需要先有表和真實的
-萬華區邊界資料。
+提供通用的多邊形內含判定，以及依 `brain.districts.boundary` 找出玩家所在
+行政區的查詢。邊界資料由 `scripts/load_districts.py` 載入；這個模組不保存玩家
+座標，判定完成後只回傳 district id。
 
 ## 為什麼不用 geo.py 那種純 Python 實作
 
@@ -46,3 +46,33 @@ def is_point_in_polygon(
         {"polygon_wkt": polygon_wkt, "longitude": longitude, "latitude": latitude},
     ).scalar()
     return bool(result)
+
+
+def check_player_in_district(
+    session: Session, latitude: float, longitude: float
+) -> str | None:
+    """Return the district containing the point, or ``None``.
+
+    Boundaries are evaluated on the server and are never exposed to callers. The
+    point is passed to the existing ``is_point_in_polygon`` helper so the
+    deliberate ``ST_Contains`` boundary semantics remain in one place.
+    """
+    rows = session.execute(
+        text(
+            """
+            SELECT district_id, ST_AsText(boundary::geometry) AS boundary_wkt
+            FROM brain.districts
+            WHERE boundary IS NOT NULL
+            ORDER BY district_id
+            """
+        )
+    ).mappings().all()
+
+    for row in rows:
+        boundary_wkt = row["boundary_wkt"]
+        if boundary_wkt and is_point_in_polygon(
+            session, latitude, longitude, boundary_wkt
+        ):
+            return row["district_id"]
+
+    return None
