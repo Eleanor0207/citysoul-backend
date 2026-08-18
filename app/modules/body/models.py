@@ -428,6 +428,9 @@ class MediaAsset(Base):
     gcs_path = Column(Text, nullable=False)
     cdn_url = Column(Text, nullable=False)
     content_type = Column(Text, nullable=False)
+    # 收藏放大檢視的說明文字（0021）。跟著圖走——換圖通常也要換文字，所以同一列。
+    # ⚠️ 玩家上傳的照片與頭像資產也在這張表，那些是 NULL。
+    caption = Column(Text, nullable=True)
     width = Column(Integer, nullable=True)
     height = Column(Integer, nullable=True)
     uploaded_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

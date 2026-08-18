@@ -94,6 +94,7 @@ def encounter_asset(db_session, spirit):
         gcs_path=f"gs://test/{spirit.spirit_id}.png",
         cdn_url=f"https://cdn.test/{spirit.spirit_id}.png",
         content_type="image/png",
+        caption="這是放大檢視裡那段說明文字，長度不設限。",
     )
     db_session.add(row)
     db_session.commit()
@@ -214,10 +215,12 @@ def test_locked_entry_never_leaks_the_image(client, player, spirit, encounter_as
 
     assert entry["unlocked"] is False
     assert entry["image_url"] is None
+    assert entry["caption"] is None
     assert entry["acquired_at"] is None
-    assert encounter_asset.cdn_url not in client.get(
-        "/api/v1/collections", headers=_auth(player["session_token"])
-    ).text
+
+    body = client.get("/api/v1/collections", headers=_auth(player["session_token"])).text
+    assert encounter_asset.cdn_url not in body
+    assert encounter_asset.caption not in body
 
 
 def test_unlocked_entry_returns_title_and_image(client, player, spirit, encounter_asset):
@@ -229,6 +232,7 @@ def test_unlocked_entry_returns_title_and_image(client, player, spirit, encounte
     assert entry["unlocked"] is True
     assert entry["title"] == spirit.display_name
     assert entry["image_url"] == encounter_asset.cdn_url
+    assert entry["caption"] == encounter_asset.caption
     assert entry["acquired_at"] is not None
 
 
@@ -247,6 +251,7 @@ def test_unlocked_entry_without_artwork_still_unlocks(client, player, spirit):
     assert entry["unlocked"] is True
     assert entry["title"] == spirit.display_name
     assert entry["image_url"] is None
+    assert entry["caption"] is None
 
 
 # ── 清單組成 ───────────────────────────────────────────────────────────

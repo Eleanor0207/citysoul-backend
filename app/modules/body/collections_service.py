@@ -21,11 +21,11 @@
 
 ## 🔒 未解鎖的格子有名字，但沒有圖
 
-**`title` 一律回傳，`image_url` 與 `acquired_at` 在未解鎖時是 `None`。**
+**`title` 一律回傳，`image_url`、`caption` 與 `acquired_at` 在未解鎖時是 `None`。**
 
-界線是「名字不是秘密，圖才是」：那些地標的名字玩家在地圖上本來就看得到，遮起來
-只是讓收藏視窗變得難懂。圖不一樣——它是解鎖真正換到的東西，如果 API 照樣把 URL
-送出去，任何人抓一次封包就看完了整本圖鑑，「要走到現場才看得到」那條就等於沒生效。
+界線是「名字不是秘密，內容才是」：那些地標的名字玩家在地圖上本來就看得到，遮起來
+只是讓收藏視窗變得難懂。圖與說明文字不一樣——它們是解鎖真正換到的東西，如果 API
+照樣送出去，任何人抓一次封包就看完了整本圖鑑，「要走到現場才看得到」那條就等於沒生效。
 
 ⚠️ 2026-08-18 的第一版連 `title` 也遮，A.L. 當天改成「名稱都顯示」。改的是**遮蔽
 範圍**，不是遮蔽這件事本身——`image_url` 那一層仍然守著，不要順手一起放行。
@@ -175,7 +175,7 @@ def list_collections(db: Session, *, player_id: uuid.UUID | str) -> list[dict]:
 
     # ── 相遇格：啟用中的地標，各一張 ────────────────────────────────
     encounter_rows = (
-        db.query(models.Spirit, models.MediaAsset.cdn_url)
+        db.query(models.Spirit, models.MediaAsset.cdn_url, models.MediaAsset.caption)
         .outerjoin(
             models.MediaAsset,
             (models.MediaAsset.spirit_id == models.Spirit.spirit_id)
@@ -185,13 +185,14 @@ def list_collections(db: Session, *, player_id: uuid.UUID | str) -> list[dict]:
         .order_by(models.Spirit.spirit_id)
         .all()
     )
-    for spirit, cdn_url in encounter_rows:
+    for spirit, cdn_url, caption in encounter_rows:
         entries.append(
             _entry(
                 collection_id=encounter_item_id(spirit.spirit_id),
                 source_type=SOURCE_ENCOUNTER,
                 title=spirit.display_name,
                 image_url=cdn_url,
+                caption=caption,
                 acquired_at=unlocked.get(encounter_item_id(spirit.spirit_id)),
                 is_unlocked=encounter_item_id(spirit.spirit_id) in unlocked,
             )
@@ -199,18 +200,19 @@ def list_collections(db: Session, *, player_id: uuid.UUID | str) -> list[dict]:
 
     # ── 劇本格：每條 arc 一張 ──────────────────────────────────────
     arc_rows = (
-        db.query(StoryArc, models.MediaAsset.cdn_url)
+        db.query(StoryArc, models.MediaAsset.cdn_url, models.MediaAsset.caption)
         .outerjoin(models.MediaAsset, models.MediaAsset.asset_id == StoryArc.completion_asset_id)
         .order_by(StoryArc.arc_id)
         .all()
     )
-    for arc, cdn_url in arc_rows:
+    for arc, cdn_url, caption in arc_rows:
         entries.append(
             _entry(
                 collection_id=arc_completion_item_id(arc.arc_id),
                 source_type=SOURCE_ARC_COMPLETION,
                 title=arc.title,
                 image_url=cdn_url,
+                caption=caption,
                 acquired_at=unlocked.get(arc_completion_item_id(arc.arc_id)),
                 is_unlocked=arc_completion_item_id(arc.arc_id) in unlocked,
             )
@@ -225,14 +227,18 @@ def _entry(
     source_type: str,
     title: str,
     image_url: str | None,
+    caption: str | None,
     acquired_at,
     is_unlocked: bool,
 ) -> dict:
     """
-    🔒 未解鎖時把 `image_url` 與 `acquired_at` 抹成 None。**`title` 照回。**
+    🔒 未解鎖時把 `image_url`、`caption` 與 `acquired_at` 抹成 None。**`title` 照回。**
 
     收斂在同一個地方，是為了不讓「哪些欄位算內容」這件事散落在兩段迴圈裡——
-    之後加第三種來源時，漏掉遮蔽的機會就少一次。
+    之後加第四種欄位時，漏掉遮蔽的機會就少一次。
+
+    `caption` 跟 `image_url` 同一邊：它是放大檢視裡那段說明文字，屬於解鎖真正換到的
+    東西，跟名字不同。名字在地圖上本來就看得到，說明文字不是。
 
     `acquired_at` 跟著遮不是為了保密，是因為它對未解鎖的格子**根本沒有值**；
     回一個 None 以外的東西只會讓客戶端多一個要判斷的狀態。
@@ -243,5 +249,6 @@ def _entry(
         "unlocked": is_unlocked,
         "title": title,
         "image_url": image_url if is_unlocked else None,
+        "caption": caption if is_unlocked else None,
         "acquired_at": acquired_at if is_unlocked else None,
     }

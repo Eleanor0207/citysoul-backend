@@ -465,11 +465,13 @@ class CollectionEntry(BaseModel):
     """
     收藏視窗的一格（`GET /api/v1/collections`）。
 
-    🔒 **未解鎖時有 `title`，但 `image_url` 與 `acquired_at` 是 `null`。**
+    🔒 **未解鎖時只有 `title`；`image_url`、`caption`、`acquired_at` 都是 `null`。**
 
-    界線是「名字不是秘密，圖才是」：地標名玩家在地圖上本來就看得到，遮起來只會讓
-    收藏視窗變得難懂；圖是解鎖真正換到的東西，照樣送出去的話抓一次封包就看完了
-    整本圖鑑。遮蔽做在伺服器端，不是靠客戶端自律。
+    界線是「名字不是秘密，內容才是」：地標名玩家在地圖上本來就看得到，遮起來只會讓
+    收藏視窗變得難懂；圖與說明文字是解鎖真正換到的東西，照樣送出去的話抓一次封包
+    就看完了整本圖鑑。遮蔽做在伺服器端，不是靠客戶端自律。
+
+    `caption` 是放大檢視裡圖底下那段說明文字，長度不設限——客戶端那邊是可捲動的。
 
     `source_type` 是客戶端判斷來源的唯一依據（`encounter`＝初次相遇圖，
     `arc_completion`＝劇本完成圖）。**不要用 `collection_id` 的前綴去判斷**——
@@ -485,6 +487,7 @@ class CollectionEntry(BaseModel):
     unlocked: bool
     title: str | None = None
     image_url: str | None = None
+    caption: str | None = None
     acquired_at: datetime | None = None
 
 

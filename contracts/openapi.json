@@ -45,7 +45,7 @@
         "type": "object"
       },
       "CollectionEntry": {
-        "description": "收藏視窗的一格（`GET /api/v1/collections`）。\n\n🔒 **未解鎖時有 `title`，但 `image_url` 與 `acquired_at` 是 `null`。**\n\n界線是「名字不是秘密，圖才是」：地標名玩家在地圖上本來就看得到，遮起來只會讓\n收藏視窗變得難懂；圖是解鎖真正換到的東西，照樣送出去的話抓一次封包就看完了\n整本圖鑑。遮蔽做在伺服器端，不是靠客戶端自律。\n\n`source_type` 是客戶端判斷來源的唯一依據（`encounter`＝初次相遇圖，\n`arc_completion`＝劇本完成圖）。**不要用 `collection_id` 的前綴去判斷**——\n那是伺服器的內部命名，改了不該要發一版客戶端。\n\n⚠️ 兩種來源在介面上**排在同一個方陣裡、不分區**（A.L. 2026-08-18）。所以\n`entries` 的順序就是畫面的順序，客戶端不會再排一次——不要為了「整理一下」\n去改這裡的排序。",
+        "description": "收藏視窗的一格（`GET /api/v1/collections`）。\n\n🔒 **未解鎖時只有 `title`；`image_url`、`caption`、`acquired_at` 都是 `null`。**\n\n界線是「名字不是秘密，內容才是」：地標名玩家在地圖上本來就看得到，遮起來只會讓\n收藏視窗變得難懂；圖與說明文字是解鎖真正換到的東西，照樣送出去的話抓一次封包\n就看完了整本圖鑑。遮蔽做在伺服器端，不是靠客戶端自律。\n\n`caption` 是放大檢視裡圖底下那段說明文字，長度不設限——客戶端那邊是可捲動的。\n\n`source_type` 是客戶端判斷來源的唯一依據（`encounter`＝初次相遇圖，\n`arc_completion`＝劇本完成圖）。**不要用 `collection_id` 的前綴去判斷**——\n那是伺服器的內部命名，改了不該要發一版客戶端。\n\n⚠️ 兩種來源在介面上**排在同一個方陣裡、不分區**（A.L. 2026-08-18）。所以\n`entries` 的順序就是畫面的順序，客戶端不會再排一次——不要為了「整理一下」\n去改這裡的排序。",
         "properties": {
           "acquired_at": {
             "anyOf": [
@@ -58,6 +58,17 @@
               }
             ],
             "title": "Acquired At"
+          },
+          "caption": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Caption"
           },
           "collection_id": {
             "title": "Collection Id",
