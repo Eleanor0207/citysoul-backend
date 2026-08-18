@@ -17,7 +17,7 @@
 
 ⚠️ 這裡的函式**不會 commit、不會修改任何資料列**。
 
-任務狀態機的推進（歸零嘗試次數、記一次失敗、開始新嘗試）只發生在 `/summon`
+任務狀態機的推進（跨日歸零、清除過期憑證、開始新嘗試）只發生在 `/summon`
 （`quests.evaluate_on_summon`）。查詢端點如果順手把跨日的 `attempts_today`
 歸零寫回去，玩家只要打開任務列表就等於做了一次狀態轉移——那是很難追查的副作用。
 
@@ -33,9 +33,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.body.models import QuestProgress, Resonance, Spirit
 from app.modules.body.quests import (
-    MAX_DAILY_ATTEMPTS,
     STATUS_COMPLETED,
-    STATUS_DAILY_LIMIT_REACHED,
     STATUS_IN_PROGRESS,
     spirit_id_for_quest,
     taipei_today,
@@ -56,11 +54,8 @@ def quest_view(progress: QuestProgress, *, today) -> dict:
     """
     把一列 `quest_progress` 轉成回應用的形狀。
 
-    ## `daily_limit_reached` 是算出來的，不是讀出來的
-
-    資料庫的 `status` 只有 `in_progress` / `completed` 兩個值。
-    `daily_limit_reached` **只存在於 API 回應**——它取決於「今天」是哪一天，
-    存進資料庫隔天就是錯的（見 `QuestProgress` 的 docstring）。
+    資料庫與 API 回應的 `status` 都只有 `in_progress` / `completed` 兩個值。
+    `attempts_today` 是觀測欄位，不會產生額外的狀態。
 
     ## 跨日的 attempts_today 是算出來的，不寫回
 
@@ -77,12 +72,7 @@ def quest_view(progress: QuestProgress, *, today) -> dict:
     is_today = progress.attempts_date == today
     attempts_today = progress.attempts_today if is_today else 0
 
-    if progress.status == STATUS_COMPLETED:
-        status = STATUS_COMPLETED
-    elif attempts_today >= MAX_DAILY_ATTEMPTS:
-        status = STATUS_DAILY_LIMIT_REACHED
-    else:
-        status = STATUS_IN_PROGRESS
+    status = STATUS_COMPLETED if progress.status == STATUS_COMPLETED else STATUS_IN_PROGRESS
 
     try:
         spirit_id = spirit_id_for_quest(progress.quest_id)

@@ -119,10 +119,8 @@ class DistrictEntryResponse(BaseModel):
 # 整個 API 最狀態密集的欄位上拿不到任何型別安全，SDD v2.1 §11.2.1 的 Unity
 # 硬規則 5「Enum 採寬鬆解析」也因此無 enum 可解析。
 #
-# 三個值的語意分界不變：`in_progress` / `completed` 是資料庫狀態；
-# `daily_limit_reached` **只存在於 API 回應**，是查詢當下依 `attempts_date`
-# 算出來的結果，不落地（存進資料庫隔天就是錯的）。
-QuestStatus = Literal["in_progress", "completed", "daily_limit_reached"]
+# 任務狀態只反映資料庫狀態；attempts_today 是觀測欄位，不會產生額外狀態。
+QuestStatus = Literal["in_progress", "completed"]
 
 
 class QuestStateResponse(BaseModel):

@@ -40,19 +40,15 @@ def test_quest_status_is_a_real_enum(contract):
     status = contract["components"]["schemas"]["QuestStateResponse"]["properties"]["status"]
 
     assert "enum" in status, "status 退回裸 string 了——客戶端會失去 enum 型別安全"
-    assert set(status["enum"]) == {"in_progress", "completed", "daily_limit_reached"}
+    assert set(status["enum"]) == {"in_progress", "completed"}
 
 
-def test_daily_limit_reached_is_in_the_contract(contract):
+def test_daily_limit_reached_is_removed_from_the_contract(contract):
     """
-    單獨釘住這個值。
-
-    它是三個值裡唯一**不是資料庫狀態**的（依 `attempts_date` 當下算出來、不落地），
-    所以最容易在重構時被漏掉。少了它，客戶端會把「今天次數用完」當成未知值丟進
-    錯誤流程，而不是顯示「明天可再挑戰」。
+    單獨釘住破壞性契約變更：舊的每日上限狀態不再是合法值。
     """
     status = contract["components"]["schemas"]["QuestStateResponse"]["properties"]["status"]
-    assert "daily_limit_reached" in status["enum"]
+    assert "daily_limit_reached" not in status["enum"]
 
 
 # ── 錯誤回應進契約 ─────────────────────────────────────────────────────

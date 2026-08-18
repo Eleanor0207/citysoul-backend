@@ -3,26 +3,21 @@ S4．可驗證微任務生命週期狀態機（SDD 第7.4節）。
 
     不存在 → in_progress → completed
                   ↓（憑證過期且任務未完成）
-               失敗嘗試（attempts_today += 1）
-                  ↓（attempts_today < 3）
-               回到 in_progress，可重新召喚再挑戰
-                  ↓（attempts_today >= 3）
-               當天鎖定，等隔天（Asia/Taipei 午夜）reset
+               清除當次憑證，可重新召喚再挑戰
 
 ## 「失敗」是被動判定的
 
 沒有「回報失敗」API。玩家拿了相遇憑證卻沒完成任務就直接關掉 App，後端當下
 不會知道；要等他**下一次召喚同一個靈魂**時，才回頭看「上一張憑證是不是已經
-過期而任務還停在 in_progress」，是的話才記一次失敗。
+過期而任務還停在 in_progress」，是的話只清除舊憑證，不增加失敗次數。
 
-這代表失敗次數只在玩家自己回來時才會前進，永遠不會有背景 job 去掃。這是
-SDD 第7.4節刻意的選擇（「以後端確定性規則驗證完成與否」），不是偷懶。
+`attempts_today` / `attempts_date` 保留作為觀測資料，永遠不會有背景 job 去掃。
+這是 SDD 第7.4節刻意的選擇（「以後端確定性規則驗證完成與否」）。
 
 ## 每日重置也是被動的
 
 `attempts_date` 存的是 Asia/Taipei 的日期。查詢當下比對它跟「今天」是否相同，
-不同就把 `attempts_today` 歸零。同樣不需要排程 job 在午夜清表——沒有人召喚
-的時候，那個玩家的次數是幾就是幾，沒有任何人會觀察到差別。
+不同就把 `attempts_today` 歸零。同樣不需要排程 job 在午夜清表。
 """
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -36,13 +31,8 @@ from app.modules.body.models import QuestProgress
 # SDD 第7節決策8：所有「每日一次」「隔天重置」統一以 Asia/Taipei 午夜為基準。
 TAIPEI = ZoneInfo("Asia/Taipei")
 
-# SDD 第7節決策6：當天最多失敗重試 3 次。
-MAX_DAILY_ATTEMPTS = 3
-
 STATUS_IN_PROGRESS = "in_progress"
 STATUS_COMPLETED = "completed"
-# 只出現在 API 回應，不會寫進資料庫（見 QuestProgress 的 docstring）。
-STATUS_DAILY_LIMIT_REACHED = "daily_limit_reached"
 
 
 def quest_id_for_spirit(spirit_id: str) -> str:
@@ -72,8 +62,7 @@ class QuestState:
     """
     回傳給呼叫端的任務狀態快照。
 
-    刻意不是 ORM 物件：`status` 可能是 `daily_limit_reached`，那個值在資料庫裡
-    並不存在，硬塞回 ORM 物件會讓人以為它會被存起來。
+    刻意不是 ORM 物件：它是給 API 回應用的狀態快照，不直接暴露 ORM 物件。
     """
 
     def __init__(self, quest_id: str, status: str, attempts_today: int):
@@ -94,8 +83,8 @@ def evaluate_on_summon(
 
     副作用（都會 commit）：
     - 跨日時把 `attempts_today` 歸零
-    - 上一張憑證過期而任務未完成時，`attempts_today += 1`
-    - 還有次數可用時，開始／延續一次嘗試（寫入 `current_token_issued_at`）
+    - 上一張憑證過期而任務未完成時，清除 `current_token_issued_at`
+    - 任務未完成時，開始／延續一次嘗試（寫入 `current_token_issued_at`）
     """
     now = now or datetime.now(timezone.utc)
     today = taipei_today(now)
@@ -118,12 +107,6 @@ def evaluate_on_summon(
     _reset_attempts_if_new_day(progress, today=today)
     _count_failed_attempt_if_token_expired(progress, now=now)
 
-    if progress.attempts_today >= MAX_DAILY_ATTEMPTS:
-        # 當天鎖定。仍然不阻擋召喚本身——呼叫端還是會核發 encounter_token，
-        # 玩家可以繼續對話，只是今天不能再挑戰任務（AC：在場驗證仍可通過）。
-        db.commit()
-        return QuestState(quest_id, STATUS_DAILY_LIMIT_REACHED, progress.attempts_today)
-
     if progress.status != STATUS_COMPLETED:
         # 開始（或重新開始）一次嘗試：記下這張憑證的核發時間，下一次召喚就是
         # 靠它判斷這次嘗試有沒有逾時。
@@ -142,7 +125,7 @@ def _reset_attempts_if_new_day(progress: QuestProgress, *, today: date) -> None:
 
 def _count_failed_attempt_if_token_expired(progress: QuestProgress, *, now: datetime) -> None:
     """
-    上一張相遇憑證過期、任務卻還停在 in_progress → 記一次失敗。
+    上一張相遇憑證過期、任務卻還停在 in_progress → 清除當次憑證。
 
     判定用的是憑證的效期本身（900 秒），不是另外再加 15 分鐘寬限。SDD 第7.4節
     寫的「encounter_token 已過期超過15分鐘」，指的就是「這張 15 分鐘的憑證已經
@@ -158,7 +141,6 @@ def _count_failed_attempt_if_token_expired(progress: QuestProgress, *, now: date
         issued_at = issued_at.replace(tzinfo=timezone.utc)
 
     if now - issued_at > timedelta(seconds=ENCOUNTER_TOKEN_EXPIRE_SECONDS):
-        progress.attempts_today += 1
         progress.current_token_issued_at = None
 
 

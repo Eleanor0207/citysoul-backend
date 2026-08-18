@@ -150,16 +150,15 @@ class QuestProgress(Base):
     ——WBS-API 決策4 限制的是「身體與腦袋跨 schema 不建外鍵」，不是身體自己
     的表之間。
 
-    `status` 只有 `in_progress` / `completed` 兩個值。回應中出現的
-    `daily_limit_reached` **不是**資料庫狀態，是「今天嘗試次數已用完」這個
-    查詢當下才算得出來的結果——它跟日期有關，存進資料庫隔天就是錯的。
+    `status` 只有 `in_progress` / `completed` 兩個值。`attempts_today` 與
+    `attempts_date` 保留作為觀測資料，不參與任務是否可挑戰的判定。
 
     主鍵是代理鍵 `progress_id`，唯一性靠兩個 partial unique index（0003）：
     `issued_date IS NULL` 的一次性任務唯一於 `(player_id, quest_id)`；
     每日任務唯一於 `(player_id, quest_id, issued_date)`，不同天各一列。
 
     `issued_date`（哪一天發的）跟 `attempts_date`（哪一天試的）是兩件事，
-    兩個都要。前者決定唯一性與過期，後者決定 `daily_limit_reached`。
+    兩個都要。前者決定唯一性與過期，後者標示觀測值所屬的日期。
     """
 
     __tablename__ = "quest_progress"

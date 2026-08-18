@@ -507,8 +507,7 @@
           "status": {
             "enum": [
               "in_progress",
-              "completed",
-              "daily_limit_reached"
+              "completed"
             ],
             "title": "Status",
             "type": "string"
@@ -537,8 +536,7 @@
           "status": {
             "enum": [
               "in_progress",
-              "completed",
-              "daily_limit_reached"
+              "completed"
             ],
             "title": "Status",
             "type": "string"
@@ -1192,7 +1190,7 @@
     },
     "/api/v1/quests/daily": {
       "get": {
-        "description": "S8．任務列表查詢（#33）。\n\n⚠️ **唯讀，不推進狀態機。** 跨日的 `attempts_today` 歸零是**算出來的**，\n不寫回資料庫——查詢端點如果順手做了狀態轉移，玩家只要打開任務列表就等於\n推進了一次任務，那是很難追查的副作用。真正的歸零由下一次 `/summon` 寫入。\n\n`daily_limit_reached` 同理：它取決於「今天」是哪一天，存進資料庫隔天就是\n錯的，所以只存在於回應。",
+        "description": "S8．任務列表查詢（#33）。\n\n⚠️ **唯讀，不推進狀態機。** 跨日的 `attempts_today` 歸零是**算出來的**，\n不寫回資料庫——查詢端點如果順手做了狀態轉移，玩家只要打開任務列表就等於\n推進了一次任務，那是很難追查的副作用。真正的歸零由下一次 `/summon` 寫入。\n\n`attempts_today` 仍以查詢當下的 `attempts_date` 計算跨日呈現值，但不會限制\n任務挑戰，也不會產生額外的 `quest.status`。",
         "operationId": "get_daily_quests_api_v1_quests_daily_get",
         "responses": {
           "200": {

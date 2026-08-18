@@ -132,13 +132,13 @@ def test_spirit_id_is_derived_from_quest_id(client, db_session, spirit, player):
     assert "spirit_id" not in {c.name for c in models.QuestProgress.__table__.columns}
 
 
-def test_daily_limit_reached_is_computed_not_stored(client, db_session, spirit, player):
+def test_high_attempt_count_is_observation_only(client, db_session, spirit, player):
     """
-    🔒 AC：`attempts_today=3` 時回應是 `daily_limit_reached`，但**資料庫仍是
-    `in_progress`**。
+    🔒 AC21.2：`attempts_today=3` 時回應仍是 `in_progress`，資料庫也仍是
+    `in_progress`。
 
     這條釘住「回應狀態 ≠ 資料庫狀態」的分界（#15 建立的規則）：
-    `daily_limit_reached` 取決於「今天」是哪一天，存進資料庫隔天就是錯的。
+    attempts_today 是觀測欄位，不是另一個狀態真相。
 
     AC 指定要做 mutation 驗證的其中一條。
     """
@@ -147,7 +147,8 @@ def test_daily_limit_reached_is_computed_not_stored(client, db_session, spirit, 
 
     body = client.get("/api/v1/quests/daily", headers=_auth(sess)).json()
 
-    assert body["quests"][0]["status"] == "daily_limit_reached"
+    assert body["quests"][0]["status"] == "in_progress"
+    assert body["quests"][0]["attempts_today"] == 3
 
     db_session.expire_all()
     assert db_session.query(models.QuestProgress).filter_by(progress_id=row.progress_id).one().status == "in_progress"

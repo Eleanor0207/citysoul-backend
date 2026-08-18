@@ -16,9 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from app.modules.body import models
 from app.modules.body.encounter_tokens import ENCOUNTER_TOKEN_EXPIRE_SECONDS
 from app.modules.body.quests import (
-    MAX_DAILY_ATTEMPTS,
     STATUS_COMPLETED,
-    STATUS_DAILY_LIMIT_REACHED,
     STATUS_IN_PROGRESS,
     TAIPEI,
     evaluate_on_summon,
@@ -121,8 +119,8 @@ def test_first_summon_creates_in_progress_quest(db_session, player, spirit):
 
 # ── 失敗判定 ───────────────────────────────────────────────────────────
 
-def test_expired_token_counts_as_failed_attempt(db_session, player, spirit):
-    """憑證過期、任務仍 in_progress → 下一次召喚記一次失敗。"""
+def test_expired_token_does_not_count_as_failed_attempt(db_session, player, spirit):
+    """憑證過期只清除舊憑證，不增加觀測用的失敗次數。"""
     player_id, _ = player
     start = datetime.now(timezone.utc)
 
@@ -131,8 +129,8 @@ def test_expired_token_counts_as_failed_attempt(db_session, player, spirit):
         db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=start + _EXPIRED
     )
 
-    assert state.attempts_today == 1
-    assert state.status == STATUS_IN_PROGRESS  # 還有次數，可以重新挑戰
+    assert state.attempts_today == 0
+    assert state.status == STATUS_IN_PROGRESS
 
 
 def test_unexpired_token_does_not_count_as_failure(db_session, player, spirit):
@@ -173,23 +171,23 @@ def test_completed_quest_does_not_accrue_failures(db_session, player, spirit):
     assert state.status == STATUS_COMPLETED
 
 
-def test_attempts_accumulate_across_repeated_timeouts(db_session, player, spirit):
+def test_repeated_expired_tokens_do_not_accumulate_failed_attempts(db_session, player, spirit):
     player_id, _ = player
     now = datetime.now(timezone.utc)
 
     evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=now)
-    for expected in (1, 2):
+    for _ in range(5):
         now += _EXPIRED
         state = evaluate_on_summon(
             db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=now
         )
-        assert state.attempts_today == expected
+        assert state.attempts_today == 0
         assert state.status == STATUS_IN_PROGRESS
 
 
-# ── 每日上限 ───────────────────────────────────────────────────────────
+# ── 觀測欄位不限制挑戰 ─────────────────────────────────────────────────
 
-def _burn_attempts(db_session, player_id, spirit_id, start, count):
+def _summon_after_expirations(db_session, player_id, spirit_id, start, count):
     """連續讓 `count` 次嘗試逾時，回傳最後一次的時間點。"""
     now = start
     evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit_id, now=now)
@@ -199,40 +197,49 @@ def _burn_attempts(db_session, player_id, spirit_id, start, count):
     return now
 
 
-def test_third_failure_locks_out_for_the_day(db_session, player, spirit):
+def test_arbitrary_attempt_count_does_not_lock_out_for_the_day(db_session, player, spirit):
     player_id, _ = player
     start = _today_taipei_at(1)  # 台北凌晨，確保加幾次逾時不會跨過台北午夜
 
-    now = _burn_attempts(db_session, player_id, spirit.spirit_id, start, MAX_DAILY_ATTEMPTS)
+    evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=start)
+    row = _progress(db_session, player_id, spirit.spirit_id)
+    row.attempts_today = 999
+    db_session.commit()
     state = evaluate_on_summon(
-        db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=now
+        db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=start + timedelta(seconds=1)
     )
 
-    assert state.attempts_today == MAX_DAILY_ATTEMPTS
-    assert state.status == STATUS_DAILY_LIMIT_REACHED
+    assert state.attempts_today == 999
+    assert state.status == STATUS_IN_PROGRESS
 
 
-def test_locked_out_state_issues_no_new_attempt(db_session, player, spirit):
-    """鎖定當天不該再開新的嘗試——`current_token_issued_at` 不被刷新。"""
+def test_expired_attempt_issues_a_new_token(db_session, player, spirit):
+    """過期後再次召喚會開新的挑戰。"""
     player_id, _ = player
     start = _today_taipei_at(1)
 
-    now = _burn_attempts(db_session, player_id, spirit.spirit_id, start, MAX_DAILY_ATTEMPTS)
-    evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=now)
+    now = _summon_after_expirations(db_session, player_id, spirit.spirit_id, start, 1)
+    state = evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=now)
 
     row = _progress(db_session, player_id, spirit.spirit_id)
-    assert row.current_token_issued_at is None
+    assert state.attempts_today == 0
+    assert row.current_token_issued_at == now
 
 
-def test_daily_limit_reached_is_never_written_to_the_database(db_session, player, spirit):
+def test_high_attempt_count_keeps_database_status_in_progress(db_session, player, spirit):
     """
-    `daily_limit_reached` 只是查詢當下算出來的結果，存進 DB 隔天就是錯的。
+    高 attempts_today 只是觀測資料，不會改變資料庫狀態。
     """
     player_id, _ = player
     start = _today_taipei_at(1)
 
-    now = _burn_attempts(db_session, player_id, spirit.spirit_id, start, MAX_DAILY_ATTEMPTS)
-    evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=now)
+    evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=start)
+    row = _progress(db_session, player_id, spirit.spirit_id)
+    row.attempts_today = 999
+    db_session.commit()
+    evaluate_on_summon(
+        db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=start + timedelta(seconds=1)
+    )
 
     row = _progress(db_session, player_id, spirit.spirit_id)
     assert row.status == STATUS_IN_PROGRESS
@@ -242,13 +249,16 @@ def test_daily_limit_reached_is_never_written_to_the_database(db_session, player
 
 def test_attempts_reset_after_taipei_midnight(db_session, player, spirit):
     """
-    昨天用完 3 次被鎖定，今天（台北時間）再挑戰 → 次數歸零、可重新挑戰。
+    昨天的觀測值在今天（台北時間）重新計算為 0，且可重新挑戰。
     """
     player_id, _ = player
     yesterday = _today_taipei_at(1) - timedelta(days=1)
 
-    _burn_attempts(db_session, player_id, spirit.spirit_id, yesterday, MAX_DAILY_ATTEMPTS)
-    assert _progress(db_session, player_id, spirit.spirit_id).attempts_today == MAX_DAILY_ATTEMPTS
+    evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=yesterday)
+    row = _progress(db_session, player_id, spirit.spirit_id)
+    row.attempts_today = 3
+    db_session.commit()
+    assert row.attempts_today == 3
 
     today = datetime.now(timezone.utc)
     state = evaluate_on_summon(
@@ -264,12 +274,10 @@ def test_day_boundary_is_taipei_midnight_not_utc(db_session, player, spirit):
     """
     UTC 與台北差 8 小時，兩者的「今天」在一天之中有 8 小時是不同的日期。
 
-    先在台北 8/4 晚上用掉次數，再在台北 8/5 早上 7 點挑戰：以台北算已經跨日
+    先在台北 8/4 晚上記錄觀測值，再在台北 8/5 早上 7 點挑戰：以台北算已經跨日
     該重置；若誤用 UTC 算，兩個時間點都還落在 UTC 的 8/4，就不會重置。
 
-    起始時間刻意選 20:00 而不是接近午夜——`_burn_attempts` 本身要花掉三段
-    15 分鐘，從 23:30 開始會在**製造測試前提的過程中**就跨過午夜，那樣測到的
-    就不是我們想測的那件事了（第一版就是這樣寫，跑出來才發現）。
+    起始時間刻意選 20:00，讓日期邊界的前提清楚且穩定。
     """
     player_id, _ = player
 
@@ -280,7 +288,10 @@ def test_day_boundary_is_taipei_midnight_not_utc(db_session, player, spirit):
     assert late_yesterday.astimezone(timezone.utc).date() == early_today.astimezone(timezone.utc).date()
     assert taipei_today(late_yesterday) != taipei_today(early_today)
 
-    _burn_attempts(db_session, player_id, spirit.spirit_id, late_yesterday, MAX_DAILY_ATTEMPTS)
+    evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=late_yesterday)
+    row = _progress(db_session, player_id, spirit.spirit_id)
+    row.attempts_today = 3
+    db_session.commit()
     state = evaluate_on_summon(
         db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=early_today
     )
@@ -306,7 +317,10 @@ def test_attempts_are_per_spirit(db_session, player, spirit, client):
 
     try:
         start = _today_taipei_at(1)
-        _burn_attempts(db_session, player_id, spirit.spirit_id, start, MAX_DAILY_ATTEMPTS)
+        evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=start)
+        row = _progress(db_session, player_id, spirit.spirit_id)
+        row.attempts_today = 999
+        db_session.commit()
 
         state = evaluate_on_summon(
             db_session, player_id=player_id, spirit_id=other.spirit_id, now=start
@@ -341,24 +355,27 @@ def test_summon_persists_quest_progress(client, player, spirit, db_session):
     assert _progress(db_session, player_id, spirit.spirit_id) is not None
 
 
-def test_summon_still_issues_token_when_daily_limit_reached(
+def test_summon_issues_token_when_attempt_count_is_high(
     client, player, spirit, db_session
 ):
     """
-    AC：次數用完時「在場驗證仍可通過（玩家可對話）」。
-    encounter_token 照發，只有任務被鎖住。
+    AC21.2：高 attempts_today 不會阻止召喚或任務挑戰。
+    encounter_token 照發，狀態仍是 in_progress。
     """
     player_id, token = player
     start = _today_taipei_at(1)
-    _burn_attempts(db_session, player_id, spirit.spirit_id, start, MAX_DAILY_ATTEMPTS)
+    evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=start)
+    row = _progress(db_session, player_id, spirit.spirit_id)
+    row.attempts_today = 999
+    db_session.commit()
 
     resp = _summon(client, token, spirit)
 
     assert resp.status_code == 200
     body = resp.json()
     assert body["encounter_token"]
-    assert body["quest"]["status"] == STATUS_DAILY_LIMIT_REACHED
-    assert body["quest"]["attempts_today"] == MAX_DAILY_ATTEMPTS
+    assert body["quest"]["status"] == STATUS_IN_PROGRESS
+    assert body["quest"]["attempts_today"] == 999
 
 
 def test_onetime_uniqueness_survives_the_surrogate_key(db_session, player, spirit):

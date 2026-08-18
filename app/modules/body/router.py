@@ -834,8 +834,8 @@ def get_daily_quests(
     不寫回資料庫——查詢端點如果順手做了狀態轉移，玩家只要打開任務列表就等於
     推進了一次任務，那是很難追查的副作用。真正的歸零由下一次 `/summon` 寫入。
 
-    `daily_limit_reached` 同理：它取決於「今天」是哪一天，存進資料庫隔天就是
-    錯的，所以只存在於回應。
+    `attempts_today` 仍以查詢當下的 `attempts_date` 計算跨日呈現值，但不會限制
+    任務挑戰，也不會產生額外的 `quest.status`。
     """
     return schemas.QuestsDailyResponse(
         quests=[schemas.QuestListItem(**q) for q in queries.daily_quests(db, player_id=player_id)]
