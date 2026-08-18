@@ -132,7 +132,7 @@
         "type": "object"
       },
       "DailyEventResponse": {
-        "description": "`GET /api/v1/spirits/{placeId}/daily-event` 的回應（S10／#26）。\n\n**公開世界狀態，不需要任何 token。**\n\n`is_fallback` 為 true 有兩種可能：內容是人工預寫保底，或是回退到了前一天的\n快取。客戶端**不需要**據此改變呈現——玩家看到的都該是一段正常的敘事。\n它存在是為了讓我們觀察排程的健康度。",
+        "description": "`GET /api/v1/spirits/{placeId}/daily-event` 的回應（S10／#26）。\n\n**公開世界狀態，不需要任何 token。**\n\n`is_fallback` 為 true 有兩種可能：內容是人工預寫保底，或是回退到了前一天的\n快取。客戶端**不需要**據此改變呈現——玩家看到的都該是一段正常的敘事。\n它存在是為了讓我們觀察排程的健康度。\n\n`official_event` 為 `None` 是**常態**：大多數地標大多數日子沒有展覽。客戶端\n要把整張卡片隱藏起來，而不是畫一張空卡。\n\n⚠️ 它是**跟著那一天的快取一起存下來的快照**，不是讀取時現查的。保底回退到\n昨天時拿到的是昨天那場活動——與昨天生成的敘事一致。現查的話兩者會互相矛盾，\n而且沒有任何錯誤訊息。",
         "properties": {
           "is_fallback": {
             "default": false,
@@ -142,6 +142,16 @@
           "narrative_text": {
             "title": "Narrative Text",
             "type": "string"
+          },
+          "official_event": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OfficialEvent"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "sources": {
             "items": {
@@ -441,6 +451,71 @@
           }
         },
         "title": "MemorySummaryResponse",
+        "type": "object"
+      },
+      "OfficialEvent": {
+        "description": "當日情境底下那張「活動卡」（A.L. 2026-08-18）。\n\n來源是 `landmark_events`：文化部 iCulture 開放資料抓進來、經人工審核放行的\n地標官方公開活動，也就是 SDD 白名單第二類。\n\n## 為什麼卡片跟敘事並存\n\nB9 的敘事是靈魂的第一人稱口氣，prompt 明寫「不要重複條目原文」——那讀起來\n對，但玩家沒辦法從中知道展覽叫什麼、展到哪天。卡片補上那些**可行動的事實**，\n敘事負責語氣，兩者分工。\n\n## ⚠️ 沒有 summary\n\n活動簡介只餵 B9 的 prompt，不給玩家看。多帶一個沒有人顯示的欄位，只會讓\n下一個人以為它該顯示。\n\n## source_label 由後端給，客戶端照抄\n\n政府資料開放授權條款第 1 版要求標示出處，**這不是可選項**。寫在後端是因為\n換資料源或條款改版不該要我們發一版 App。",
+        "properties": {
+          "end_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Date"
+          },
+          "source_label": {
+            "default": "",
+            "title": "Source Label",
+            "type": "string"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Date"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "venue_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Venue Name"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "title": "OfficialEvent",
         "type": "object"
       },
       "PlayerCreateRequest": {

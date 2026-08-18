@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -293,6 +293,38 @@ class QuestCompleteResponse(BaseModel):
     newly_unlocked_stages: list[int] = Field(default_factory=list)
 
 
+class OfficialEvent(BaseModel):
+    """
+    當日情境底下那張「活動卡」（A.L. 2026-08-18）。
+
+    來源是 `landmark_events`：文化部 iCulture 開放資料抓進來、經人工審核放行的
+    地標官方公開活動，也就是 SDD 白名單第二類。
+
+    ## 為什麼卡片跟敘事並存
+
+    B9 的敘事是靈魂的第一人稱口氣，prompt 明寫「不要重複條目原文」——那讀起來
+    對，但玩家沒辦法從中知道展覽叫什麼、展到哪天。卡片補上那些**可行動的事實**，
+    敘事負責語氣，兩者分工。
+
+    ## ⚠️ 沒有 summary
+
+    活動簡介只餵 B9 的 prompt，不給玩家看。多帶一個沒有人顯示的欄位，只會讓
+    下一個人以為它該顯示。
+
+    ## source_label 由後端給，客戶端照抄
+
+    政府資料開放授權條款第 1 版要求標示出處，**這不是可選項**。寫在後端是因為
+    換資料源或條款改版不該要我們發一版 App。
+    """
+
+    title: str
+    venue_name: str | None = None
+    start_date: date | None = None
+    end_date: date | None = None
+    source_url: str | None = None
+    source_label: str = ""
+
+
 class DailyEventResponse(BaseModel):
     """
     `GET /api/v1/spirits/{placeId}/daily-event` 的回應（S10／#26）。
@@ -302,11 +334,19 @@ class DailyEventResponse(BaseModel):
     `is_fallback` 為 true 有兩種可能：內容是人工預寫保底，或是回退到了前一天的
     快取。客戶端**不需要**據此改變呈現——玩家看到的都該是一段正常的敘事。
     它存在是為了讓我們觀察排程的健康度。
+
+    `official_event` 為 `None` 是**常態**：大多數地標大多數日子沒有展覽。客戶端
+    要把整張卡片隱藏起來，而不是畫一張空卡。
+
+    ⚠️ 它是**跟著那一天的快取一起存下來的快照**，不是讀取時現查的。保底回退到
+    昨天時拿到的是昨天那場活動——與昨天生成的敘事一致。現查的話兩者會互相矛盾，
+    而且沒有任何錯誤訊息。
     """
 
     narrative_text: str
     is_fallback: bool = False
     sources: list[str] = Field(default_factory=list)
+    official_event: OfficialEvent | None = None
 
 
 class LandmarkPhotoResponse(BaseModel):

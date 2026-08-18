@@ -1,7 +1,8 @@
 """
 身體模組資料表：players、spirits。
 
-`daily_event_cache` 已於 0008 建立（S10／#26）。`push_subscriptions` 仍未建，
+`daily_event_cache` 已於 0008 建立（S10／#26），`landmark_events` 於 0022
+——後者是前者的內容來源（B9 白名單第二類）。`push_subscriptions` 仍未建，
 排在 S11（#39）——不要因為「順手」提早建一張還沒有人寫入的表。
 
 刻意不存在的表：任何形式的「玩家移動軌跡 / 位置歷史」表。
@@ -353,6 +354,61 @@ class DailyEventCache(Base):
     # 給清理工作用的訊號，**不是讀取時的過濾條件**：保底策略是「今天沒有就回
     # 昨天」，所以過期的內容仍然有用——它比空畫面好。
     expires_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class LandmarkEvent(Base):
+    """
+    地標的官方公開活動（0022）。B9 白名單第二類 `official_events` 的來源。
+
+    由 `scripts/fetch_landmark_events.py` 從文化部 iCulture 開放資料抓進來，
+    人工審核後由 `scripts/refresh_daily_events.py` 餵給 S10 的排程。
+
+    ## 🔒 `active` 預設 false，只有 `landmark_events_service.approve()` 會 flip
+
+    跟 `brain.districts`（0018）與 `brain.character_personas` 同一個慣例：
+    **沒有任何自動路徑會放行內容**。抓取腳本只寫內容，不碰審核狀態。
+
+    理由不是不信任 iCulture（政府開放資料、場館自報，符合 SDD 白名單第二類），
+    而是我們沒辦法事先知道抓回來的東西長什麼樣——場館報錯期程、活動性質跟地標
+    調性不合、或單純是測試資料。審核閘是這些情況唯一的攔截點。
+
+    ## `content_hash` 讓「內容變了就退回未審核」成立
+
+    重抓時內容有變 → `active` 打回 false、簽名清空。哪些欄位算內容只寫在
+    `landmark_events.content_fingerprint()` 一個地方（見 0022 的 docstring）。
+
+    ## ⚠️ 沒有座標欄位
+
+    場館經緯度只在匯入時用來比對地標，比對完就丟。留著的話下一個人會開始拿它
+    做別的事，而這張表的職責是「要推什麼內容」，不是地理資料。
+    """
+
+    __tablename__ = "landmark_events"
+
+    # `iculture:{UID}:{n}`。n 是同一個活動底下第幾個不同場地——巡迴展會有多個，
+    # 而我們是把「場館」對到地標的。序號在重跑之間必須穩定（見 `_venues()`）。
+    event_id = Column(String(160), primary_key=True)
+    spirit_id = Column(String(64), ForeignKey("spirits.spirit_id"), nullable=False)
+    title = Column(Text, nullable=False)
+    # 只餵 B9 的 prompt，**不給玩家看**。活動卡上是標題、檔期、場館、連結。
+    summary = Column(Text, nullable=True)
+    venue_name = Column(Text, nullable=True)
+    # 可為 NULL：開放資料的日期品質參差，解析不出來是常態。
+    # 「沒有結束日期就不推」那條規則在 `landmark_events.is_running_on()`，
+    # 不靠 NOT NULL 擋——擋掉的話整筆會在匯入時消失，我們就看不到有幾筆壞掉。
+    start_date = Column(Date, nullable=True)
+    end_date = Column(Date, nullable=True)
+    source = Column(String(32), nullable=False, server_default="iculture")
+    source_url = Column(Text, nullable=True)
+    content_hash = Column(String(64), nullable=False)
+    active = Column(Boolean, nullable=False, server_default="false", default=False)
+    reviewed_by = Column(String(64), nullable=True)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    fetched_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_landmark_events_lookup", "spirit_id", "active", "end_date"),
+    )
 
 
 class AvatarAsset(Base):

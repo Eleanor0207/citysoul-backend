@@ -29,6 +29,7 @@ from datetime import date, datetime, timedelta, timezone
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.modules.body import landmark_events_service
 from app.modules.body.models import DailyEventCache, Spirit
 from app.modules.body.quests import taipei_today
 from app.modules.brain.daily_event import (
@@ -68,6 +69,7 @@ def refresh_daily_event(
     *,
     place_id: str,
     inputs: DailyEventInputs | None = None,
+    official_event: dict | None = None,
     now: datetime | None = None,
 ) -> DailyEventCache:
     """
@@ -80,6 +82,18 @@ def refresh_daily_event(
     與 #32 配額的處理。
 
     `inputs` 由呼叫端提供（B9 不自己抓資料，見 `brain/daily_event.py`）。
+
+    ## `official_event` 是**跟著這一天的快取一起存下來的快照**
+
+    活動卡不在讀取時現查，理由是保底路徑：今天沒生成就回昨天的內容，而昨天的
+    敘事是從昨天那場活動生出來的。現查的話玩家會看到「昨天的敘事＋今天的活動
+    卡」，兩段文字互相矛盾而且沒有任何錯誤訊息。
+
+    存快照還有第二個好處：活動被收回放行（`revoke`）之後，已經生成的那天仍然
+    自洽——我們不會回頭竄改已經發生過的一天。
+
+    呼叫端要負責讓它跟 `inputs.official_events` 對應。要免於這種對應錯誤，用
+    `refresh_from_landmark_events()`，它兩邊都從同一筆資料組出來。
     """
     moment = _now(now)
     event_date = taipei_today(moment)
@@ -94,6 +108,11 @@ def refresh_daily_event(
         "is_fallback": content.is_fallback,
         "sources": content.sources,
     }
+    # 沒有活動時**不寫這個 key**，而不是寫 null。舊的快取列本來就沒有它，
+    # 兩種情況因此在讀取端長得一樣——`DailyEventResponse.official_event` 的
+    # 預設值同時涵蓋「這天沒活動」與「這列是加欄位之前寫的」。
+    if official_event:
+        payload["official_event"] = official_event
     expires_at = moment + timedelta(hours=CACHE_TTL_HOURS)
 
     row = DailyEventCache(
@@ -123,6 +142,52 @@ def refresh_daily_event(
         existing.expires_at = expires_at
         db.commit()
         return existing
+
+
+def refresh_from_landmark_events(
+    db: Session, client, *, place_id: str, now: datetime | None = None
+) -> DailyEventCache:
+    """
+    排程用的入口：從 `landmark_events` 取今天那場**已放行**的活動，生成當日情境。
+
+    ## 為什麼是一支新函式，而不是讓 refresh_daily_event 自己查
+
+    `refresh_daily_event(inputs=...)` 的既有語意是「呼叫端決定餵什麼」，那條
+    邊界有測試守著（`test_service_delegates_generation_to_b9`）。改成「沒給就
+    自己查」會讓那些測試的意義變得模糊，而且日後想手動補跑一個指定內容的日子
+    就得先想辦法繞過自動查詢。
+
+    分成兩支之後：這一支負責「從我們自己的表組出輸入」，那一支負責「拿到輸入
+    之後怎麼生成與存放」。**`official_events` 與 `official_event` 都從同一筆
+    資料組出來**，對應錯誤在這裡結構上不可能發生。
+
+    ## 沒有活動不是錯誤
+
+    大多數地標大多數日子沒有展覽。B9 拿到空輸入會走人工預寫保底，而那**仍然
+    要寫進快取**（見 `test_no_qualifying_input_still_caches_the_fallback`）。
+    """
+    moment = _now(now)
+    today = taipei_today(moment)
+
+    _require_spirit(db, place_id)
+
+    row = landmark_events_service.featured_event(db, spirit_id=place_id, on_date=today)
+
+    # 同一列資料的兩種形狀：prompt 要簡介，活動卡不要。兩者都從 `row` 出來，
+    # 所以「敘事講的是 A 展、卡片印的是 B 展」在結構上不可能發生。
+    inputs = DailyEventInputs(
+        official_events=[landmark_events_service.prompt_text(row)] if row else []
+    )
+    official_event = landmark_events_service.event_view(row) if row else None
+
+    return refresh_daily_event(
+        db,
+        client,
+        place_id=place_id,
+        inputs=inputs,
+        official_event=official_event,
+        now=moment,
+    )
 
 
 def get_daily_event(
