@@ -186,18 +186,33 @@ def test_summon_awards_no_resonance(client, player, spirit, db_session):
 
 # ── 未解鎖的遮蔽 ───────────────────────────────────────────────────────
 
-def test_locked_entry_leaks_neither_title_nor_image(client, player, spirit, encounter_asset):
+def test_locked_entry_has_a_title(client, player, spirit, encounter_asset):
     """
-    🔒 未解鎖時圖**不離開伺服器**。
+    未解鎖的格子**看得到名字**（A.L. 2026-08-18）。
 
-    介面定的是空欄位而不是灰階剪影。如果 API 照樣把 URL 送出去，抓一次封包就
-    看完整本圖鑑——遮蔽必須做在伺服器端，不能靠客戶端自律。
+    名字不是秘密——那些地標在地圖上本來就看得到，遮起來只會讓收藏視窗變得難懂。
     """
     payload = client.get("/api/v1/collections", headers=_auth(player["session_token"])).json()
     entry = _entry(payload, collections_service.encounter_item_id(spirit.spirit_id))
 
     assert entry["unlocked"] is False
-    assert entry["title"] is None
+    assert entry["title"] == spirit.display_name
+
+
+def test_locked_entry_never_leaks_the_image(client, player, spirit, encounter_asset):
+    """
+    🔒 未解鎖時圖**不離開伺服器**。
+
+    圖是解鎖真正換到的東西。如果 API 照樣把 URL 送出去，抓一次封包就看完整本圖鑑，
+    「要走到現場才看得到」那條就等於沒生效——遮蔽必須做在伺服器端，不能靠客戶端自律。
+
+    ⚠️ 這條跟上面那條是**一起看**的：08-18 放寬了 title，`image_url` 那一層沒有跟著
+    放行。哪天有人「順手」把兩個一起打開，紅的會是這一條。
+    """
+    payload = client.get("/api/v1/collections", headers=_auth(player["session_token"])).json()
+    entry = _entry(payload, collections_service.encounter_item_id(spirit.spirit_id))
+
+    assert entry["unlocked"] is False
     assert entry["image_url"] is None
     assert entry["acquired_at"] is None
     assert encounter_asset.cdn_url not in client.get(

@@ -45,7 +45,7 @@
         "type": "object"
       },
       "CollectionEntry": {
-        "description": "收藏視窗的一格（`GET /api/v1/collections`）。\n\n🔒 **未解鎖時 `title` 與 `image_url` 都是 `null`。** A.L. 定的介面是空欄位，\n不是灰階剪影——如果 API 照樣把圖的 URL 送出去，抓一次封包就看完了整本圖鑑，\n那條設計等於沒有生效。遮蔽做在伺服器端，不是靠客戶端自律。\n\n`source_type` 是客戶端唯一需要的分區依據：`encounter` 進 3×3 方陣，\n`arc_completion` 進下方的劇本區。**不要用 `collection_id` 的前綴去判斷**——\n那是伺服器的內部命名，改了不該要發一版客戶端。",
+        "description": "收藏視窗的一格（`GET /api/v1/collections`）。\n\n🔒 **未解鎖時有 `title`，但 `image_url` 與 `acquired_at` 是 `null`。**\n\n界線是「名字不是秘密，圖才是」：地標名玩家在地圖上本來就看得到，遮起來只會讓\n收藏視窗變得難懂；圖是解鎖真正換到的東西，照樣送出去的話抓一次封包就看完了\n整本圖鑑。遮蔽做在伺服器端，不是靠客戶端自律。\n\n`source_type` 是客戶端判斷來源的唯一依據（`encounter`＝初次相遇圖，\n`arc_completion`＝劇本完成圖）。**不要用 `collection_id` 的前綴去判斷**——\n那是伺服器的內部命名，改了不該要發一版客戶端。\n\n⚠️ 兩種來源在介面上**排在同一個方陣裡、不分區**（A.L. 2026-08-18）。所以\n`entries` 的順序就是畫面的順序，客戶端不會再排一次——不要為了「整理一下」\n去改這裡的排序。",
         "properties": {
           "acquired_at": {
             "anyOf": [
@@ -1067,7 +1067,7 @@
     },
     "/api/v1/collections": {
       "get": {
-        "description": "收藏視窗（圖鑑）。\n\n回**完整清單**，不是只有已解鎖的那些——客戶端要靠總格數才畫得出空欄位。\n分區依 `source_type`：`encounter` 進 3×3 方陣，`arc_completion` 進下方劇本區。\n\n🔒 **未解鎖的格子不帶 `title` 與 `image_url`。** 介面定的是空欄位而不是灰階\n剪影，所以圖根本不離開伺服器——否則抓一次封包就看完整本圖鑑，那條設計等於\n沒有生效。遮蔽做在 `collections_service._entry()`，不是靠客戶端自律。\n\n沒有 404：沒有任何地標時回空陣列，跟 `GET /spirits` 同一個立場。",
+        "description": "收藏視窗（圖鑑）。\n\n回**完整清單**，不是只有已解鎖的那些——客戶端要靠總格數才畫得出空欄位。\n順序就是畫面的順序：先全部 `encounter`，再全部 `arc_completion`，兩種排在\n同一個方陣裡（A.L. 2026-08-18 拍板，不分區）。\n\n🔒 **未解鎖的格子有 `title`，但不帶 `image_url`。** 名字不是秘密（地圖上看得到），\n圖才是——照樣送出去的話抓一次封包就看完整本圖鑑。遮蔽做在\n`collections_service._entry()`，不是靠客戶端自律。\n\n沒有 404：沒有任何地標時回空陣列，跟 `GET /spirits` 同一個立場。",
         "operationId": "get_collections_api_v1_collections_get",
         "responses": {
           "200": {

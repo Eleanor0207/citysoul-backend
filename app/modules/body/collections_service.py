@@ -19,11 +19,16 @@
 `/summon` 對它回 404，所以它天然不出現在清單裡，也拿不到圖——不需要任何特例。
 之後補上近景文件、`is_active` 轉回 true，那一格就自己長出來。
 
-## 🔒 未解鎖的格子不回傳任何內容
+## 🔒 未解鎖的格子有名字，但沒有圖
 
-`title` 與 `image_url` 在未解鎖時一律是 `None`。這不只是「客戶端不要顯示」——
-**圖根本不會離開伺服器**。A.L. 定的介面是空欄位（不是灰階剪影），如果 API 照樣
-把 URL 送出去，任何人抓一次封包就看完了整本圖鑑，那條設計等於沒有生效。
+**`title` 一律回傳，`image_url` 與 `acquired_at` 在未解鎖時是 `None`。**
+
+界線是「名字不是秘密，圖才是」：那些地標的名字玩家在地圖上本來就看得到，遮起來
+只是讓收藏視窗變得難懂。圖不一樣——它是解鎖真正換到的東西，如果 API 照樣把 URL
+送出去，任何人抓一次封包就看完了整本圖鑑，「要走到現場才看得到」那條就等於沒生效。
+
+⚠️ 2026-08-18 的第一版連 `title` 也遮，A.L. 當天改成「名稱都顯示」。改的是**遮蔽
+範圍**，不是遮蔽這件事本身——`image_url` 那一層仍然守著，不要順手一起放行。
 
 ## 圖不存在玩家的列上
 
@@ -147,11 +152,14 @@ def list_collections(db: Session, *, player_id: uuid.UUID | str) -> list[dict]:
     回傳完整的收藏清單：所有格子的定義，加上該玩家的解鎖狀態。
 
     順序是穩定的：先全部相遇格（依 `spirit_id`），再全部劇本格（依 `arc_id`）。
-    客戶端靠 `source_type` 分成 3×3 方陣與下方的劇本區，不需要自己排序或分類。
 
-    ⚠️ **排序目前是按 id 字典序**，不是人為安排的順序。3×3 方陣裡哪一格排哪裡
-    因此是任意的（穩定，但任意）。要指定順序的話，`spirits` 得加一個 `sort_order`
-    欄位——那是一次獨立的決定，沒有跟這批一起做。
+    🔑 **這個順序就是玩家看到的順序。** 兩種來源在介面上排在同一個方陣裡、不分區
+    （A.L. 2026-08-18），客戶端拿到什麼順序就照畫、不會再排一次——所以改這裡的
+    `order_by` 等於改版面。
+
+    ⚠️ **排序目前是按 id 字典序**，不是人為安排的順序。方陣裡哪一格排哪裡因此是
+    任意的（穩定，但任意）。要指定順序的話，`spirits` 得加一個 `sort_order` 欄位
+    ——那是一次獨立的決定，沒有跟這批一起做。
     """
     unlocked = {
         item_id: acquired_at
@@ -221,26 +229,19 @@ def _entry(
     is_unlocked: bool,
 ) -> dict:
     """
-    🔒 未解鎖時把 `title` 與 `image_url` 抹成 None。
+    🔒 未解鎖時把 `image_url` 與 `acquired_at` 抹成 None。**`title` 照回。**
 
     收斂在同一個地方，是為了不讓「哪些欄位算內容」這件事散落在兩段迴圈裡——
     之後加第三種來源時，漏掉遮蔽的機會就少一次。
-    """
-    if not is_unlocked:
-        return {
-            "collection_id": collection_id,
-            "source_type": source_type,
-            "unlocked": False,
-            "title": None,
-            "image_url": None,
-            "acquired_at": None,
-        }
 
+    `acquired_at` 跟著遮不是為了保密，是因為它對未解鎖的格子**根本沒有值**；
+    回一個 None 以外的東西只會讓客戶端多一個要判斷的狀態。
+    """
     return {
         "collection_id": collection_id,
         "source_type": source_type,
-        "unlocked": True,
+        "unlocked": is_unlocked,
         "title": title,
-        "image_url": image_url,
-        "acquired_at": acquired_at,
+        "image_url": image_url if is_unlocked else None,
+        "acquired_at": acquired_at if is_unlocked else None,
     }
