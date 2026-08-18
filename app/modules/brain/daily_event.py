@@ -39,6 +39,7 @@ from datetime import date
 
 from app.modules.brain.gemini import FALLBACK_REPLY, GeminiClient
 from app.modules.brain.historical_boundary import get_historical_boundary_rules
+from app.modules.brain.prompt_builder import persona_section
 
 logger = logging.getLogger(__name__)
 
@@ -107,11 +108,20 @@ class DailyEventInputs:
 _FALLBACK_NARRATIVE = "今天沒什麼特別的。人來人往，香火照舊，跟昨天差不多——不過每天的「差不多」其實都不太一樣。"
 
 
-def build_daily_event_prompt(place_id: str, event_date: date, inputs: DailyEventInputs) -> str:
+def build_daily_event_prompt(
+    place_id: str,
+    event_date: date,
+    inputs: DailyEventInputs,
+    persona,
+) -> str:
     """
     組出生成提示。純函式，方便直接驗證「prompt 裡只有合格輸入」。
+
+    `persona` 由具備資料庫邊界的呼叫端載入；本模組只接收已載入的人格卡。
     """
     lines = [
+        persona_section(persona),
+        "",
         f"你是地標「{place_id}」的擬人化集體意識。",
         f"今天是 {event_date.isoformat()}。",
         "",
@@ -153,6 +163,7 @@ def generate_daily_event_content(
     place_id: str,
     event_date: date,
     inputs: DailyEventInputs | None = None,
+    persona,
 ) -> DailyEventContent:
     """
     生成當日情境。**永遠回傳非空內容，永遠不拋例外。**
@@ -160,15 +171,23 @@ def generate_daily_event_content(
     `inputs` 由呼叫端（S10 / #26）提供。這個模組不自己去抓任何資料——那正是
     §6.4 的模組邊界，也是「輸入來源限定」這條規則唯一守得住的方式：如果生成端
     自己會去抓資料，白名單就只是一句口號。
+
+    沒有生效中的人格卡時不呼叫模型，直接回退人工預寫台詞。
     """
     inputs = inputs or DailyEventInputs()
+
+    if persona is None:
+        logger.info("%s 沒有生效中的人格卡，使用人工預寫台詞", place_id)
+        return fallback_content(place_id, event_date)
 
     if inputs.is_empty():
         # 大多數日子都會走到這裡。這是常態，用 info 而不是 warning。
         logger.info("%s 在 %s 沒有合格輸入，使用人工預寫台詞", place_id, event_date)
         return fallback_content(place_id, event_date)
 
-    prompt = build_daily_event_prompt(place_id, event_date, inputs)
+    prompt = build_daily_event_prompt(
+        place_id, event_date, inputs, persona=persona
+    )
 
     # B1 的契約是「永遠回非空字串，失敗時回 FALLBACK_REPLY」，所以靠內容判斷
     # 是否回退，而不是 try/except——B1 不會拋例外給我們。

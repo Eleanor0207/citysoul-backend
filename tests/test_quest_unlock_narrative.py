@@ -6,6 +6,8 @@
 生成失敗的降級，以及 v2.1 §6.4 的呼叫順序硬規則。
 """
 import uuid
+from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,13 +19,57 @@ from app.modules.body.quests import STATUS_COMPLETED, quest_id_for_spirit
 from app.modules.body.resonance import apply_resonance
 from app.modules.body.router import get_gemini_client
 from app.modules.brain.gemini import FALLBACK_REPLY, FakeGeminiClient
+from app.modules.brain.models import Character, CharacterPersona, CitySoul, LandmarkSoul
+from app.modules.brain.quest_narrative import build_quest_wrapper_prompt
 
 _LAT, _LON = 25.0955, 121.5186
 _GENERATED = "（城市靈魂偏過頭）我記得你了。"
+_NOT_THIS_CHARACTER = "TEST_NOT_THIS_CHARACTER"
+_TABOO = "TEST_TABOO"
+_PERSONA = SimpleNamespace(
+    archetype="TEST_ARCHETYPE",
+    personality_traits=[],
+    values=[],
+    speech_style="TEST_SPEECH_STYLE",
+    tone_override=None,
+    not_this_character=_NOT_THIS_CHARACTER,
+    taboos=[_TABOO],
+    imagination_license="TEST_IMAGINATION_LICENSE",
+)
 
 
 @pytest.fixture
 def spirit(db_session, unique_spirit_id):
+    city_id = f"city-{unique_spirit_id}"
+    landmark_id = f"landmark-{unique_spirit_id}"
+    character_id = f"character-{unique_spirit_id}"
+    db_session.add(
+        CitySoul(city_id=city_id, name="測試城市", macro_history_summary="測試歷史")
+    )
+    db_session.add(
+        LandmarkSoul(
+            landmark_id=landmark_id,
+            city_id=city_id,
+            name="測試地標",
+            founding_facts=[],
+        )
+    )
+    db_session.flush()
+    db_session.add(Character(character_id=character_id, landmark_id=landmark_id))
+    db_session.add(
+        CharacterPersona(
+            character_id=character_id,
+            version=1,
+            archetype="TEST_ARCHETYPE",
+            speech_style="TEST_SPEECH_STYLE",
+            taboos=[_TABOO],
+            not_this_character=_NOT_THIS_CHARACTER,
+            imagination_license="TEST_IMAGINATION_LICENSE",
+            reviewed_by="test",
+            reviewed_at=datetime.now(timezone.utc),
+            active=True,
+        )
+    )
     row = models.Spirit(
         spirit_id=unique_spirit_id,
         display_name="測試地標",
@@ -31,6 +77,8 @@ def spirit(db_session, unique_spirit_id):
         longitude=_LON,
         summon_radius_meters=50,
         sense_radius_meters=150,
+        character_id=character_id,
+        landmark_id=landmark_id,
         is_active=True,
     )
     db_session.add(row)
@@ -42,6 +90,10 @@ def spirit(db_session, unique_spirit_id):
         quest_id=quest_id_for_spirit(unique_spirit_id)
     ).delete()
     db_session.delete(row)
+    db_session.query(CharacterPersona).filter_by(character_id=character_id).delete()
+    db_session.query(Character).filter_by(character_id=character_id).delete()
+    db_session.query(LandmarkSoul).filter_by(landmark_id=landmark_id).delete()
+    db_session.query(CitySoul).filter_by(city_id=city_id).delete()
     db_session.commit()
 
 
@@ -84,6 +136,15 @@ def _complete(client, quest_id, session_token, encounter_token):
     )
 
 
+def test_wrapper_prompt_injects_persona_safety_fields():
+    prompt = build_quest_wrapper_prompt(
+        "taipei_longshan", "quest-1", persona=_PERSONA
+    )
+
+    assert _NOT_THIS_CHARACTER in prompt
+    assert _TABOO in prompt
+
+
 # ── 跨門檻 ─────────────────────────────────────────────────────────────
 
 def test_crossing_a_threshold_returns_an_unlock_story(client, spirit, summoned, gemini):
@@ -98,6 +159,8 @@ def test_crossing_a_threshold_returns_an_unlock_story(client, spirit, summoned, 
     ).json()
 
     assert body["unlock_story"] == {"stage": 1, "story_text": _GENERATED}
+    assert all(_TABOO in prompt for prompt in gemini.prompts)
+    assert all(_NOT_THIS_CHARACTER in prompt for prompt in gemini.prompts)
 
 
 def test_not_crossing_a_threshold_returns_null_and_never_calls_b11(
@@ -219,7 +282,12 @@ def test_b11_generates_one_story_per_newly_unlocked_stage(gemini):
 
     client = _RecordingClient(response=_GENERATED)
 
-    stories = generate_unlock_stories(client, spirit_id="taipei_longshan", stages=[1, 2])
+    stories = generate_unlock_stories(
+        client,
+        spirit_id="taipei_longshan",
+        stages=[1, 2],
+        persona=_PERSONA,
+    )
 
     assert [s.stage for s in stories] == [1, 2]
     assert len(client.unlock_prompts) == 2

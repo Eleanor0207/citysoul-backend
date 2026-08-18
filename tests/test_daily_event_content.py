@@ -7,6 +7,7 @@ B9．當日情境內容生成（issue #20）。
 import ast
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,6 +23,18 @@ from app.modules.brain.gemini import FALLBACK_REPLY, FakeGeminiClient
 _PLACE = "taipei_longshan"
 _DATE = date(2026, 8, 6)
 _GENERATED = "今天廟埕比平常安靜，只有幾個老人坐在樹下。香還是點著的。"
+_NOT_THIS_CHARACTER = "TEST_NOT_THIS_CHARACTER"
+_TABOO = "TEST_TABOO"
+_PERSONA = SimpleNamespace(
+    archetype="TEST_ARCHETYPE",
+    personality_traits=[],
+    values=[],
+    speech_style="TEST_SPEECH_STYLE",
+    tone_override=None,
+    not_this_character=_NOT_THIS_CHARACTER,
+    taboos=[_TABOO],
+    imagination_license="TEST_IMAGINATION_LICENSE",
+)
 
 _SOURCE_PATH = (
     Path(__file__).resolve().parent.parent / "app" / "modules" / "brain" / "daily_event.py"
@@ -40,6 +53,7 @@ def test_returns_daily_event_content():
         place_id=_PLACE,
         event_date=_DATE,
         inputs=_inputs(festival="中元節"),
+        persona=_PERSONA,
     )
 
     assert isinstance(result, DailyEventContent)
@@ -59,6 +73,7 @@ def test_sources_record_which_inputs_were_used():
         place_id=_PLACE,
         event_date=_DATE,
         inputs=_inputs(festival="中元節", curated_notes=["廟方今年重修了偏殿"]),
+        persona=_PERSONA,
     )
 
     assert set(result.sources) == {"festival", "curated_notes"}
@@ -134,7 +149,10 @@ def test_source_mentions_no_banned_data_sources(banned):
 
 def test_prompt_contains_only_the_supplied_inputs():
     prompt = build_daily_event_prompt(
-        _PLACE, _DATE, _inputs(festival="中元節", official_events=["普度法會"])
+        _PLACE,
+        _DATE,
+        _inputs(festival="中元節", official_events=["普度法會"]),
+        persona=_PERSONA,
     )
 
     assert "中元節" in prompt
@@ -147,9 +165,20 @@ def test_prompt_carries_the_historical_boundary_rules():
     """當日情境同樣會講到這座地標，沒有理由讓它比一般對話寬鬆。"""
     from app.modules.brain.historical_boundary import get_historical_boundary_rules
 
-    prompt = build_daily_event_prompt(_PLACE, _DATE, _inputs(festival="中元節"))
+    prompt = build_daily_event_prompt(
+        _PLACE, _DATE, _inputs(festival="中元節"), persona=_PERSONA
+    )
 
     assert get_historical_boundary_rules() in prompt
+
+
+def test_prompt_injects_persona_safety_fields():
+    prompt = build_daily_event_prompt(
+        _PLACE, _DATE, _inputs(festival="中元節"), persona=_PERSONA
+    )
+
+    assert _NOT_THIS_CHARACTER in prompt
+    assert _TABOO in prompt
 
 
 # ── 無合格輸入 ─────────────────────────────────────────────────────────
@@ -164,7 +193,7 @@ def test_no_qualifying_input_falls_back_without_calling_the_model():
     client = FakeGeminiClient(response=_GENERATED)
 
     result = generate_daily_event_content(
-        client, place_id=_PLACE, event_date=_DATE, inputs=_inputs()
+        client, place_id=_PLACE, event_date=_DATE, inputs=_inputs(), persona=_PERSONA
     )
 
     assert result.is_fallback is True
@@ -175,7 +204,7 @@ def test_no_qualifying_input_falls_back_without_calling_the_model():
 def test_inputs_default_to_empty():
     """完全不傳 inputs 也不該炸。"""
     result = generate_daily_event_content(
-        FakeGeminiClient(), place_id=_PLACE, event_date=_DATE
+        FakeGeminiClient(), place_id=_PLACE, event_date=_DATE, persona=_PERSONA
     )
 
     assert result.is_fallback is True
@@ -186,7 +215,8 @@ def test_fallback_text_is_never_blank():
     玩家每天打開都該看到東西，「今天沒素材」不是可接受的畫面。
     """
     result = generate_daily_event_content(
-        FakeGeminiClient(), place_id=_PLACE, event_date=_DATE, inputs=_inputs()
+        FakeGeminiClient(), place_id=_PLACE, event_date=_DATE, inputs=_inputs(),
+        persona=_PERSONA,
     )
 
     assert len(result.narrative_text.strip()) > 10
@@ -198,7 +228,8 @@ def test_fallback_does_not_sound_like_a_system_message():
     平常，玩家不需要知道我們的內容管線今天是空的。
     """
     text = generate_daily_event_content(
-        FakeGeminiClient(), place_id=_PLACE, event_date=_DATE, inputs=_inputs()
+        FakeGeminiClient(), place_id=_PLACE, event_date=_DATE, inputs=_inputs(),
+        persona=_PERSONA,
     ).narrative_text
 
     for tell in ["系統", "資料", "無法", "錯誤", "尚未"]:
@@ -214,6 +245,7 @@ def test_model_failure_falls_back():
         place_id=_PLACE,
         event_date=_DATE,
         inputs=_inputs(festival="中元節"),
+        persona=_PERSONA,
     )
 
     assert result.is_fallback is True
@@ -226,6 +258,7 @@ def test_empty_model_response_falls_back():
         place_id=_PLACE,
         event_date=_DATE,
         inputs=_inputs(festival="中元節"),
+        persona=_PERSONA,
     )
 
     assert result.is_fallback is True
@@ -238,6 +271,7 @@ def test_fallback_records_no_sources():
         place_id=_PLACE,
         event_date=_DATE,
         inputs=_inputs(festival="中元節"),
+        persona=_PERSONA,
     )
 
     assert result.sources == []
@@ -311,7 +345,8 @@ def test_content_is_marked_as_pending_review():
 
 def test_review_marker_never_reaches_the_player():
     result = generate_daily_event_content(
-        FakeGeminiClient(), place_id=_PLACE, event_date=_DATE, inputs=_inputs()
+        FakeGeminiClient(), place_id=_PLACE, event_date=_DATE, inputs=_inputs(),
+        persona=_PERSONA,
     )
 
     assert CONTENT_REVIEW_STATUS not in result.narrative_text

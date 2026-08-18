@@ -3,6 +3,8 @@ B11．共鳴值解鎖敘事生成（issue #25）。
 
 純單元測試，模型以 fake 注入——**不需要 GCP 憑證、不需要資料庫**。
 """
+from types import SimpleNamespace
+
 import pytest
 
 from app.modules.brain.gemini import FALLBACK_REPLY, FakeGeminiClient
@@ -17,6 +19,18 @@ from app.modules.brain.unlock_story import (
 
 _SPIRIT = "taipei_longshan"
 _GENERATED = "（城市靈魂偏過頭）我記得你上次站在石獅子旁邊很久。"
+_NOT_THIS_CHARACTER = "TEST_NOT_THIS_CHARACTER"
+_TABOO = "TEST_TABOO"
+_PERSONA = SimpleNamespace(
+    archetype="TEST_ARCHETYPE",
+    personality_traits=[],
+    values=[],
+    speech_style="TEST_SPEECH_STYLE",
+    tone_override=None,
+    not_this_character=_NOT_THIS_CHARACTER,
+    taboos=[_TABOO],
+    imagination_license="TEST_IMAGINATION_LICENSE",
+)
 
 
 # ── 介面 ───────────────────────────────────────────────────────────────
@@ -24,7 +38,10 @@ _GENERATED = "（城市靈魂偏過頭）我記得你上次站在石獅子旁邊
 def test_returns_an_unlock_story():
     """AC：回傳 `UnlockStory`（含 `stage` 與 `story_text`）。"""
     result = generate_unlock_story(
-        FakeGeminiClient(response=_GENERATED), spirit_id=_SPIRIT, stage=1
+        FakeGeminiClient(response=_GENERATED),
+        spirit_id=_SPIRIT,
+        stage=1,
+        persona=_PERSONA,
     )
 
     assert isinstance(result, UnlockStory)
@@ -36,7 +53,7 @@ def test_returns_an_unlock_story():
 def test_the_prompt_reaches_the_model():
     client = FakeGeminiClient(response=_GENERATED)
 
-    generate_unlock_story(client, spirit_id=_SPIRIT, stage=1)
+    generate_unlock_story(client, spirit_id=_SPIRIT, stage=1, persona=_PERSONA)
 
     assert client.call_count == 1
     assert _SPIRIT in client.prompts[0]
@@ -53,7 +70,9 @@ def test_each_stage_produces_a_different_prompt():
 
     AC 指定要做 mutation 驗證的那一條。
     """
-    prompts = [build_unlock_prompt(_SPIRIT, stage) for stage in (1, 2, 3)]
+    prompts = [
+        build_unlock_prompt(_SPIRIT, stage, persona=_PERSONA) for stage in (1, 2, 3)
+    ]
 
     assert len(set(prompts)) == 3, "不同階段產生了相同的 prompt——解鎖失去意義"
 
@@ -66,9 +85,9 @@ def test_stages_are_progressive_not_paraphrases():
     說的事」、stage 3 是「你已經是我的一部分」。潤稿可以改字，但這三種關係深度
     要分得出來。
     """
-    stage_1 = build_unlock_prompt(_SPIRIT, 1)
-    stage_2 = build_unlock_prompt(_SPIRIT, 2)
-    stage_3 = build_unlock_prompt(_SPIRIT, 3)
+    stage_1 = build_unlock_prompt(_SPIRIT, 1, persona=_PERSONA)
+    stage_2 = build_unlock_prompt(_SPIRIT, 2, persona=_PERSONA)
+    stage_3 = build_unlock_prompt(_SPIRIT, 3, persona=_PERSONA)
 
     assert "第一個轉折" in stage_1
     assert "不對外人說" in stage_2
@@ -77,9 +96,16 @@ def test_stages_are_progressive_not_paraphrases():
     assert "剛認出" not in stage_3
 
 
+def test_prompt_injects_persona_safety_fields():
+    prompt = build_unlock_prompt(_SPIRIT, 1, persona=_PERSONA)
+
+    assert _NOT_THIS_CHARACTER in prompt
+    assert _TABOO in prompt
+
+
 def test_prompt_mentions_the_stage_number():
     for stage in (1, 2, 3):
-        assert str(stage) in build_unlock_prompt(_SPIRIT, stage)
+        assert str(stage) in build_unlock_prompt(_SPIRIT, stage, persona=_PERSONA)
 
 
 def test_prompt_carries_the_historical_boundary_rules():
@@ -88,12 +114,14 @@ def test_prompt_carries_the_historical_boundary_rules():
     """
     from app.modules.brain.historical_boundary import get_historical_boundary_rules
 
-    assert get_historical_boundary_rules() in build_unlock_prompt(_SPIRIT, 1)
+    assert get_historical_boundary_rules() in build_unlock_prompt(
+        _SPIRIT, 1, persona=_PERSONA
+    )
 
 
 def test_unknown_stage_falls_back_to_the_first_brief_without_raising():
     """未知階段不該讓整個任務完成流程炸掉。"""
-    assert build_unlock_prompt(_SPIRIT, 99)
+    assert build_unlock_prompt(_SPIRIT, 99, persona=_PERSONA)
 
 
 # ── 失敗回退 ───────────────────────────────────────────────────────────
@@ -106,7 +134,10 @@ def test_model_failure_falls_back_to_prewritten_text():
     判斷是否回退，而不是 try/except——B1 根本不會拋例外給我們。
     """
     result = generate_unlock_story(
-        FakeGeminiClient(response=FALLBACK_REPLY), spirit_id=_SPIRIT, stage=2
+        FakeGeminiClient(response=FALLBACK_REPLY),
+        spirit_id=_SPIRIT,
+        stage=2,
+        persona=_PERSONA,
     )
 
     assert result.is_fallback is True
@@ -115,7 +146,12 @@ def test_model_failure_falls_back_to_prewritten_text():
 
 
 def test_empty_response_falls_back():
-    result = generate_unlock_story(FakeGeminiClient(response=""), spirit_id=_SPIRIT, stage=1)
+    result = generate_unlock_story(
+        FakeGeminiClient(response=""),
+        spirit_id=_SPIRIT,
+        stage=1,
+        persona=_PERSONA,
+    )
 
     assert result.is_fallback is True
     assert result.story_text
@@ -148,7 +184,9 @@ def test_no_exception_escapes_even_if_the_client_is_broken():
         def generate(self, prompt):
             return FALLBACK_REPLY
 
-    result = generate_unlock_story(_BrokenClient(), spirit_id=_SPIRIT, stage=1)
+    result = generate_unlock_story(
+        _BrokenClient(), spirit_id=_SPIRIT, stage=1, persona=_PERSONA
+    )
 
     assert result.is_fallback is True
 
@@ -164,7 +202,9 @@ def test_multiple_stages_produce_multiple_stories():
     """
     client = FakeGeminiClient(response=_GENERATED)
 
-    stories = generate_unlock_stories(client, spirit_id=_SPIRIT, stages=[1, 2])
+    stories = generate_unlock_stories(
+        client, spirit_id=_SPIRIT, stages=[1, 2], persona=_PERSONA
+    )
 
     assert [s.stage for s in stories] == [1, 2]
     assert client.call_count == 2
@@ -173,7 +213,9 @@ def test_multiple_stages_produce_multiple_stories():
 def test_each_story_gets_its_own_prompt():
     client = FakeGeminiClient(response=_GENERATED)
 
-    generate_unlock_stories(client, spirit_id=_SPIRIT, stages=[1, 2, 3])
+    generate_unlock_stories(
+        client, spirit_id=_SPIRIT, stages=[1, 2, 3], persona=_PERSONA
+    )
 
     assert len(set(client.prompts)) == 3
 
@@ -185,7 +227,9 @@ def test_empty_stage_list_produces_nothing_and_calls_nothing():
     """
     client = FakeGeminiClient()
 
-    assert generate_unlock_stories(client, spirit_id=_SPIRIT, stages=[]) == []
+    assert generate_unlock_stories(
+        client, spirit_id=_SPIRIT, stages=[], persona=_PERSONA
+    ) == []
     assert client.call_count == 0
 
 
@@ -198,4 +242,6 @@ def test_stories_are_marked_as_pending_review():
 def test_review_marker_never_reaches_the_player():
     for stage in (1, 2, 3):
         assert STORY_REVIEW_STATUS not in fallback_story_for(stage)
-        assert STORY_REVIEW_STATUS not in build_unlock_prompt(_SPIRIT, stage)
+        assert STORY_REVIEW_STATUS not in build_unlock_prompt(
+            _SPIRIT, stage, persona=_PERSONA
+        )

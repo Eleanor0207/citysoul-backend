@@ -36,6 +36,7 @@ from app.modules.brain.daily_event import (
     fallback_content,
     generate_daily_event_content,
 )
+from app.modules.brain.loader import load_active_persona
 
 logger = logging.getLogger(__name__)
 
@@ -85,9 +86,14 @@ def refresh_daily_event(
     event_date = taipei_today(moment)
 
     _require_spirit(db, place_id)
+    persona = load_active_persona(db, place_id)
 
     content = generate_daily_event_content(
-        client, place_id=place_id, event_date=event_date, inputs=inputs
+        client,
+        place_id=place_id,
+        event_date=event_date,
+        inputs=inputs,
+        persona=persona,
     )
     payload = {
         "narrative_text": content.narrative_text,

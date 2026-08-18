@@ -22,6 +22,7 @@ import logging
 
 from app.modules.brain.gemini import FALLBACK_REPLY, GeminiClient
 from app.modules.brain.historical_boundary import get_historical_boundary_rules
+from app.modules.brain.prompt_builder import persona_section
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +36,10 @@ WRAPPER_REVIEW_STATUS = "PENDING_NARRATIVE_REVIEW"
 _FALLBACK_WRAPPER = "你做到了。這種事我看多了，但每一次還是不太一樣。"
 
 
-def build_quest_wrapper_prompt(spirit_id: str, quest_id: str) -> str:
+def build_quest_wrapper_prompt(spirit_id: str, quest_id: str, persona) -> str:
+    """組出包含共用人格區段的任務完成包裝提示。"""
     return (
+        f"{persona_section(persona)}\n\n"
         f"你是地標「{spirit_id}」的擬人化集體意識。\n"
         f"一位玩家剛完成了與你有關的一件小任務（{quest_id}）。\n\n"
         f"{get_historical_boundary_rules()}\n\n"
@@ -46,15 +49,23 @@ def build_quest_wrapper_prompt(spirit_id: str, quest_id: str) -> str:
 
 
 def generate_quest_wrapper(
-    client: GeminiClient, *, spirit_id: str, quest_id: str
+    client: GeminiClient, *, spirit_id: str, quest_id: str, persona
 ) -> str:
     """
     生成任務完成的包裝台詞。**永遠回傳非空字串，永遠不拋例外。**
 
     B1 的契約是「永遠回非空字串，失敗時回 `FALLBACK_REPLY`」，所以這裡靠內容
     判斷是否回退，而不是 try/except——B1 不會拋例外給我們。
+
+    沒有生效中的人格卡時不呼叫模型，直接回退人工預寫台詞。
     """
-    text = client.generate(build_quest_wrapper_prompt(spirit_id, quest_id))
+    if persona is None:
+        logger.info("任務 %s 沒有生效中的人格卡，使用人工預寫台詞", quest_id)
+        return _FALLBACK_WRAPPER
+
+    text = client.generate(
+        build_quest_wrapper_prompt(spirit_id, quest_id, persona=persona)
+    )
 
     if not text or text == FALLBACK_REPLY:
         logger.info("任務包裝台詞生成失敗，回退人工預寫（%s）", quest_id)

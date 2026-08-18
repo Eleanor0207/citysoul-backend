@@ -20,6 +20,7 @@ from app.modules.body.daily_event_service import (
 from app.modules.body.quests import taipei_today
 from app.modules.brain.daily_event import DailyEventInputs
 from app.modules.brain.gemini import FakeGeminiClient
+from app.modules.brain.models import Character, CharacterPersona, CitySoul, LandmarkSoul
 
 _LAT, _LON = 25.0373983, 121.4997318
 _GENERATED = "今天廟埕比平常安靜，只有幾個老人坐在樹下。"
@@ -32,6 +33,36 @@ _TAIPEI_TODAY_0700 = datetime(2026, 3, 10, 23, 0, tzinfo=timezone.utc)  # 台北
 
 @pytest.fixture
 def spirit(db_session, unique_spirit_id):
+    city_id = f"city-{unique_spirit_id}"
+    landmark_id = f"landmark-{unique_spirit_id}"
+    character_id = f"character-{unique_spirit_id}"
+    db_session.add(
+        CitySoul(city_id=city_id, name="測試城市", macro_history_summary="測試歷史")
+    )
+    db_session.add(
+        LandmarkSoul(
+            landmark_id=landmark_id,
+            city_id=city_id,
+            name="測試地標",
+            founding_facts=[],
+        )
+    )
+    db_session.flush()
+    db_session.add(Character(character_id=character_id, landmark_id=landmark_id))
+    db_session.add(
+        CharacterPersona(
+            character_id=character_id,
+            version=1,
+            archetype="TEST_ARCHETYPE",
+            speech_style="TEST_SPEECH_STYLE",
+            taboos=["TEST_TABOO"],
+            not_this_character="TEST_NOT_THIS_CHARACTER",
+            imagination_license="TEST_IMAGINATION_LICENSE",
+            reviewed_by="test",
+            reviewed_at=datetime.now(timezone.utc),
+            active=True,
+        )
+    )
     row = models.Spirit(
         spirit_id=unique_spirit_id,
         display_name="測試地標",
@@ -39,6 +70,8 @@ def spirit(db_session, unique_spirit_id):
         longitude=_LON,
         summon_radius_meters=50,
         sense_radius_meters=150,
+        character_id=character_id,
+        landmark_id=landmark_id,
         is_active=True,
     )
     db_session.add(row)
@@ -46,6 +79,10 @@ def spirit(db_session, unique_spirit_id):
     yield row
     db_session.query(models.DailyEventCache).filter_by(place_id=unique_spirit_id).delete()
     db_session.delete(row)
+    db_session.query(CharacterPersona).filter_by(character_id=character_id).delete()
+    db_session.query(Character).filter_by(character_id=character_id).delete()
+    db_session.query(LandmarkSoul).filter_by(landmark_id=landmark_id).delete()
+    db_session.query(CitySoul).filter_by(city_id=city_id).delete()
     db_session.commit()
 
 
@@ -280,6 +317,8 @@ def test_service_delegates_generation_to_b9(db_session, spirit):
 
     assert brain.call_count == 1
     assert "中元節" in brain.prompts[0]
+    assert "TEST_TABOO" in brain.prompts[0]
+    assert "TEST_NOT_THIS_CHARACTER" in brain.prompts[0]
 
 
 def test_no_qualifying_input_still_caches_the_fallback(db_session, spirit, brain):

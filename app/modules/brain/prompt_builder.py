@@ -117,7 +117,7 @@ class Prompt:
         return f"{self.system_instruction}\n\n---\n\n{self.user_turn}"
 
 
-def _persona_section(persona) -> str:
+def persona_section(persona) -> str:
     """
     第 1 段：人格。
 
@@ -329,7 +329,7 @@ def build_system_instruction(persona, landmark=None, district=None) -> str:
     B5 的規則已經把人格自己的 `imagination_license` 疊進去了，所以這裡不需要、
     也不應該再列一次。
     """
-    sections = [_persona_section(persona)]
+    sections = [persona_section(persona)]
 
     district_section = _district_section(district)
     if district_section:

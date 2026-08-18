@@ -29,6 +29,7 @@ from dataclasses import dataclass
 
 from app.modules.brain.gemini import FALLBACK_REPLY, GeminiClient
 from app.modules.brain.historical_boundary import get_historical_boundary_rules
+from app.modules.brain.prompt_builder import persona_section
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,7 @@ def fallback_story_for(stage: int) -> str:
     return _FALLBACK_STORIES.get(stage, _DEFAULT_FALLBACK)
 
 
-def build_unlock_prompt(spirit_id: str, stage: int) -> str:
+def build_unlock_prompt(spirit_id: str, stage: int, persona) -> str:
     """
     組出該階段的生成提示。
 
@@ -104,10 +105,13 @@ def build_unlock_prompt(spirit_id: str, stage: int) -> str:
 
     史實邊界規則（B5）一併注入：解鎖故事同樣會講到這座地標的過去，沒有理由讓它
     比一般對話寬鬆。
+
+    `persona` 由具備資料庫邊界的呼叫端載入；本模組只接收已載入的人格卡。
     """
     brief = _STAGE_BRIEFS.get(stage, _STAGE_BRIEFS[1])
 
     return (
+        f"{persona_section(persona)}\n\n"
         f"你是地標「{spirit_id}」的擬人化集體意識。\n"
         f"玩家與你的共鳴值剛跨過第 {stage} 個階段。\n\n"
         f"{brief}\n\n"
@@ -117,7 +121,7 @@ def build_unlock_prompt(spirit_id: str, stage: int) -> str:
 
 
 def generate_unlock_story(
-    client: GeminiClient, *, spirit_id: str, stage: int
+    client: GeminiClient, *, spirit_id: str, stage: int, persona
 ) -> UnlockStory:
     """
     生成單一階段的解鎖敘事。**永遠回傳結果，永遠不拋例外。**
@@ -127,7 +131,13 @@ def generate_unlock_story(
     生成內容是個人化的。要做個人化（例如帶入該玩家的長期記憶）時，那是一次
     明確的功能決定，不該靠一個早就悄悄放在簽章裡的參數。
     """
-    prompt = build_unlock_prompt(spirit_id, stage)
+    if persona is None:
+        logger.info("B11 spirit %s 沒有生效中的人格卡，使用人工預寫台詞", spirit_id)
+        return UnlockStory(
+            stage=stage, story_text=fallback_story_for(stage), is_fallback=True
+        )
+
+    prompt = build_unlock_prompt(spirit_id, stage, persona=persona)
 
     # B1 的契約是「永遠回非空字串，失敗時回 FALLBACK_REPLY」，所以這裡靠內容
     # 判斷是否回退，而不是 try/except——B1 根本不會拋例外給我們。
@@ -141,7 +151,7 @@ def generate_unlock_story(
 
 
 def generate_unlock_stories(
-    client: GeminiClient, *, spirit_id: str, stages: list[int]
+    client: GeminiClient, *, spirit_id: str, stages: list[int], persona
 ) -> list[UnlockStory]:
     """
     對每個新解鎖的階段各生成一段。
@@ -151,4 +161,9 @@ def generate_unlock_stories(
     只取最後一個會讓中間那段靜默消失——沒有例外、沒有 log，玩家只是永遠看不到
     那一段。
     """
-    return [generate_unlock_story(client, spirit_id=spirit_id, stage=s) for s in stages]
+    return [
+        generate_unlock_story(
+            client, spirit_id=spirit_id, stage=s, persona=persona
+        )
+        for s in stages
+    ]

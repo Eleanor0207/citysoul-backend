@@ -47,6 +47,7 @@ from app.modules.brain.landmark_recognition import (
     recognize_landmark,
 )
 from app.modules.brain.greetings import match_canned_greeting
+from app.modules.brain.loader import load_active_persona
 from app.modules.brain.prompt_builder import build_prompt
 from app.modules.brain.quest_narrative import generate_quest_wrapper
 from app.modules.brain.unlock_story import generate_unlock_stories
@@ -530,7 +531,6 @@ def complete_quest_endpoint(
         source_id=quest_id,
         amount=AMOUNT_QUEST,
     )
-
     # ── 到這裡為止，身體的表全部寫完了 ─────────────────────────────
     #
     # 🔒 v2.1 §6.4 硬規則：**先寫完自己的表、再呼叫腦袋**，不可顛倒。
@@ -549,15 +549,24 @@ def complete_quest_endpoint(
     # 換句話說：契約被違反時，付出代價的是玩家的信任，不是我們的 log。
     # 敘事只是包裝，包裝失敗不能讓進度看起來像消失了。
     try:
+        persona = load_active_persona(db, spirit_id)
         # 沒跨門檻就不呼叫 B11。這是最常見的情況，每次白呼叫一次的成本很可觀。
         stories = generate_unlock_stories(
-            gemini, spirit_id=spirit_id, stages=result.newly_unlocked_stages
+            gemini,
+            spirit_id=spirit_id,
+            stages=result.newly_unlocked_stages,
+            persona=persona,
         )
         unlock_stories = [
             schemas.UnlockStoryResponse(stage=s.stage, story_text=s.story_text)
             for s in stories
         ]
-        wrapper_text = generate_quest_wrapper(gemini, spirit_id=spirit_id, quest_id=quest_id)
+        wrapper_text = generate_quest_wrapper(
+            gemini,
+            spirit_id=spirit_id,
+            quest_id=quest_id,
+            persona=persona,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "任務敘事生成失敗，任務仍已完成並入帳（%s）：%s: %s",
