@@ -192,6 +192,7 @@ class DialogueResponse(BaseModel):
     # 少了結尾——完整性由 prompt 的長度指示與 `gemini_max_output_tokens` 負責。
     segments: list[str] = []
     tts: TTSResult | None = None
+    suggested_questions: list[str] = Field(default_factory=list)
 
 
 class SpiritOrientation(BaseModel):
@@ -320,6 +321,13 @@ class DailyEventResponse(BaseModel):
     narrative_text: str
     is_fallback: bool = False
     sources: list[str] = Field(default_factory=list)
+
+
+class SuggestedQuestionsResponse(BaseModel):
+    """B14 questions available before the first dialogue turn."""
+
+    questions: list[str] = Field(default_factory=list)
+    is_fallback: bool = False
 
 
 class LandmarkPhotoResponse(BaseModel):

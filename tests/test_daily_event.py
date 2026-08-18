@@ -17,6 +17,8 @@ from app.modules.body.daily_event_service import (
     get_daily_event,
     refresh_daily_event,
 )
+from app.modules.body.guided_questions_service import get_suggested_questions
+from app.modules.body.encounter_tokens import ENCOUNTER_TOKEN_HEADER, issue_encounter_token
 from app.modules.body.quests import taipei_today
 from app.modules.brain.daily_event import DailyEventInputs
 from app.modules.brain.gemini import FakeGeminiClient
@@ -58,6 +60,7 @@ def spirit(db_session, unique_spirit_id):
             taboos=["TEST_TABOO"],
             not_this_character="TEST_NOT_THIS_CHARACTER",
             imagination_license="TEST_IMAGINATION_LICENSE",
+            quest_themes=["TEST_THEME"],
             reviewed_by="test",
             reviewed_at=datetime.now(timezone.utc),
             active=True,
@@ -78,6 +81,7 @@ def spirit(db_session, unique_spirit_id):
     db_session.commit()
     yield row
     db_session.query(models.DailyEventCache).filter_by(place_id=unique_spirit_id).delete()
+    db_session.query(models.GuidedQuestionCache).filter_by(place_id=unique_spirit_id).delete()
     db_session.delete(row)
     db_session.query(CharacterPersona).filter_by(character_id=character_id).delete()
     db_session.query(Character).filter_by(character_id=character_id).delete()
@@ -281,6 +285,62 @@ def test_fallback_body_is_never_empty(client, spirit):
     body = client.get(f"/api/v1/spirits/{spirit.spirit_id}/daily-event").json()
 
     assert len(body["narrative_text"].strip()) > 10
+
+
+def test_guided_questions_fallback_is_http_200(client, spirit):
+    player = client.post(
+        "/api/v1/players", json={"device_id": f"guided-{uuid.uuid4()}"}
+    ).json()
+    player_id = uuid.UUID(player["player_id"])
+    headers = {
+        "Authorization": f"Bearer {player['session_token']}",
+        ENCOUNTER_TOKEN_HEADER: issue_encounter_token(player_id, spirit.spirit_id),
+    }
+
+    response = client.get(
+        f"/api/v1/spirits/{spirit.spirit_id}/suggested-questions", headers=headers
+    )
+
+    assert response.status_code == 200
+    assert 2 <= len(response.json()["questions"]) <= 3
+    assert response.json()["is_fallback"] is True
+
+
+def test_guided_questions_cache_is_reused_within_a_day(db_session, spirit):
+    now = datetime(2026, 3, 10, 15, 0, tzinfo=timezone.utc)
+    event_date = taipei_today(now)
+    db_session.add(
+        models.DailyEventCache(
+            place_id=spirit.spirit_id,
+            event_date=event_date,
+            content={"narrative_text": "DAILY_CONTEXT", "is_fallback": False},
+            generated_at=now,
+            expires_at=now + timedelta(days=2),
+        )
+    )
+    db_session.commit()
+    player_id = uuid.uuid4()
+    first_client = FakeGeminiClient(response='["Q1", "Q2"]')
+    second_client = FakeGeminiClient(response='["OTHER", "OTHER2"]')
+
+    first = get_suggested_questions(
+        db_session,
+        first_client,
+        place_id=spirit.spirit_id,
+        player_id=player_id,
+        now=now,
+    )
+    second = get_suggested_questions(
+        db_session,
+        second_client,
+        place_id=spirit.spirit_id,
+        player_id=player_id,
+        now=now,
+    )
+
+    assert first == second
+    assert first_client.call_count == 1
+    assert second_client.call_count == 0
 
 
 # ── 404 的分界 ────────────────────────────────────────────────────────

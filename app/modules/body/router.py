@@ -18,7 +18,7 @@ from app.modules.body.encounter_tokens import (
 )
 from app.core.redis_client import append_session_turn
 from app.modules.body.geo import haversine_distance_m
-from app.modules.body import daily_event_service, push, queries, quests
+from app.modules.body import daily_event_service, guided_questions_service, push, queries, quests
 from app.modules.body.quests import evaluate_on_summon
 from app.modules.body.quota import (
     RESOURCE_DIALOGUE,
@@ -465,11 +465,25 @@ def dialogue(
     append_session_turn(str(session_player_id), place_id, {"role": "user", "text": payload.user_input})
     append_session_turn(str(session_player_id), place_id, {"role": "assistant", "text": reply_text})
 
+    try:
+        suggested = guided_questions_service.get_suggested_questions(
+            db,
+            gemini,
+            place_id=place_id,
+            player_id=session_player_id,
+        )
+    except Exception:  # noqa: BLE001
+        # B14 is an additive convenience field; it must never turn a successful
+        # dialogue turn into an error response.
+        logger.exception("B14 suggested question lookup failed for %s", place_id)
+        suggested = {"questions": [], "is_fallback": True}
+
     return schemas.DialogueResponse(
         reply_text=reply_text,
         source=source,
         segments=split_into_segments(reply_text),
         tts=audio,
+        suggested_questions=suggested["questions"],
     )
 
 
@@ -683,6 +697,48 @@ def get_daily_event_endpoint(place_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="spirit not found")
 
     return schemas.DailyEventResponse(**content)
+
+
+@router.get(
+    "/spirits/{place_id}/suggested-questions",
+    response_model=schemas.SuggestedQuestionsResponse,
+    responses={
+        **_UNAUTHORIZED,
+        **_forbidden("憑證屬於別的靈魂，或兩張憑證不屬於同一個玩家"),
+        **_SPIRIT_NOT_FOUND,
+    },
+)
+def get_suggested_questions_endpoint(
+    place_id: str,
+    session_player_id: uuid.UUID = Depends(require_session_token),
+    encounter_token: str | None = Header(default=None, alias=ENCOUNTER_TOKEN_HEADER),
+    sense_token: str | None = Header(default=None, alias=SENSE_TOKEN_HEADER),
+    db: Session = Depends(get_db),
+    gemini: GeminiClient = Depends(get_gemini_client),
+):
+    """Return today's B14 questions after Session plus Sense/Encounter auth."""
+
+    if encounter_token:
+        holder_id = require_encounter_token(place_id, encounter_token)
+    elif sense_token:
+        holder_id = require_sense_token(place_id, sense_token)
+    else:
+        raise HTTPException(status_code=401, detail="missing encounter or sense token")
+
+    if holder_id != session_player_id:
+        raise HTTPException(status_code=403, detail="token holder mismatch")
+
+    try:
+        content = guided_questions_service.get_suggested_questions(
+            db,
+            gemini,
+            place_id=place_id,
+            player_id=session_player_id,
+        )
+    except guided_questions_service.SpiritNotFoundError:
+        raise HTTPException(status_code=404, detail="spirit not found")
+
+    return schemas.SuggestedQuestionsResponse(**content)
 
 
 @router.post(

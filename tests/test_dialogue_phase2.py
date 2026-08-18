@@ -91,6 +91,7 @@ def spirit(db_session, unique_spirit_id):
     yield row
 
     db_session.query(CannedGreeting).filter_by(character_id=character_id).delete()
+    db_session.query(models.GuidedQuestionCache).filter_by(place_id=unique_spirit_id).delete()
     db_session.delete(row)
     db_session.query(CharacterPersona).filter_by(character_id=character_id).delete()
     db_session.query(Character).filter_by(character_id=character_id).delete()

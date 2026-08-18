@@ -74,6 +74,7 @@ EXPECTED_RESPONSE_CODES = {
     # 429 是 #42 接上配額（#32）之後新增的。配額是這支端點的第一道關卡
     # （SDD v1 §3），所以它是唯一會回 429 的路由。
     ("post", "/api/v1/spirits/{place_id}/dialogue"): {"200", "401", "403", "404", "422", "429"},
+    ("get", "/api/v1/spirits/{place_id}/suggested-questions"): {"200", "401", "403", "404", "422"},
     # 沒有 404：沒有靈魂時回空陣列，不是「找不到」。也沒有 422，因為它不吃參數。
     ("get", "/api/v1/spirits"): {"200"},
     ("get", "/api/v1/spirits/{place_id}"): {"200", "404", "422"},

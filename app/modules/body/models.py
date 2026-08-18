@@ -354,6 +354,20 @@ class DailyEventCache(Base):
     expires_at = Column(DateTime(timezone=True), nullable=True)
 
 
+class GuidedQuestionCache(Base):
+    """One B14 result per active spirit and Taipei calendar day."""
+
+    __tablename__ = "guided_question_cache"
+
+    place_id = Column(String(64), ForeignKey("spirits.spirit_id"), primary_key=True)
+    event_date = Column(Date, primary_key=True)
+    content = Column(JSONB, nullable=False)
+    generated_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+
+
 class AvatarAsset(Base):
     """
     Unity Addressables 的 remote catalog／bundle 位置與版本（#38）。

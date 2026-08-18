@@ -62,6 +62,7 @@ def spirit(db_session, unique_spirit_id):
 
     db_session.query(CannedGreeting).filter_by(character_id=character_id).delete()
     db_session.query(CharacterPersona).filter_by(character_id=character_id).delete()
+    db_session.query(models.GuidedQuestionCache).filter_by(place_id=unique_spirit_id).delete()
     db_session.delete(row)
     db_session.query(Character).filter_by(character_id=character_id).delete()
     db_session.query(LandmarkSoul).filter_by(landmark_id=landmark_id).delete()
@@ -203,7 +204,7 @@ def test_response_shape(client, spirit, player, active_card):
     enc = issue_encounter_token(pid, spirit.spirit_id)
     body = _say(client, spirit, sess, enc, "你好").json()
 
-    assert set(body) == {"reply_text", "source", "segments", "tts"}
+    assert set(body) == {"reply_text", "source", "segments", "tts", "suggested_questions"}
     # 分段是 reply_text 的切片，不是另一份內容
     assert body["segments"]
     for seg in body["segments"]:
