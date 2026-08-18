@@ -459,3 +459,40 @@ class PushSubscriptionResponse(BaseModel):
     """
 
     is_subscribed: bool
+
+
+class CollectionEntry(BaseModel):
+    """
+    收藏視窗的一格（`GET /api/v1/collections`）。
+
+    🔒 **未解鎖時 `title` 與 `image_url` 都是 `null`。** A.L. 定的介面是空欄位，
+    不是灰階剪影——如果 API 照樣把圖的 URL 送出去，抓一次封包就看完了整本圖鑑，
+    那條設計等於沒有生效。遮蔽做在伺服器端，不是靠客戶端自律。
+
+    `source_type` 是客戶端唯一需要的分區依據：`encounter` 進 3×3 方陣，
+    `arc_completion` 進下方的劇本區。**不要用 `collection_id` 的前綴去判斷**——
+    那是伺服器的內部命名，改了不該要發一版客戶端。
+    """
+
+    collection_id: str
+    source_type: Literal["encounter", "arc_completion"]
+    unlocked: bool
+    title: str | None = None
+    image_url: str | None = None
+    acquired_at: datetime | None = None
+
+
+class CollectionsResponse(BaseModel):
+    """
+    `GET /api/v1/collections`。
+
+    **回的是完整清單，不是只有已解鎖的那些**——客戶端要靠它知道總共幾格才畫得出
+    空欄位。順序穩定：先全部 `encounter`（依 spirit_id），再全部 `arc_completion`
+    （依 arc_id）。
+
+    格數刻意不寫死在任何一邊：相遇格數 = 啟用中的地標數，劇本格數 = arc 數。
+    霞海城隍廟目前 `is_active=false`，所以現在是 9 格；它補上近景文件之後，
+    這裡會自己變成 10 格，客戶端不用改。
+    """
+
+    entries: list[CollectionEntry] = Field(default_factory=list)

@@ -44,6 +44,82 @@
         "title": "Body_landmark_photo_api_v1_quests__quest_id__landmark_photo_post",
         "type": "object"
       },
+      "CollectionEntry": {
+        "description": "收藏視窗的一格（`GET /api/v1/collections`）。\n\n🔒 **未解鎖時 `title` 與 `image_url` 都是 `null`。** A.L. 定的介面是空欄位，\n不是灰階剪影——如果 API 照樣把圖的 URL 送出去，抓一次封包就看完了整本圖鑑，\n那條設計等於沒有生效。遮蔽做在伺服器端，不是靠客戶端自律。\n\n`source_type` 是客戶端唯一需要的分區依據：`encounter` 進 3×3 方陣，\n`arc_completion` 進下方的劇本區。**不要用 `collection_id` 的前綴去判斷**——\n那是伺服器的內部命名，改了不該要發一版客戶端。",
+        "properties": {
+          "acquired_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acquired At"
+          },
+          "collection_id": {
+            "title": "Collection Id",
+            "type": "string"
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url"
+          },
+          "source_type": {
+            "enum": [
+              "encounter",
+              "arc_completion"
+            ],
+            "title": "Source Type",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "unlocked": {
+            "title": "Unlocked",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "collection_id",
+          "source_type",
+          "unlocked"
+        ],
+        "title": "CollectionEntry",
+        "type": "object"
+      },
+      "CollectionsResponse": {
+        "description": "`GET /api/v1/collections`。\n\n**回的是完整清單，不是只有已解鎖的那些**——客戶端要靠它知道總共幾格才畫得出\n空欄位。順序穩定：先全部 `encounter`（依 spirit_id），再全部 `arc_completion`\n（依 arc_id）。\n\n格數刻意不寫死在任何一邊：相遇格數 = 啟用中的地標數，劇本格數 = arc 數。\n霞海城隍廟目前 `is_active=false`，所以現在是 9 格；它補上近景文件之後，\n這裡會自己變成 10 格，客戶端不用改。",
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/CollectionEntry"
+            },
+            "title": "Entries",
+            "type": "array"
+          }
+        },
+        "title": "CollectionsResponse",
+        "type": "object"
+      },
       "DailyEventResponse": {
         "description": "`GET /api/v1/spirits/{placeId}/daily-event` 的回應（S10／#26）。\n\n**公開世界狀態，不需要任何 token。**\n\n`is_fallback` 為 true 有兩種可能：內容是人工預寫保底，或是回退到了前一天的\n快取。客戶端**不需要**據此改變呈現——玩家看到的都該是一段正常的敘事。\n它存在是為了讓我們觀察排程的健康度。",
         "properties": {
@@ -984,6 +1060,43 @@
           }
         },
         "summary": "Get Avatar Asset",
+        "tags": [
+          "body"
+        ]
+      }
+    },
+    "/api/v1/collections": {
+      "get": {
+        "description": "收藏視窗（圖鑑）。\n\n回**完整清單**，不是只有已解鎖的那些——客戶端要靠總格數才畫得出空欄位。\n分區依 `source_type`：`encounter` 進 3×3 方陣，`arc_completion` 進下方劇本區。\n\n🔒 **未解鎖的格子不帶 `title` 與 `image_url`。** 介面定的是空欄位而不是灰階\n剪影，所以圖根本不離開伺服器——否則抓一次封包就看完整本圖鑑，那條設計等於\n沒有生效。遮蔽做在 `collections_service._entry()`，不是靠客戶端自律。\n\n沒有 404：沒有任何地標時回空陣列，跟 `GET /spirits` 同一個立場。",
+        "operationId": "get_collections_api_v1_collections_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Session token 無效或未提供"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Collections",
         "tags": [
           "body"
         ]

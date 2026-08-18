@@ -17,7 +17,14 @@ from app.modules.body.encounter_tokens import (
 )
 from app.core.redis_client import append_session_turn
 from app.modules.body.geo import haversine_distance_m
-from app.modules.body import daily_event_service, dialogue_log, push, queries, quests
+from app.modules.body import (
+    collections_service,
+    daily_event_service,
+    dialogue_log,
+    push,
+    queries,
+    quests,
+)
 from app.modules.body.quests import evaluate_on_summon
 from app.modules.body.quota import (
     RESOURCE_DIALOGUE,
@@ -248,6 +255,15 @@ def summon(
     # encounter_token——AC 明訂「在場驗證仍可通過（玩家可對話）」，被鎖住的
     # 只有任務挑戰，不是相遇本身。
     quest_state = evaluate_on_summon(db, player_id=player_id, spirit_id=spirit.spirit_id)
+
+    # 收藏：初次相遇圖。放在在場驗證通過**之後**，理由跟上面的觀察期紀錄一樣
+    # ——沒通過驗證的請求不構成一次相遇，不該留下紀念品。
+    #
+    # 冪等（ON CONFLICT DO NOTHING），所以每次召喚都叫沒關係；玩家連點兩次也
+    # 只會有一列。**不加共鳴值**：共鳴只來自任務完成與地標拍照，召喚不計分。
+    collections_service.grant_encounter_collectible(
+        db, player_id=player_id, spirit_id=spirit.spirit_id
+    )
 
     return schemas.SummonResponse(
         encounter_token=issue_encounter_token(player_id, spirit.spirit_id),
@@ -859,6 +875,35 @@ def get_memory_summary(
     return schemas.MemorySummaryResponse(
         groups=[
             schemas.MemoryGroup(**g) for g in queries.memory_summaries(db, player_id=player_id)
+        ]
+    )
+
+
+@router.get(
+    "/collections",
+    response_model=schemas.CollectionsResponse,
+    responses={**_UNAUTHORIZED},
+)
+def get_collections(
+    player_id: uuid.UUID = Depends(require_session_token),
+    db: Session = Depends(get_db),
+):
+    """
+    收藏視窗（圖鑑）。
+
+    回**完整清單**，不是只有已解鎖的那些——客戶端要靠總格數才畫得出空欄位。
+    分區依 `source_type`：`encounter` 進 3×3 方陣，`arc_completion` 進下方劇本區。
+
+    🔒 **未解鎖的格子不帶 `title` 與 `image_url`。** 介面定的是空欄位而不是灰階
+    剪影，所以圖根本不離開伺服器——否則抓一次封包就看完整本圖鑑，那條設計等於
+    沒有生效。遮蔽做在 `collections_service._entry()`，不是靠客戶端自律。
+
+    沒有 404：沒有任何地標時回空陣列，跟 `GET /spirits` 同一個立場。
+    """
+    return schemas.CollectionsResponse(
+        entries=[
+            schemas.CollectionEntry(**e)
+            for e in collections_service.list_collections(db, player_id=player_id)
         ]
     )
 

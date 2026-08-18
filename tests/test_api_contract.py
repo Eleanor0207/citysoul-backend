@@ -98,6 +98,9 @@ EXPECTED_RESPONSE_CODES = {
     # 第二層有 path 參數與 limit/before 的範圍檢查，所以有 422。
     # 404 是「根本沒有這個靈魂」，跟「有這個靈魂但我沒聊過」（回空陣列）刻意分開。
     ("get", "/api/v1/spirits/{place_id}/dialogue-history"): {"200", "401", "404", "422"},
+    # 收藏視窗：只需要 session token；不吃參數所以沒有 422；一個地標都沒有時
+    # 回空陣列而不是 404（跟 GET /spirits 同一個立場）。
+    ("get", "/api/v1/collections"): {"200", "401"},
     # #38：資產位置不是玩家資料，無需驗證。
     ("get", "/api/v1/assets/{avatar_id}"): {"200", "404", "422"},
     # #39：只需要 session token。

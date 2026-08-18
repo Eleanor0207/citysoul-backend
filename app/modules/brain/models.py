@@ -323,6 +323,12 @@ class StoryArc(Base):
     intro_document_content = Column(Text, nullable=True)
     # 值關聯 → public.media_assets.asset_id，不建跨 schema 外鍵（WBS-API 決策4）。
     intro_document_asset_id = Column(UUID(as_uuid=True), nullable=True)
+    # 收藏視窗的「劇本完成圖」（0020）。同樣值關聯 → public.media_assets.asset_id。
+    #
+    # 放在這裡而不是在 media_assets 加 arc_id，是為了讓「一條 arc 只有一張完成圖」
+    # 成為欄位天然保證的事——反過來放的話，兩列 media_assets 可以同時宣稱屬於同一
+    # 條 arc，資料庫擋不住。方向也跟上面的 intro_document_asset_id 一致。
+    completion_asset_id = Column(UUID(as_uuid=True), nullable=True)
     summary = Column(Text, nullable=True)
 
 
