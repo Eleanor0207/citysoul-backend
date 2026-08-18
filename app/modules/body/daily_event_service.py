@@ -167,7 +167,7 @@ def get_daily_event(
 
     # 連一筆都沒有——新地標剛上線，或排程從沒跑過。
     logger.info("%s 完全沒有當日情境快取，使用人工預寫保底", place_id)
-    content = fallback_content(place_id, today)
+    content = fallback_content(place_id, today, persona=load_active_persona(db, place_id))
     return {
         "narrative_text": content.narrative_text,
         "is_fallback": True,

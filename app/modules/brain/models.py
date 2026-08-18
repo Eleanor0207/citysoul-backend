@@ -14,12 +14,14 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Column,
+    Date,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -150,6 +152,9 @@ class CharacterPersona(Base):
     imagination_license = Column(Text, nullable=True)
     quest_themes = Column(ARRAY(Text), nullable=True)
     tone_override = Column(Text, nullable=True)
+    # 當日情境無合格輸入或生成失敗時，使用該靈魂自己的人工預寫台詞。
+    # NULL 代表尚未填寫，呼叫端才會退回通用保底句。
+    daily_event_fallback = Column(Text, nullable=True)
     reviewed_by = Column(String(128), nullable=False)
     reviewed_at = Column(DateTime(timezone=True), nullable=False)
     active = Column(Boolean, nullable=False, server_default="false", default=False)
@@ -196,6 +201,83 @@ class CannedGreeting(Base):
         CheckConstraint("response_text <> ''", name="ck_canned_greetings_response"),
         CheckConstraint("cardinality(trigger_phrases) > 0", name="ck_canned_greetings_triggers"),
         Index("ix_canned_greetings_persona", "character_id", "version"),
+        {"schema": "brain"},
+    )
+
+
+class DailyEventCalendar(Base):
+    """B9 當日情境的人工審核日曆來源。
+
+    `gregorian_fixed` / `lunar_fixed` 是每年重複的月日規則；`lunar_month_end`
+    可表達除夕這種農曆月最後一天；`gregorian_range` 是人工錄入的官方活動起訖日期。
+    `place_id` 是跨 schema 的值關聯，刻意不建 foreign key，遵循 body/brain
+    分離的資料模型決策。
+    """
+
+    __tablename__ = "daily_event_calendars"
+
+    calendar_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    place_id = Column(String(64), nullable=False)
+    event_type = Column(String(32), nullable=False)  # festival / official_event
+    title = Column(Text, nullable=False)
+    date_rule = Column(String(32), nullable=False)  # recurring/one-off calendar rule
+    start_date = Column(Date, nullable=True)
+    end_date = Column(Date, nullable=True)
+    start_month = Column(SmallInteger, nullable=True)
+    start_day = Column(SmallInteger, nullable=True)
+    end_month = Column(SmallInteger, nullable=True)
+    end_day = Column(SmallInteger, nullable=True)
+    active = Column(Boolean, nullable=False, server_default="false", default=False)
+    reviewed_by = Column(Text, nullable=True)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint(
+            "event_type IN ('festival', 'official_event')",
+            name="ck_daily_event_calendar_event_type",
+        ),
+        CheckConstraint(
+            "date_rule IN ('gregorian_fixed', 'lunar_fixed', 'lunar_month_end', 'gregorian_range')",
+            name="ck_daily_event_calendar_date_rule",
+        ),
+        CheckConstraint("title <> ''", name="ck_daily_event_calendar_title"),
+        CheckConstraint(
+            "(date_rule = 'gregorian_range' AND start_date IS NOT NULL AND end_date IS NOT NULL AND start_date <= end_date AND start_month IS NULL AND start_day IS NULL AND end_month IS NULL AND end_day IS NULL) OR "
+            "(date_rule IN ('gregorian_fixed', 'lunar_fixed') AND start_date IS NULL AND end_date IS NULL AND start_month BETWEEN 1 AND 12 AND start_day BETWEEN 1 AND 31 AND end_month BETWEEN 1 AND 12 AND end_day BETWEEN 1 AND 31) OR "
+            "(date_rule = 'lunar_month_end' AND start_date IS NULL AND end_date IS NULL AND start_month BETWEEN 1 AND 12 AND start_day IS NULL AND end_month = start_month AND end_day IS NULL)",
+            name="ck_daily_event_calendar_date_shape",
+        ),
+        Index("ix_daily_event_calendars_place_active", "place_id", "active"),
+        {"schema": "brain"},
+    )
+
+
+class DailyEventCuratedNote(Base):
+    """B9 的人工審核輪播池。
+
+    `rotation_order` 是內容編輯明確指定的穩定順序；同一批 active notes 對同一
+    個台北日期永遠選到同一筆，重排只在人工更新順序時發生。
+    """
+
+    __tablename__ = "daily_event_curated_notes"
+
+    note_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    place_id = Column(String(64), nullable=False)
+    rotation_order = Column(Integer, nullable=False)
+    note_text = Column(Text, nullable=False)
+    active = Column(Boolean, nullable=False, server_default="false", default=False)
+    reviewed_by = Column(Text, nullable=True)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "place_id", "rotation_order", name="uq_daily_event_curated_notes_rotation"
+        ),
+        CheckConstraint("rotation_order >= 0", name="ck_daily_event_curated_notes_order"),
+        CheckConstraint("note_text <> ''", name="ck_daily_event_curated_notes_text"),
+        Index("ix_daily_event_curated_notes_place_active", "place_id", "active"),
         {"schema": "brain"},
     )
 

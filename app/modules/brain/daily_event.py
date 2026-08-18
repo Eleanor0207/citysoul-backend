@@ -146,12 +146,23 @@ def build_daily_event_prompt(
     return "\n".join(lines)
 
 
-def fallback_content(place_id: str, event_date: date) -> DailyEventContent:
+def fallback_text_for_persona(persona) -> str:
+    """Return reviewed persona text, with the legacy generic sentence as last resort."""
+    if persona is not None:
+        text = getattr(persona, "daily_event_fallback", None)
+        if text and text.strip():
+            return text
+    return _FALLBACK_NARRATIVE
+
+
+def fallback_content(
+    place_id: str, event_date: date, *, persona=None
+) -> DailyEventContent:
     """無合格輸入或生成失敗時的內容。永遠非空。"""
     return DailyEventContent(
         place_id=place_id,
         event_date=event_date,
-        narrative_text=_FALLBACK_NARRATIVE,
+        narrative_text=fallback_text_for_persona(persona),
         is_fallback=True,
         sources=[],
     )
@@ -183,7 +194,7 @@ def generate_daily_event_content(
     if inputs.is_empty():
         # 大多數日子都會走到這裡。這是常態，用 info 而不是 warning。
         logger.info("%s 在 %s 沒有合格輸入，使用人工預寫台詞", place_id, event_date)
-        return fallback_content(place_id, event_date)
+        return fallback_content(place_id, event_date, persona=persona)
 
     prompt = build_daily_event_prompt(
         place_id, event_date, inputs, persona=persona
@@ -195,7 +206,7 @@ def generate_daily_event_content(
 
     if not text or text == FALLBACK_REPLY:
         logger.info("B9 當日情境生成失敗，回退人工預寫台詞（%s %s）", place_id, event_date)
-        return fallback_content(place_id, event_date)
+        return fallback_content(place_id, event_date, persona=persona)
 
     return DailyEventContent(
         place_id=place_id,
