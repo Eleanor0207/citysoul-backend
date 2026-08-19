@@ -412,6 +412,19 @@ class StoryArc(Base):
     reviewed_by = Column(Text, nullable=True)
 
 
+class StoryString(Base):
+    """A reviewed, player-facing string referenced by a story beat."""
+
+    __tablename__ = "story_strings"
+    __table_args__ = {"schema": "brain"}
+
+    text_key = Column(Text, primary_key=True)
+    text = Column(Text, nullable=False)
+    reviewed_by = Column(Text, nullable=True)
+    # Story content is active on import for the MVP.  reviewed_by is audit-only.
+    active = Column(Boolean, nullable=False, server_default="true", default=True)
+
+
 class StoryBeat(Base):
     """
     劇情節點（0015）。
