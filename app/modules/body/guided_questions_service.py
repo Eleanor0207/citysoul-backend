@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.body import models
 from app.modules.body.quests import taipei_today
-from app.modules.body.resonance import stage_for_value
+from app.modules.body.resonance import load_resonance_rules, stage_for_value
 from app.modules.brain.guided_questions import GuidedQuestionInputs, generate_guided_questions
 from app.modules.brain.loader import load_active_persona
 from app.modules.brain.models import StoryBeat
@@ -39,7 +39,8 @@ def _resonance_stage(db: Session, *, player_id, place_id: str) -> int:
         .filter_by(player_id=player_id, spirit_id=place_id)
         .first()
     )
-    return stage_for_value(row.resonance_value if row else 0)
+    thresholds = load_resonance_rules(db).thresholds
+    return stage_for_value(thresholds, row.resonance_value if row else 0)
 
 
 def _current_story_beat(db: Session, *, player_id, spirit) -> str | None:

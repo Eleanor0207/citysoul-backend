@@ -38,7 +38,7 @@ from app.modules.body.quests import (
     spirit_id_for_quest,
     taipei_today,
 )
-from app.modules.body.resonance import next_threshold, stage_for_value
+from app.modules.body.resonance import load_resonance_rules, next_threshold, stage_for_value
 from app.modules.brain.models import MemoryEmbedding
 
 
@@ -124,6 +124,7 @@ def resonance_progress(db: Session, *, player_id, spirit_id: str) -> dict:
         raise SpiritNotFoundError(spirit_id)
 
     value = _resonance_value_for(db, player_id, spirit_id)
+    thresholds = load_resonance_rules(db).thresholds
 
     return {
         "spirit_id": spirit_id,
@@ -131,8 +132,8 @@ def resonance_progress(db: Session, *, player_id, spirit_id: str) -> dict:
         # 🔒 一律從 value 重算。`resonance` 表**沒有** stage 欄位——0003 把它刪了，
         # 因為 `stage_for_value()` 從來沒讀過它（一個永遠不被信任的快取欄位，
         # 存在的唯一效果是讓下一個人誤用它）。
-        "stage": stage_for_value(value),
-        "next_threshold": next_threshold(value),
+        "stage": stage_for_value(thresholds, value),
+        "next_threshold": next_threshold(thresholds, value),
     }
 
 
@@ -151,12 +152,14 @@ def all_resonance(db: Session, *, player_id) -> list[dict]:
         .order_by(Resonance.spirit_id)
         .all()
     )
+    # 查一次表、同一組門檻算完所有列——不是每筆共鳴值各打一次資料庫。
+    thresholds = load_resonance_rules(db).thresholds
     return [
         {
             "spirit_id": row.spirit_id,
             "resonance_value": row.resonance_value,
             # 同一支 stage_for_value()，不重算——三支端點必須回報同一組數字。
-            "stage": stage_for_value(row.resonance_value),
+            "stage": stage_for_value(thresholds, row.resonance_value),
         }
         for row in rows
     ]

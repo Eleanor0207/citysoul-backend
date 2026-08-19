@@ -27,11 +27,10 @@ from app.modules.body.quota import (
     default_tier_id,
 )
 from app.modules.body.resonance import (
-    AMOUNT_ENCOUNTER_COLLECTION,
-    AMOUNT_QUEST,
     SOURCE_ENCOUNTER_COLLECTION,
     SOURCE_QUEST,
     apply_resonance,
+    load_resonance_rules,
 )
 from app.modules.body.sense_tokens import SENSE_TOKEN_HEADER, require_sense_token
 from app.modules.body.sense_tokens import issue_sense_token
@@ -620,7 +619,7 @@ def complete_quest_endpoint(
         spirit_id=spirit_id,
         source_type=SOURCE_QUEST,
         source_id=quest_id,
-        amount=AMOUNT_QUEST,
+        amount=load_resonance_rules(db).amount_quest,
     )
     # ── 到這裡為止，身體的表全部寫完了 ─────────────────────────────
     #
@@ -861,7 +860,7 @@ def _record_landmark_collection(
             spirit_id=spirit_id,
             source_type=SOURCE_ENCOUNTER_COLLECTION,
             source_id=spirit_id,
-            amount=AMOUNT_ENCOUNTER_COLLECTION,
+            amount=load_resonance_rules(db).amount_encounter_collection,
         )
         awarded = result.awarded
         row.resonance_awarded = awarded

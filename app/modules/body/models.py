@@ -253,6 +253,25 @@ class ResonanceEvent(Base):
     )
 
 
+class ResonanceConfig(Base):
+    """
+    共鳴值門檻與各來源點數（backend#73，取代 `resonance.py` 原本的 Python 常數）。
+
+    比照 `UsageTierLimit`（migration 0004）的正規化模式：一個 key 對一個
+    value，加一種新來源只是 `INSERT` 一筆，不用 `ALTER TABLE`、不用重新部署。
+    跟配額不同的是共鳴值規則不分 tier，是全域單一一組值，所以這裡不需要
+    複合主鍵，`config_key` 本身就夠。
+
+    種子資料寫在 migration 裡（比照 `usage_tier_limits` 的 `closed_beta`
+    那筆），不是 seed script——這些是 schema 能不能運作的前提值。
+    """
+
+    __tablename__ = "resonance_config"
+
+    config_key = Column(String(64), primary_key=True)
+    value = Column(Integer, nullable=False)
+
+
 class UsageTier(Base):
     """
     配額分級（AC8／#32）。

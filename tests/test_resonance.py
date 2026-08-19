@@ -9,15 +9,21 @@ import pytest
 
 from app.modules.body import models
 from app.modules.body.resonance import (
-    AMOUNT_ENCOUNTER_COLLECTION,
-    AMOUNT_QUEST,
-    RESONANCE_THRESHOLDS,
     SOURCE_ENCOUNTER_COLLECTION,
     SOURCE_QUEST,
     apply_resonance,
+    load_resonance_rules,
     next_threshold,
     stage_for_value,
 )
+
+# backend#73：門檻與各來源點數的正本現在是 `resonance_config` 表（migration
+# 0026），不是這裡的常數。這兩個只是測試檔自己方便用的字面值，用來組裝測試
+# 資料——**不是**拿來斷言「正式值是多少」，那件事由下面
+# `test_seeded_config_matches_the_pace_decided_in_52` 對著 DB 驗證。
+AMOUNT_ENCOUNTER_COLLECTION = 10
+AMOUNT_QUEST = 20
+THRESHOLDS = (10, 40, 100)
 
 
 @pytest.fixture
@@ -66,20 +72,45 @@ def _award(db_session, player_id, spirit_id, *, source_type=SOURCE_QUEST, source
     [(0, 0), (9, 0), (10, 1), (39, 1), (40, 2), (99, 2), (100, 3), (250, 3)],
 )
 def test_stage_for_value(value, expected_stage):
-    """門檻 10/40/100 含邊界（剛好等於門檻就算達標）。"""
-    assert stage_for_value(value) == expected_stage
+    """門檻含邊界（剛好等於門檻就算達標）。純函式測試，門檻用字面值傳入。"""
+    assert stage_for_value(THRESHOLDS, value) == expected_stage
 
 
 @pytest.mark.parametrize(
     "value,expected", [(0, 10), (9, 10), (10, 40), (39, 40), (40, 100), (99, 100), (100, None)]
 )
 def test_next_threshold(value, expected):
-    assert next_threshold(value) == expected
+    assert next_threshold(THRESHOLDS, value) == expected
 
 
-def test_thresholds_match_context_definition():
-    """守門測試：門檻是 CONTEXT.md 明訂的共用固定值，不該被隨手改掉。"""
-    assert RESONANCE_THRESHOLDS == (10, 40, 100)
+def test_seeded_config_matches_the_pace_decided_in_52(db_session):
+    """
+    守門測試：backend#73／#52 拍板的門檻與各來源點數是 migration 0026 種進
+    `resonance_config` 的值，不再是程式碼常數——這裡直接對資料庫斷言，
+    不該被隨手改掉。
+    """
+    rules = load_resonance_rules(db_session)
+
+    assert rules.thresholds == THRESHOLDS
+    assert rules.amount_encounter_collection == AMOUNT_ENCOUNTER_COLLECTION
+    assert rules.amount_quest == AMOUNT_QUEST
+
+
+def test_load_resonance_rules_raises_when_a_required_key_is_missing(db_session):
+    """
+    共鳴值規則缺一筆代表部署有問題，不該悄悄退回一個誰都不知道的預設值。
+    """
+    db_session.query(models.ResonanceConfig).filter_by(
+        config_key="amount_quest"
+    ).delete()
+    db_session.commit()
+
+    try:
+        with pytest.raises(RuntimeError):
+            load_resonance_rules(db_session)
+    finally:
+        db_session.add(models.ResonanceConfig(config_key="amount_quest", value=AMOUNT_QUEST))
+        db_session.commit()
 
 
 # ── 基本入帳 ───────────────────────────────────────────────────────────
@@ -98,7 +129,7 @@ def test_first_award_creates_row(db_session, player, spirit):
     # 階段不存在資料庫裡（0003 刪掉了 stage 欄位）。這一列只該有 value；
     # 階段永遠是從 value 算出來的。
     assert not hasattr(row, "stage")
-    assert stage_for_value(row.resonance_value) == 1
+    assert stage_for_value(THRESHOLDS, row.resonance_value) == 1
 
 
 def test_awards_accumulate(db_session, player, spirit):
@@ -315,12 +346,6 @@ def test_quest_awards_twenty_per_distinct_quest(db_session, player, spirit):
 
     assert result.resonance_value == 40
     assert result.stage == 2
-
-
-def test_mvp_amounts_match_spec():
-    """守門測試：MVP 固定值（CONTEXT.md／SDD 第7.5節）。"""
-    assert AMOUNT_ENCOUNTER_COLLECTION == 10
-    assert AMOUNT_QUEST == 20
 
 
 # ── 隔離 ───────────────────────────────────────────────────────────────
