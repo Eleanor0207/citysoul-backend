@@ -26,6 +26,11 @@ dependencies = [
     "alembic>=1.19.0",
     # Lunar calendar matching for reviewed recurring festival rules.
     "lunardate==0.2.2",
+    # S11 推播（backend#68）：FCM 送信。憑證同樣走 ADC（ADR-0003）——
+    # `citysoul-run` 這個 Cloud Run 執行身分已在 IAM 掛上
+    # roles/firebasecloudmessaging.admin，不下載 service account 金鑰
+    # （組織政策本來就擋掉金鑰下載，見 backend#68 留言）。
+    "firebase-admin>=6.9.0",
 ]
 
 [dependency-groups]

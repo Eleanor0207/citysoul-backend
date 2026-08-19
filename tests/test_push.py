@@ -4,12 +4,14 @@
 推播平台以 fake 注入——**測試不會真的送出任何推播**。對真實 Postgres 跑。
 """
 import uuid
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from app.modules.body import models
 from app.modules.body.push import (
     FakePushSender,
+    FcmPushSender,
     PushPayload,
     build_signal_payload,
     register_push_token,
@@ -324,3 +326,86 @@ def test_service_functions_work_without_http(db_session, client):
         db_session, sender2, payload=build_signal_payload(spirit_name="龍山寺", spirit_id="longshan")
     )
     assert sender2.call_count == 0
+
+
+# ── FcmPushSender（backend#68）─────────────────────────────────────────
+#
+# 真的打 FCM 的部分（`firebase_admin.messaging.send`）一律 mock 掉——這裡
+# 驗的是「用對了 ADC、組出正確的 Message、把失敗轉成 False 而不是例外」，
+# 不是驗 Google 那端真的收到推播（那條線跟 #21/#19 一樣要留給實機/正式環境）。
+
+
+@pytest.fixture(autouse=True)
+def _reset_fcm_app():
+    """
+    每個測試都拿一份乾淨的 firebase_admin app 狀態，避免「同一個 app name
+    已存在」的 ValueError 跨測試互相影響。
+    """
+    import firebase_admin
+
+    yield
+
+    try:
+        firebase_admin.delete_app(firebase_admin.get_app(FcmPushSender._APP_NAME))
+    except ValueError:
+        pass
+
+
+def test_fcm_sender_initializes_the_app_without_a_key_file():
+    """
+    不帶 `credential` 參數初始化——這正是「讓 ADC 接手」的寫法，不是漏寫。
+    """
+    with patch("firebase_admin.initialize_app") as mock_init, \
+         patch("firebase_admin.get_app", side_effect=ValueError("no app")):
+        FcmPushSender()
+
+    mock_init.assert_called_once_with(name=FcmPushSender._APP_NAME)
+
+
+def test_fcm_sender_reuses_an_already_initialized_app():
+    """建構第二個 FcmPushSender 不該再呼叫 initialize_app 第二次。"""
+    with patch("firebase_admin.initialize_app") as mock_init, \
+         patch("firebase_admin.get_app", side_effect=ValueError("no app")):
+        FcmPushSender()
+
+    with patch("firebase_admin.initialize_app") as mock_init_second, \
+         patch("firebase_admin.get_app", return_value=MagicMock()):
+        FcmPushSender()
+
+    mock_init_second.assert_not_called()
+
+
+def test_fcm_sender_sends_title_body_and_only_spirit_id_as_data():
+    with patch("firebase_admin.get_app", return_value=MagicMock()):
+        sender = FcmPushSender()
+
+    payload = build_signal_payload(spirit_name="龍山寺", spirit_id="longshan")
+
+    with patch("firebase_admin.messaging.send", return_value="projects/x/messages/1") as mock_send:
+        assert sender.send("tok-abc", payload) is True
+
+    sent_message = mock_send.call_args.args[0]
+    assert sent_message.token == "tok-abc"
+    assert sent_message.notification.title == payload.title
+    assert sent_message.notification.body == payload.body
+    assert sent_message.data == {"spirit_id": "longshan"}
+
+
+def test_fcm_sender_returns_false_on_unregistered_token_without_raising():
+    from firebase_admin import messaging
+
+    with patch("firebase_admin.get_app", return_value=MagicMock()):
+        sender = FcmPushSender()
+
+    with patch("firebase_admin.messaging.send", side_effect=messaging.UnregisteredError("gone")):
+        assert sender.send("tok-dead", build_signal_payload(spirit_name="龍山寺", spirit_id="longshan")) is False
+
+
+def test_fcm_sender_returns_false_on_other_firebase_errors_without_raising():
+    from firebase_admin.exceptions import InternalError
+
+    with patch("firebase_admin.get_app", return_value=MagicMock()):
+        sender = FcmPushSender()
+
+    with patch("firebase_admin.messaging.send", side_effect=InternalError("fcm is down")):
+        assert sender.send("tok-abc", build_signal_payload(spirit_name="龍山寺", spirit_id="longshan")) is False

@@ -85,6 +85,71 @@ class FakePushSender(PushSender):
         return len(self.sent)
 
 
+class FcmPushSender(PushSender):
+    """
+    真正送出 FCM 推播（backend#68）。
+
+    ## 憑證走 ADC，沒有金鑰檔案
+
+    組織政策擋掉 service account 金鑰下載（見 backend#68 留言），所以這裡
+    **不讀任何金鑰檔或 secret**。`citysoul-run` 這個 Cloud Run 執行身分已在
+    IAM 掛上 `roles/firebasecloudmessaging.admin`；`firebase_admin.initialize_app()`
+    不帶 `credential` 參數時，firebase-admin 會透過 Application Default
+    Credentials 自動認得這個身分——跟 B1／B10 用 ADC 接 Vertex AI／TTS 是
+    同一個模式（ADR-0003）。
+
+    ## App 只初始化一次
+
+    `firebase_admin.initialize_app()` 對同一個 app name 呼叫第二次會拋
+    `ValueError`。這個模組可能在同一個行程裡被多次 import／建構多個
+    `FcmPushSender`（例如測試），所以用 `firebase_admin.get_app()` 先探測，
+    探測失敗才初始化——不是每個實例各自初始化一次。
+
+    ## 為什麼失效 token 只記警告，不在這裡處理退訂
+
+    `send()` 的介面約定是「失敗回 False，不拋例外」，呼叫端（`send_signal_
+    to_subscribers`）本來就會把失敗的 token 收進 `PushResult.failures`。
+    要不要因為 token 失效（`UnregisteredError`）自動幫玩家退訂，是後續要
+    另外決定的產品行為，不在這張票的範圍——這裡先誠實地把「失效」和「其他
+    原因送不出去」分開記 log，方便之後要做這個決定時查得到資料。
+    """
+
+    _APP_NAME = "citysoul-fcm"
+
+    def __init__(self) -> None:
+        import firebase_admin
+
+        try:
+            self._app = firebase_admin.get_app(self._APP_NAME)
+        except ValueError:
+            self._app = firebase_admin.initialize_app(name=self._APP_NAME)
+
+    def send(self, push_token: str, payload: PushPayload) -> bool:
+        from firebase_admin import messaging
+        from firebase_admin.exceptions import FirebaseError
+
+        message = messaging.Message(
+            token=push_token,
+            notification=messaging.Notification(
+                title=payload.title,
+                body=payload.body,
+            ),
+            # data 只放 spirit_id：客戶端點開通知後自己呼叫既有端點取內容，
+            # payload 本身不帶敘事全文（見模組文件的「推播是通知，不是內容」）。
+            data={"spirit_id": payload.spirit_id},
+        )
+
+        try:
+            messaging.send(message, app=self._app)
+            return True
+        except messaging.UnregisteredError:
+            logger.warning("推播 token 已失效（玩家可能移除了 App）：%s…", push_token[:12])
+            return False
+        except FirebaseError as exc:
+            logger.warning("FCM 送出失敗：%s: %s", type(exc).__name__, exc)
+            return False
+
+
 @dataclass
 class PushResult:
     sent: int = 0
