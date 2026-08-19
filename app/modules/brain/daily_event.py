@@ -100,11 +100,79 @@ class DailyEventInputs:
         return used
 
 
-# 人工預寫的回退台詞。
+# 人工預寫的回退台詞，**每個地標一句**。
 #
 # 刻意寫得像「今天很平常」而不是「系統沒有資料」——大多數日子本來就很平常，
 # 而玩家不需要知道我們的內容管線今天是空的。
-_FALLBACK_NARRATIVE = "今天沒什麼特別的。人來人往，香火照舊，跟昨天差不多——不過每天的「差不多」其實都不太一樣。"
+#
+# ## 為什麼要分地標
+#
+# 原本只有一句共用台詞，裡面寫的是「香火照舊」。那對龍山寺與城隍廟成立，套在
+# 天文館或美術館上就是玩家一眼看得出來的錯。而回退是**大多數日子**都會走到的
+# 路徑，不是稀有的例外——玩家看到這句話的次數比看到生成內容還多。
+#
+# ## 為什麼留在程式碼裡
+#
+# 不搬進 `content/`，是為了守住這個模組「不自己去抓資料」的邊界（見模組
+# docstring）。要讓敘事負責人自己維護的話，正確的做法是由呼叫端（S10 / #26）
+# 當成第三類合格輸入 `curated_notes` 餵進來，而不是讓生成端開始讀檔。
+_DEFAULT_FALLBACK_NARRATIVE = (
+    "今天沒什麼特別的。人來人往，跟昨天差不多——不過每天的「差不多」其實都不太一樣。"
+)
+
+_FALLBACK_NARRATIVES: dict[str, str] = {
+    "longshan_temple": (
+        "今天沒什麼特別的。香照樣點著，前殿有人跪著唸完就走，"
+        "廟埕的鴿子被驚起來又落回原地——每天都是這樣，可是每天來許願的人不一樣。"
+    ),
+    "ximen_red_house": (
+        "今天沒什麼特別的。八角樓外照樣有人約在這裡碰面，等著等著就散進西門町了。"
+        "我看過太多場散場，倒是每一次等人的臉都不太一樣。"
+    ),
+    "bopiliao_historic_block": (
+        "今天沒什麼特別的。紅磚牆曬著太陽，偶爾有人舉起手機對著長廊拍一張就走。"
+        "這條街廓安靜久了，安靜本身也算是一種聲音。"
+    ),
+    "xiahai_city_god_temple": (
+        "今天沒什麼特別的。廟不大，香客進來繞一圈就出去了，"
+        "隔壁迪化街的乾貨味照舊飄進來。月老那邊的紅線少了幾條——這種事天天有。"
+    ),
+    "taiwan_new_cultural_movement_memorial": (
+        "今天沒什麼特別的。展間的燈亮著，訪客不多，腳步聲在磨石子地上聽得特別清楚。"
+        "這棟樓從前不是給人安靜走路用的，現在是了。"
+    ),
+    "national_palace_museum": (
+        "今天沒什麼特別的。恆溫恆濕的空氣裡，展櫃前的人換了一批又一批。"
+        "玻璃後面的東西幾百年沒變過，看它的人一直在變。"
+    ),
+    "taipei_astronomical_museum": (
+        "今天沒什麼特別的。金黃色的圓頂照樣曬著太陽，宇宙劇場一場接一場把星空放給人看。"
+        "外面天氣好不好，裡面的星星都準時升起。"
+    ),
+    "taipei_fine_arts_museum": (
+        "今天沒什麼特別的。中山北路的車聲被擋在外面，白色的展間裡有人站著看很久，"
+        "也有人走得很快。同一件作品，快慢之間差的是一整個下午。"
+    ),
+    "moca_taipei": (
+        "今天沒什麼特別的。這棟老校舍的長廊還是那個長廊，"
+        "只是每隔一陣子，走廊盡頭的東西就換一個樣子。今天沒換，那也很好。"
+    ),
+    "songshan_cultural_park": (
+        "今天沒什麼特別的。老菸廠的巴洛克花園照樣有人坐著吃午餐，倉庫的鐵門開開關關。"
+        "做菸的年代早就過去了，做東西的人倒是一直在。"
+    ),
+}
+
+
+def fallback_narrative(place_id: str) -> str:
+    """
+    取這個地標的回退台詞。沒有為它寫過的話，回一句中性的。
+
+    刻意不拋例外：地標清單只會越來越長，而「新地標上線當天還沒有專屬台詞」應該
+    退化成一句平淡但講得通的話，不是讓當日情境端點掛掉。少寫台詞由測試守門
+    （`test_daily_event_content.py`），那是這種疏漏該被發現的地方——不是玩家的畫面。
+    """
+    return _FALLBACK_NARRATIVES.get(place_id, _DEFAULT_FALLBACK_NARRATIVE)
 
 
 def build_daily_event_prompt(place_id: str, event_date: date, inputs: DailyEventInputs) -> str:
@@ -141,7 +209,7 @@ def fallback_content(place_id: str, event_date: date) -> DailyEventContent:
     return DailyEventContent(
         place_id=place_id,
         event_date=event_date,
-        narrative_text=_FALLBACK_NARRATIVE,
+        narrative_text=fallback_narrative(place_id),
         is_fallback=True,
         sources=[],
     )

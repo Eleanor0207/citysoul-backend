@@ -9,15 +9,20 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+import yaml
 
+from app.db.seed import LONGSHAN_SPIRIT_ID
 from app.modules.brain.daily_event import (
     CONTENT_REVIEW_STATUS,
+    _DEFAULT_FALLBACK_NARRATIVE,
+    _FALLBACK_NARRATIVES,
     DailyEventContent,
     DailyEventInputs,
     build_daily_event_prompt,
     generate_daily_event_content,
 )
 from app.modules.brain.gemini import FALLBACK_REPLY, FakeGeminiClient
+from scripts.import_spirits import SPIRITS_YAML
 
 _PLACE = "taipei_longshan"
 _DATE = date(2026, 8, 6)
@@ -203,6 +208,96 @@ def test_fallback_does_not_sound_like_a_system_message():
 
     for tell in ["系統", "資料", "無法", "錯誤", "尚未"]:
         assert tell not in text
+
+
+# ── 回退台詞分地標 ─────────────────────────────────────────────────────
+#
+# 回退是**大多數日子**都會走到的路徑，不是稀有的例外。原本十個地標共用一句
+# 「香火照舊」，天文館與美術館講出來明顯不對，而玩家看得到。
+
+def _known_spirit_ids() -> set[str]:
+    """
+    實際會上線的 spirit_id：`content/spirits.yaml` 九個 ＋ seed 建的龍山寺。
+
+    刻意不在測試裡抄一份清單——抄的那份不會跟著 `content/` 一起改，而它一旦
+    過期，這組測試就變成在驗證自己的假設。
+    """
+    data = yaml.safe_load(SPIRITS_YAML.read_text(encoding="utf-8"))
+    return {entry["spirit_id"] for entry in data["spirits"]} | {LONGSHAN_SPIRIT_ID}
+
+
+def test_every_fallback_key_is_a_real_spirit():
+    """
+    打錯一個字不會噴錯，只會靜默退回中性台詞——那正是沒人會發現的失敗方式。
+    """
+    unknown = set(_FALLBACK_NARRATIVES) - _known_spirit_ids()
+
+    assert not unknown, f"回退台詞掛在不存在的 spirit_id 上（打錯字？）：{sorted(unknown)}"
+
+
+def test_every_spirit_has_its_own_fallback():
+    """
+    新地標上線時這條會亮紅燈，那是刻意的：中性台詞是安全網，不是交付標準。
+    """
+    missing = _known_spirit_ids() - set(_FALLBACK_NARRATIVES)
+
+    assert not missing, (
+        f"這些地標還在用中性回退台詞，請到 daily_event.py 的 _FALLBACK_NARRATIVES "
+        f"補上專屬台詞：{sorted(missing)}"
+    )
+
+
+def test_temple_wording_does_not_reach_non_temples():
+    """
+    「香火」只對廟成立。這條測試是這次改動的起因，留著擋下一次複製貼上。
+    """
+    temples = {"longshan_temple", "xiahai_city_god_temple"}
+
+    for place_id, text in _FALLBACK_NARRATIVES.items():
+        if place_id in temples:
+            continue
+        assert "香" not in text, f"{place_id} 的回退台詞出現廟宇用語：{text}"
+
+    assert "香" not in _DEFAULT_FALLBACK_NARRATIVE
+
+
+@pytest.mark.parametrize("place_id", sorted(_FALLBACK_NARRATIVES))
+def test_each_fallback_is_first_person_and_not_a_system_message(place_id):
+    """每一句都要通過「不像系統訊息」那一關，不是只有預設那句。"""
+    text = _FALLBACK_NARRATIVES[place_id]
+
+    assert len(text.strip()) > 10
+    for tell in ["系統", "資料", "無法", "錯誤", "尚未"]:
+        assert tell not in text, f"{place_id}：{text}"
+
+
+def test_fallback_differs_between_places():
+    common = dict(event_date=_DATE, inputs=_inputs())
+
+    temple = generate_daily_event_content(
+        FakeGeminiClient(), place_id="longshan_temple", **common
+    )
+    museum = generate_daily_event_content(
+        FakeGeminiClient(), place_id="taipei_astronomical_museum", **common
+    )
+
+    assert temple.is_fallback is True and museum.is_fallback is True
+    assert temple.narrative_text != museum.narrative_text
+
+
+def test_unknown_place_falls_back_to_neutral_text():
+    """
+    沒寫過台詞的地標退化成一句平淡但講得通的話，不是讓端點掛掉——少寫台詞
+    由上面那條測試守門，不該由玩家的畫面來承擔。
+    """
+    result = generate_daily_event_content(
+        FakeGeminiClient(),
+        place_id="a_place_nobody_wrote_lines_for",
+        event_date=_DATE,
+        inputs=_inputs(),
+    )
+
+    assert result.narrative_text == _DEFAULT_FALLBACK_NARRATIVE
 
 
 # ── 生成失敗 ───────────────────────────────────────────────────────────
