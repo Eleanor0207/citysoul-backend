@@ -123,10 +123,46 @@ class QuestStateResponse(BaseModel):
     attempts_today: int
 
 
+class UnlockStoryResponse(BaseModel):
+    """
+    一段解鎖敘事（SDD §7.5 的 `unlock_story` 物件）。
+
+    ⚠️ 定義**刻意放在 `SummonResponse` 之前**：2026-08-19 起共鳴入帳搬到
+    `/summon`，解鎖敘事跟著搬過來，所以召喚回應要引用它。放在後面就得靠前向
+    引用字串加 `model_rebuild()`，那是一個純粹因為檔案順序而存在的複雜度。
+    """
+
+    stage: int
+    story_text: str
+
+
 class SummonResponse(BaseModel):
+    """
+    召喚回應（SDD 第8.4節）＋ 🆕 2026-08-19 的共鳴欄位。
+
+    ## 新增的五個欄位都是「加法」，客戶端不改也不會壞
+
+    Newtonsoft 忽略不認識的欄位，所以現有的 `ApiModels.SummonResponse` 照樣
+    反序列化得出來，只是拿不到新資訊。要顯示「+10」與解鎖敘事時再補 C# 欄位。
+
+    - `resonance_awarded`：**false 是正常結果**，代表今天已經在這個地標領過了，
+      不是錯誤。客戶端要用它決定要不要播加分動畫，不要用
+      `resonance_value` 有沒有變來推——玩家看不到前一次的值。
+    - `newly_unlocked_stages`：這次跨過的門檻，通常是空的。
+    - `unlock_stories`：對應每個新解鎖階段的敘事。⚠️ **可能比
+      `newly_unlocked_stages` 短**——生成失敗時它是空的，但階段已經確實解鎖了。
+      判斷「有沒有解鎖」要看 `newly_unlocked_stages`，不要看這個陣列。
+    """
+
     encounter_token: str
     spirit_id: str
     quest: QuestStateResponse | None = None
+
+    resonance_value: int = 0
+    stage: int = 0
+    resonance_awarded: bool = False
+    newly_unlocked_stages: list[int] = Field(default_factory=list)
+    unlock_stories: list[UnlockStoryResponse] = Field(default_factory=list)
 
 
 class DialogueRequest(BaseModel):
@@ -256,11 +292,6 @@ class QuestCompleteRequest(BaseModel):
     completion_evidence: dict = Field(default_factory=dict)
 
 
-class UnlockStoryResponse(BaseModel):
-    """一段解鎖敘事（SDD §7.5 的 `unlock_story` 物件）。"""
-
-    stage: int
-    story_text: str
 
 
 class QuestCompleteResponse(BaseModel):
@@ -277,12 +308,18 @@ class QuestCompleteResponse(BaseModel):
     - `unlock_story`：**第一個**新解鎖的階段，維持 §7.5 的形狀與客戶端相容。
     - `unlock_stories`：**完整清單**，這是真相。
 
-    MVP 的 +10／+20 跨不過兩個門檻，所以清單目前最多一個元素，兩者實質相同。
-    但呼叫端不該假設這件事——每個新解鎖的 stage 都該有自己的一段敘事，漏掉中間
-    那段是靜默的內容缺漏，不會有任何錯誤訊息提醒。
+    ## 🔴 2026-08-19 起這兩個欄位**恆為 null／空**
 
-    `stage` 與 `newly_unlocked_stages` 不在 §7.5 的範例 body 裡，是 #34 的 AC
-    要求「跨門檻時回應標示新達成 stage」才補上的。
+    任務完成不再入帳共鳴值（來源改為每日召喚 +10 與劇本節點 +30），所以這條
+    路徑不會跨門檻，也就不會有解鎖敘事。解鎖敘事現在由 `/summon` 產生。
+
+    ⚠️ **欄位刻意留著不刪**：形狀是對外契約，拿掉會是破壞性變更（§11.2.1），
+    而劇本任務接上來之後這條路徑會重新開始跨門檻——那時要填的就是這兩個欄位。
+    客戶端看到空陣列不要當成壞掉。
+
+    `resonance_value` 與 `stage` 現在是**唯讀查詢的結果**，不是入帳結果：客戶端
+    完成任務後本來就想知道關係到哪了，而它已經在這一次往返裡，拿掉只會逼客戶端
+    多打一次 `GET /resonance/{spiritId}`。
     """
 
     quest_wrapper_text: str | None = None
@@ -347,24 +384,6 @@ class DailyEventResponse(BaseModel):
     is_fallback: bool = False
     sources: list[str] = Field(default_factory=list)
     official_event: OfficialEvent | None = None
-
-
-class LandmarkPhotoResponse(BaseModel):
-    """
-    `POST /api/v1/quests/{questId}/landmark-photo` 的回應（S12／#44）。
-
-    ⚠️ **回應裡沒有任何影像相關的東西**——沒有 URL、沒有雜湊、沒有尺寸。
-    照片只在記憶體處理、辨識完立即捨棄（SDD §7.7），回應也不該留下它存在過的
-    痕跡。
-
-    `resonance_awarded` 為 false 有兩種可能：辨識失敗，或這個地標之前已經收藏過
-    （`UNIQUE(player_id, place_id)`，每個地標只加一次 10 點）。兩者對玩家的意義
-    不同，但都不是錯誤。
-    """
-
-    landmark_recognized: bool
-    resonance_awarded: bool
-    resonance_value: int
 
 
 class QuestListItem(BaseModel):

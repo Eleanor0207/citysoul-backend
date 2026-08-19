@@ -43,9 +43,12 @@ def _make_spirit(db_session, spirit_id, *, sense_radius_meters=_SENSE_RADIUS_M, 
 
 
 @pytest.fixture
-def spirit(db_session, unique_spirit_id):
+def spirit(db_session, unique_spirit_id, purge_spirit_child_rows):
     row = _make_spirit(db_session, unique_spirit_id)
     yield row
+    # /sense 自己不入帳，但同一批測試裡有走 /summon 的（感應 vs 召喚的行為對照），
+    # 而召喚會寫 resonance／resonance_events，兩者都對 spirits 有外鍵。
+    purge_spirit_child_rows(row.spirit_id)
     db_session.delete(row)
     db_session.commit()
 

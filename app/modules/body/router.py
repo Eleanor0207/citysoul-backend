@@ -2,8 +2,7 @@ import logging
 import uuid
 from functools import lru_cache
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
-from sqlalchemy.exc import IntegrityError
+from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -28,17 +27,10 @@ from app.modules.body import (
 from app.modules.body.quests import evaluate_on_summon
 from app.modules.body.quota import (
     RESOURCE_DIALOGUE,
-    RESOURCE_LANDMARK_RECOGNITION,
     consume,
     default_tier_id,
 )
-from app.modules.body.resonance import (
-    AMOUNT_ENCOUNTER_COLLECTION,
-    AMOUNT_QUEST,
-    SOURCE_ENCOUNTER_COLLECTION,
-    SOURCE_QUEST,
-    apply_resonance,
-)
+from app.modules.body.resonance import award_daily_encounter
 from app.modules.body.sense_tokens import SENSE_TOKEN_HEADER, require_sense_token
 from app.modules.body.sense_tokens import issue_sense_token
 from app.modules.body.tokens import issue_session_token
@@ -47,11 +39,6 @@ from app.modules.brain.gemini import (
     GeminiClient,
     VertexAIGeminiClient,
     split_into_segments,
-)
-from app.modules.brain.landmark_recognition import (
-    LandmarkRecognizer,
-    VertexAILandmarkRecognizer,
-    recognize_landmark,
 )
 from app.modules.brain.greetings import match_canned_greeting
 from app.modules.brain.prompt_builder import build_prompt
@@ -117,15 +104,6 @@ def get_gemini_client() -> GeminiClient:
 
 def get_tts_client() -> TTSClient:
     return _default_tts_client()
-
-
-@lru_cache(maxsize=1)
-def _default_landmark_recognizer() -> LandmarkRecognizer:
-    return VertexAILandmarkRecognizer()
-
-
-def get_landmark_recognizer() -> LandmarkRecognizer:
-    return _default_landmark_recognizer()
 
 
 @router.post("/players", response_model=schemas.PlayerResponse)
@@ -219,10 +197,26 @@ def summon(
     payload: schemas.SummonRequest,
     player_id: uuid.UUID = Depends(require_session_token),
     db: Session = Depends(get_db),
+    gemini: GeminiClient = Depends(get_gemini_client),
 ):
     """
     S2．在場驗證與召喚（SDD 第7.1／8.4節）。
 
+        在場驗證 → 觀察期紀錄 → 任務狀態機 → 相遇收藏
+          → 🆕 每日共鳴 +10（每個地標每天一次）→ 門檻判定 → 解鎖敘事
+
+    ## 🆕 2026-08-19：這支端點現在是共鳴值的主要來源
+
+    「每天第一次召喚該地標 +10」是新規則的兩條來源之一（另一條是劇本節點 +30，
+    還沒接上）。A.L. 拍板接在**召喚**而不是**送出對話**，代價與收益都很明確：
+
+    - 收益：玩家必須真的走到 50m 內才拿得到分。`/dialogue` 收 sense token
+      （150m 隔空聊天）也算數的話，共鳴值就變成可以站在對街累積的東西，
+      而共鳴值是「關係深度」，隔空刷不該算。
+    - 代價：召喚完就關掉 App 也拿得到 +10。這是接受的——他人已經到現場了。
+
+    入帳放在在場驗證通過**之後**，跟同一支端點裡的觀察期紀錄與相遇收藏同一個
+    理由：沒通過驗證的請求不構成一次相遇，不該產生任何入帳。
     """
     spirit = db.query(models.Spirit).filter_by(spirit_id=payload.spirit_id).first()
 
@@ -260,10 +254,43 @@ def summon(
     # ——沒通過驗證的請求不構成一次相遇，不該留下紀念品。
     #
     # 冪等（ON CONFLICT DO NOTHING），所以每次召喚都叫沒關係；玩家連點兩次也
-    # 只會有一列。**不加共鳴值**：共鳴只來自任務完成與地標拍照，召喚不計分。
+    # 只會有一列。⚠️ **送圖跟加分是兩件事**：這一支永遠不加共鳴值（圖是紀念品，
+    # 一輩子一張），加分是下面那一支（每天一次）。兩者的頻率不同，不要合併。
     collections_service.grant_encounter_collectible(
         db, player_id=player_id, spirit_id=spirit.spirit_id
     )
+
+    # 🆕 每日共鳴 +10。同一天第二次召喚會回 awarded=False，那是設計不是錯誤
+    # （見 `resonance.award_daily_encounter`）。
+    resonance = award_daily_encounter(db, player_id=player_id, spirit_id=spirit.spirit_id)
+
+    # ── 到這裡為止，身體的表全部寫完了 ─────────────────────────────
+    #
+    # 🔒 v2.1 §6.4 硬規則：**先寫完自己的表、再呼叫腦袋**，不可顛倒。
+    # 顛倒的話腦袋拿到的 stage 會跟資料庫不一致——玩家會看到一段講述他還沒
+    # 達到的關係階段的故事。
+    #
+    # ⚠️ 這一段包在 try 裡是**刻意的重複防護**，理由跟任務完成那條路徑一樣：
+    # 上面的入帳已經 commit，一個逸出的例外會讓玩家收到 500，而他的共鳴值
+    # 其實已經加了——他重試，然後看到「今天已經領過」，會以為分數消失了。
+    # 敘事只是包裝，包裝失敗不能讓進度看起來像沒發生。
+    try:
+        unlock_stories = [
+            schemas.UnlockStoryResponse(stage=s.stage, story_text=s.story_text)
+            # 沒跨門檻就不呼叫 B11。這是最常見的情況（每天 +10，十天才跨三次），
+            # 每次白呼叫一次的成本很可觀。
+            for s in generate_unlock_stories(
+                gemini, spirit_id=spirit.spirit_id, stages=resonance.newly_unlocked_stages
+            )
+        ]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "召喚解鎖敘事生成失敗，共鳴值仍已入帳（%s）：%s: %s",
+            spirit.spirit_id,
+            type(exc).__name__,
+            exc,
+        )
+        unlock_stories = []
 
     return schemas.SummonResponse(
         encounter_token=issue_encounter_token(player_id, spirit.spirit_id),
@@ -273,6 +300,11 @@ def summon(
             status=quest_state.status,
             attempts_today=quest_state.attempts_today,
         ),
+        resonance_value=resonance.resonance_value,
+        stage=resonance.stage,
+        resonance_awarded=resonance.awarded,
+        newly_unlocked_stages=resonance.newly_unlocked_stages,
+        unlock_stories=unlock_stories,
     )
 
 
@@ -516,11 +548,24 @@ def complete_quest_endpoint(
     gemini: GeminiClient = Depends(get_gemini_client),
 ):
     """
-    S4＋S5．任務完成、共鳴入帳與解鎖敘事（SDD §7.5，#34 ＋ #43）。
+    S4．任務完成（SDD §7.5，#34 ＋ #43）。
 
-        確定性規則判定 → quest_progress.status = 'completed'
-          → resonance += 20 → 門檻判定
-          → 回傳（unlock_story 與 quest_wrapper_text 皆為 null）
+        確定性規則判定 → quest_progress.status = 'completed' → 敘事包裝
+
+    ## 🔴 2026-08-19：這支端點**不再入帳共鳴值**
+
+    舊規則裡任務完成給 +20（`source_type = "quest"`）。新規則的兩條來源是
+    每日召喚 +10 與劇本節點 +30，每日任務這個玩法不做了，所以入帳整段拿掉。
+
+    ⚠️ **端點本身刻意留著。** `quests` 表的 `quest_type` 是
+    `'daily' / 'story' / 'resonance_gated'`，`story_beat_id` 欄位註明「僅 story
+    類型有值」——這張表與 `quest_progress` 狀態機從一開始就是設計成同時裝每日
+    任務與**劇本任務**的。劇本節點完成需要的「在現場、可挑戰、可失敗、當天最多
+    三次」那套狀態機就是這一支。把它刪掉，接劇本 beat 時得原地重建一套一樣的。
+
+    接劇本時要做的是：判定成功後在**同一個交易裡**叫
+    `resonance.award_story_beat(beat_id=...)`，而不是把 `AMOUNT_QUEST` 改個數字
+    ——那兩者的去重語意不同（見 `award_story_beat` 的 docstring）。
 
     ## 不呼叫腦袋，一次都不
 
@@ -554,63 +599,49 @@ def complete_quest_endpoint(
     except quests.QuestNotFoundError:
         raise HTTPException(status_code=404, detail="quest not found")
 
-    # 共鳴入帳。去重靠 resonance_events 的 UNIQUE(player_id, source_type,
-    # source_id)——**不是先查再寫**。重複提交（網路重試、連點兩下）是正常的
-    # 使用者行為，S5 會回 awarded=False 而不是拋例外。
-    result = apply_resonance(
-        db,
-        player_id=session_player_id,
-        spirit_id=spirit_id,
-        source_type=SOURCE_QUEST,
-        source_id=quest_id,
-        amount=AMOUNT_QUEST,
-    )
-
     # ── 到這裡為止，身體的表全部寫完了 ─────────────────────────────
     #
     # 🔒 v2.1 §6.4 硬規則：**先寫完自己的表、再呼叫腦袋**，不可顛倒。
-    #
-    # 顛倒的話腦袋拿到的 stage 會跟資料庫不一致——玩家會看到一段講述他還沒
-    # 達到的關係階段的故事。下面所有的生成呼叫都在這條線之後，而且它們的失敗
-    # 一律不影響上面已經完成的寫入。
+    # 下面的生成呼叫都在這條線之後，而且它們的失敗一律不影響上面的寫入。
 
-    # ⚠️ 這一整段包在 try 裡，是**刻意的重複防護**。
+    # ⚠️ 這一段包在 try 裡，是**刻意的重複防護**。
     #
-    # B1 的契約是「永遠不拋例外」，B11 與任務包裝都建立在那之上，所以理論上
-    # 這裡不需要 try。但這條路徑的失敗代價特別高：上面的寫入已經 commit 了，
-    # 一個逸出的例外會讓玩家收到 500，而他的任務其實已經完成、共鳴值也已經
-    # 入帳——他會重試，然後看到「重複提交」的結果，以為進度沒有存到。
+    # B1 的契約是「永遠不拋例外」，任務包裝建立在那之上，所以理論上這裡不需要
+    # try。但這條路徑的失敗代價特別高：上面的寫入已經 commit 了，一個逸出的
+    # 例外會讓玩家收到 500，而他的任務其實已經完成——他會重試，然後看到
+    # 「重複提交」的結果，以為進度沒有存到。
     #
     # 換句話說：契約被違反時，付出代價的是玩家的信任，不是我們的 log。
     # 敘事只是包裝，包裝失敗不能讓進度看起來像消失了。
     try:
-        # 沒跨門檻就不呼叫 B11。這是最常見的情況，每次白呼叫一次的成本很可觀。
-        stories = generate_unlock_stories(
-            gemini, spirit_id=spirit_id, stages=result.newly_unlocked_stages
-        )
-        unlock_stories = [
-            schemas.UnlockStoryResponse(stage=s.stage, story_text=s.story_text)
-            for s in stories
-        ]
         wrapper_text = generate_quest_wrapper(gemini, spirit_id=spirit_id, quest_id=quest_id)
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "任務敘事生成失敗，任務仍已完成並入帳（%s）：%s: %s",
+            "任務包裝台詞生成失敗，任務仍已完成（%s）：%s: %s",
             quest_id,
             type(exc).__name__,
             exc,
         )
-        unlock_stories = []
         wrapper_text = None
+
+    # 🔴 2026-08-19 起這裡是**唯讀查詢**，不是入帳結果。
+    #
+    # 任務完成不再加共鳴值，但這三個欄位留在回應裡：客戶端完成任務後本來就會
+    # 想知道現在的關係到哪了，而它已經在這一次往返裡。拿掉的話客戶端得多打一次
+    # `GET /resonance/{spiritId}`，那是白白多一次來回。
+    #
+    # ⚠️ `newly_unlocked_stages` 因此**恆為空**，`unlock_story` 恆為 null。
+    # 不是「還沒接」，是這條路徑不再跨門檻。解鎖敘事現在由 `/summon` 產生
+    # （那裡才有入帳），不要看到空陣列就以為壞了。
+    progress = queries.resonance_progress(db, player_id=session_player_id, spirit_id=spirit_id)
 
     return schemas.QuestCompleteResponse(
         quest_wrapper_text=wrapper_text,
-        # 單數欄位維持 §7.5 的形狀；完整清單才是真相（見 QuestCompleteResponse）。
-        unlock_story=unlock_stories[0] if unlock_stories else None,
-        unlock_stories=unlock_stories,
-        resonance_value=result.resonance_value,
-        stage=result.stage,
-        newly_unlocked_stages=result.newly_unlocked_stages,
+        unlock_story=None,
+        unlock_stories=[],
+        resonance_value=progress["resonance_value"],
+        stage=progress["stage"],
+        newly_unlocked_stages=[],
     )
 
 
@@ -641,139 +672,6 @@ def get_daily_event_endpoint(place_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="spirit not found")
 
     return schemas.DailyEventResponse(**content)
-
-
-@router.post(
-    "/quests/{quest_id}/landmark-photo",
-    response_model=schemas.LandmarkPhotoResponse,
-    responses={
-        **_UNAUTHORIZED,
-        **_forbidden("Encounter token 屬於別的靈魂，或兩張憑證不屬於同一個玩家"),
-        404: {"model": schemas.ErrorResponse, "description": "任務或地標不存在"},
-        429: {"model": schemas.ErrorResponse, "description": "今日地標辨識配額已用完"},
-    },
-)
-async def landmark_photo(
-    quest_id: str,
-    photo: UploadFile = File(...),
-    session_player_id: uuid.UUID = Depends(require_session_token),
-    encounter_token: str | None = Header(default=None, alias=ENCOUNTER_TOKEN_HEADER),
-    db: Session = Depends(get_db),
-    recognizer: LandmarkRecognizer = Depends(get_landmark_recognizer),
-):
-    """
-    S12．紀念照片（後端側，#44）。
-
-        Session ＋ Encounter → 辨識配額（#32）→ 讀進記憶體 → B13（#22）
-          → 立即捨棄影像 → 相遇收藏入帳
-
-    ## 隱私是核心約束（SDD §7.7）
-
-    照片**只在記憶體處理，辨識完立即捨棄**：不寫檔、不上傳 Cloud Storage、
-    不留作訓練資料，`encounter_collections` 也不存原始照片、GPS 座標或影像雜湊。
-
-    `image_bytes` 是區域變數，函式結束就沒了。這裡刻意**不**把它存進任何
-    地方——連「最近一次辨識失敗的照片」都不留（見 `brain/landmark_recognition.py`
-    的模組註解）。
-
-    ## 只收 Encounter Token
-
-    SDD §6：持 Sense Token 者不可觸發相機疊圖相關動作。感應憑證代表「你在 150m
-    內」，拍紀念照需要「你真的到了現場」。
-
-    ## 辨識失敗不是錯誤
-
-    回 `landmark_recognized: false`，任務仍可完成——玩家只是拿不到特別徽章
-    （CONTEXT.md）。
-    """
-    try:
-        spirit_id = quests.spirit_id_for_quest(quest_id)
-    except quests.QuestNotFoundError:
-        raise HTTPException(status_code=404, detail="quest not found")
-
-    holder_id = require_encounter_token(spirit_id, encounter_token)
-    if holder_id != session_player_id:
-        raise HTTPException(status_code=403, detail="token holder mismatch")
-
-    spirit = db.query(models.Spirit).filter_by(spirit_id=spirit_id).first()
-    if spirit is None or not spirit.is_active:
-        raise HTTPException(status_code=404, detail="spirit not found")
-
-    # 配額擋在辨識之前——被擋下的請求不該產生辨識成本。
-    # 超額時 QuotaExceededError 由 main.py 的 handler 轉成 429。
-    consume(db, session_player_id, RESOURCE_LANDMARK_RECOGNITION)
-
-    # 讀進記憶體。這是影像唯一存在的地方，函式結束就沒了。
-    image_bytes = await photo.read()
-
-    recognized = recognize_landmark(recognizer, image_bytes, spirit_id)
-
-    # 明確切斷參考。技術上區域變數本來就會被回收，但這一行是給讀程式碼的人看的
-    # ——它標記出「從這裡開始不再持有影像」，讓之後有人想在下面加一段
-    # 「順便存個檔」時，先撞到這個宣告。
-    image_bytes = None
-
-    return _record_landmark_collection(
-        db, player_id=session_player_id, spirit_id=spirit_id, recognized=recognized
-    )
-
-
-def _record_landmark_collection(
-    db: Session, *, player_id: uuid.UUID, spirit_id: str, recognized: bool
-) -> schemas.LandmarkPhotoResponse:
-    """
-    相遇收藏入帳。
-
-    去重靠 `UNIQUE(player_id, place_id)`——**先寫、撞到約束才知道重複**，
-    不是先查再寫（同 #16 共鳴入帳的教訓）。重複收藏是正常的使用者行為。
-
-    共鳴值只在**這次真的建立了新收藏**時才入帳。`apply_resonance` 自己也有
-    去重（`resonance_events` 的 UNIQUE），所以這裡是兩層保護，但語意不同：
-    這一層決定「要不要試著入帳」，那一層保證「試了也不會重複」。
-    """
-    row = models.EncounterCollection(
-        player_id=player_id,
-        place_id=spirit_id,
-        landmark_recognized=recognized,
-        resonance_awarded=False,
-    )
-
-    newly_collected = True
-    try:
-        with db.begin_nested():
-            db.add(row)
-    except IntegrityError:
-        newly_collected = False
-        db.rollback()
-
-    awarded = False
-    if newly_collected:
-        result = apply_resonance(
-            db,
-            player_id=player_id,
-            spirit_id=spirit_id,
-            source_type=SOURCE_ENCOUNTER_COLLECTION,
-            source_id=spirit_id,
-            amount=AMOUNT_ENCOUNTER_COLLECTION,
-        )
-        awarded = result.awarded
-        row.resonance_awarded = awarded
-        db.commit()
-        resonance_value = result.resonance_value
-    else:
-        db.commit()
-        existing = (
-            db.query(models.Resonance)
-            .filter_by(player_id=player_id, spirit_id=spirit_id)
-            .first()
-        )
-        resonance_value = existing.resonance_value if existing else 0
-
-    return schemas.LandmarkPhotoResponse(
-        landmark_recognized=recognized,
-        resonance_awarded=awarded,
-        resonance_value=resonance_value,
-    )
 
 
 @router.get(

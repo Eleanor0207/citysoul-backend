@@ -1,5 +1,12 @@
 """
-#34．`POST /quests/{questId}/complete` 任務完成與共鳴入帳（SDD §7.5 前半）。
+#34．`POST /quests/{questId}/complete` 任務完成（SDD §7.5 前半）。
+
+🔴 **2026-08-19：這支端點不再入帳共鳴值。** 共鳴值的來源改為每日召喚 +10 與
+劇本節點 +30，每日任務這個玩法不做了。端點與狀態機留著，因為劇本任務會用
+同一套（`quests.quest_type` 本來就有 `'story'`）。
+
+⚠️ 因此**基準共鳴值是 10 而不是 0**：`summoned` 夾具會走一次 `/summon`，
+而召喚現在就給 +10。看到 10 不要以為是任務給的。
 
 對真實 Postgres 跑。任務進度由 `/summon` 建立（那是它唯一的建立路徑），
 所以這裡的夾具會先走一次召喚——直接 INSERT 一列的話，測試就繞過了真正的
@@ -12,7 +19,7 @@ import pytest
 from app.modules.body import models
 from app.modules.body.encounter_tokens import ENCOUNTER_TOKEN_HEADER, issue_encounter_token
 from app.modules.body.quests import STATUS_COMPLETED, STATUS_IN_PROGRESS, quest_id_for_spirit
-from app.modules.body.resonance import SOURCE_QUEST, apply_resonance
+from app.modules.body.resonance import SOURCE_DAILY_ENCOUNTER, apply_resonance
 from app.modules.body.sense_tokens import issue_sense_token
 
 _LAT, _LON = 25.0955, 121.5186
@@ -53,6 +60,9 @@ def summoned(client, spirit, player):
     先召喚一次，讓 quest_progress 有一列。
 
     直接 INSERT 會繞過真正的建立路徑——那條路徑壞掉時這裡就看不出來。
+
+    ⚠️ 2026-08-19 起這一次召喚**順帶入帳 +10**（每日共鳴）。所以用到這個夾具的
+    測試，共鳴值的起點是 10，不是 0。
     """
     pid, sess = player
     client.post(
@@ -138,7 +148,9 @@ def test_encounter_token_for_another_spirit_returns_403(client, spirit, summoned
 
     assert response.status_code == 403
     assert _progress(db_session, pid, quest_id).status == STATUS_IN_PROGRESS
-    assert _resonance_value(db_session, pid, spirit.spirit_id) == 0
+    # ⚠️ 10 而不是 0：`summoned` 夾具那次召喚已經給了每日共鳴（2026-08-19 起）。
+    # 這條守的是「被擋下的請求沒有**額外**加值」，不是「共鳴值為零」。
+    assert _resonance_value(db_session, pid, spirit.spirit_id) == 10
 
 
 def test_tokens_from_different_players_are_rejected(client, spirit, summoned, db_session):
@@ -178,7 +190,9 @@ def test_sense_token_cannot_complete_a_quest(client, spirit, summoned, db_sessio
 
     assert response.status_code in (401, 403)
     assert _progress(db_session, pid, quest_id).status == STATUS_IN_PROGRESS
-    assert _resonance_value(db_session, pid, spirit.spirit_id) == 0
+    # ⚠️ 10 而不是 0：`summoned` 夾具那次召喚已經給了每日共鳴（2026-08-19 起）。
+    # 這條守的是「被擋下的請求沒有**額外**加值」，不是「共鳴值為零」。
+    assert _resonance_value(db_session, pid, spirit.spirit_id) == 10
 
 
 # ── 完成流程 ───────────────────────────────────────────────────────────
@@ -200,7 +214,63 @@ def test_completion_sets_status_and_timestamp(client, spirit, summoned, db_sessi
     assert progress.completed_at is not None
 
 
-def test_completion_awards_twenty_resonance(client, spirit, summoned, db_session):
+def test_completion_awards_no_resonance(client, spirit, summoned, db_session):
+    """
+    🔴 2026-08-19：任務完成**不再加共鳴值**。
+
+    共鳴值仍然是 10——那是 `summoned` 夾具那次召喚給的，不是任務給的。
+    這條紅了（變成 30 或 40）代表有人把入帳接了回去。
+    """
+    pid, sess = summoned
+    before = _resonance_value(db_session, pid, spirit.spirit_id)
+    assert before == 10, "夾具的召喚應該已經給了 +10"
+
+    body = _complete(
+        client,
+        quest_id_for_spirit(spirit.spirit_id),
+        session_token=sess,
+        encounter_token=issue_encounter_token(pid, spirit.spirit_id),
+    ).json()
+
+    assert body["resonance_value"] == 10
+    assert _resonance_value(db_session, pid, spirit.spirit_id) == 10
+
+
+def test_completion_writes_no_ledger_row(client, spirit, summoned, db_session):
+    """
+    🔒 帳本裡不該出現任何 source_type='quest' 的列。
+
+    只看 `resonance_value` 沒變是不夠的——一筆 amount=0 的入帳同樣不會改變
+    數值，但它會留下一列，而且代表入帳路徑其實還接著。
+    """
+    pid, sess = summoned
+    quest_id = quest_id_for_spirit(spirit.spirit_id)
+
+    _complete(
+        client,
+        quest_id,
+        session_token=sess,
+        encounter_token=issue_encounter_token(pid, spirit.spirit_id),
+    )
+
+    db_session.expire_all()
+    assert (
+        db_session.query(models.ResonanceEvent)
+        .filter_by(player_id=pid, source_type="quest")
+        .count()
+        == 0
+    )
+
+
+def test_completion_never_crosses_a_threshold(client, spirit, summoned):
+    """
+    🔴 這條路徑不再跨門檻，所以 `newly_unlocked_stages` 恆為空。
+
+    ⚠️ 這**不是**「還沒接」。跨門檻現在只發生在 `/summon`（那裡才有入帳），
+    解鎖敘事也跟著搬過去了。看到空陣列不要以為壞了。
+
+    共鳴值 10 是夾具那次召喚給的，stage 1 也是那時候跨的——不是這一次呼叫。
+    """
     pid, sess = summoned
 
     body = _complete(
@@ -210,85 +280,52 @@ def test_completion_awards_twenty_resonance(client, spirit, summoned, db_session
         encounter_token=issue_encounter_token(pid, spirit.spirit_id),
     ).json()
 
-    assert body["resonance_value"] == 20
-    assert _resonance_value(db_session, pid, spirit.spirit_id) == 20
-
-
-def test_crossing_the_first_threshold_reports_stage_one(client, spirit, summoned):
-    """AC (a)：共鳴值 0 → 20，跨過 10，回應標示新達成 stage 1。"""
-    pid, sess = summoned
-
-    body = _complete(
-        client,
-        quest_id_for_spirit(spirit.spirit_id),
-        session_token=sess,
-        encounter_token=issue_encounter_token(pid, spirit.spirit_id),
-    ).json()
-
-    assert body["resonance_value"] == 20
+    assert body["resonance_value"] == 10
     assert body["stage"] == 1
-    assert body["newly_unlocked_stages"] == [1]
-
-
-def test_crossing_the_second_threshold_reports_stage_two(client, spirit, summoned, db_session):
-    """AC (b)：共鳴值 30 → 50，跨過 40，回應標示新達成 stage 2。"""
-    pid, sess = summoned
-    apply_resonance(
-        db_session,
-        player_id=pid,
-        spirit_id=spirit.spirit_id,
-        source_type="test_seed",
-        source_id="seed-30",
-        amount=30,
-    )
-
-    body = _complete(
-        client,
-        quest_id_for_spirit(spirit.spirit_id),
-        session_token=sess,
-        encounter_token=issue_encounter_token(pid, spirit.spirit_id),
-    ).json()
-
-    assert body["resonance_value"] == 50
-    assert body["stage"] == 2
-    assert body["newly_unlocked_stages"] == [2]
-
-
-def test_not_crossing_a_threshold_reports_no_new_stage(client, spirit, summoned, db_session):
-    """AC：共鳴值 50 → 70，兩者都在 stage 2，回應標示**沒有**新 stage。"""
-    pid, sess = summoned
-    apply_resonance(
-        db_session,
-        player_id=pid,
-        spirit_id=spirit.spirit_id,
-        source_type="test_seed",
-        source_id="seed-50",
-        amount=50,
-    )
-
-    body = _complete(
-        client,
-        quest_id_for_spirit(spirit.spirit_id),
-        session_token=sess,
-        encounter_token=issue_encounter_token(pid, spirit.spirit_id),
-    ).json()
-
-    assert body["resonance_value"] == 70
-    assert body["stage"] == 2
     assert body["newly_unlocked_stages"] == []
+    assert body["unlock_story"] is None
+    assert body["unlock_stories"] == []
+
+
+def test_completion_reports_current_resonance_not_zero(client, spirit, summoned, db_session):
+    """
+    回應裡的 `resonance_value` 是**當下的真實值**（唯讀查詢），不是入帳結果。
+
+    先塞到 55 再完成任務，回應該照實回 55——回 0 代表有人把欄位寫死了，
+    回 75 代表入帳被接了回去。
+    """
+    pid, sess = summoned
+    apply_resonance(
+        db_session,
+        player_id=pid,
+        spirit_id=spirit.spirit_id,
+        source_type="test_seed",
+        source_id="seed-45",
+        amount=45,
+    )
+
+    body = _complete(
+        client,
+        quest_id_for_spirit(spirit.spirit_id),
+        session_token=sess,
+        encounter_token=issue_encounter_token(pid, spirit.spirit_id),
+    ).json()
+
+    assert body["resonance_value"] == 55
+    assert body["stage"] == 2
 
 
 # ── 重複提交 ───────────────────────────────────────────────────────────
 
 def test_submitting_twice_does_not_award_twice(client, spirit, summoned, db_session):
     """
-    🔒 AC：第二次仍回 200（不是 500）、共鳴值維持 20、帳本只有 1 列。
+    🔒 第二次仍回 200（不是 500），狀態與共鳴值都沒有被動到。
 
-    重複提交是正常的使用者行為（網路重試、連點兩下），不是錯誤。去重靠 S5 的
-    `UNIQUE(player_id, source_type, source_id)`，**不是先查再寫**——先查再寫在
-    並行下會讓兩個請求同時查到「沒有」然後都寫進去。
+    重複提交是正常的使用者行為（網路重試、連點兩下），不是錯誤。
 
-    AC 指定要做 mutation 驗證的那一條。
+    ⚠️ 2026-08-19 後這條測的是**狀態機的冪等**，不再是共鳴去重——這條路徑
+    根本不入帳了。共鳴值那邊的去重仍然由 `UNIQUE(player_id, source_type,
+    source_id)` 保證，證據在 `test_resonance.py` 與 `test_summon.py`。
     """
     pid, sess = summoned
     quest_id = quest_id_for_spirit(spirit.spirit_id)
@@ -299,16 +336,18 @@ def test_submitting_twice_does_not_award_twice(client, spirit, summoned, db_sess
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert second.json()["resonance_value"] == 20
-    assert _resonance_value(db_session, pid, spirit.spirit_id) == 20
+    assert second.json()["resonance_value"] == 10  # 夾具召喚給的，兩次都沒動它
+    assert _resonance_value(db_session, pid, spirit.spirit_id) == 10
+    assert _progress(db_session, pid, quest_id).status == STATUS_COMPLETED
 
+    # 帳本裡只有召喚那一列，任務沒有留下任何東西。
     db_session.expire_all()
-    ledger_rows = (
+    rows = (
         db_session.query(models.ResonanceEvent)
-        .filter_by(player_id=pid, source_type=SOURCE_QUEST, source_id=quest_id)
-        .count()
+        .filter_by(player_id=pid, spirit_id=spirit.spirit_id)
+        .all()
     )
-    assert ledger_rows == 1
+    assert [r.source_type for r in rows] == [SOURCE_DAILY_ENCOUNTER]
 
 
 def test_second_submission_reports_no_new_unlock(client, spirit, summoned):
@@ -334,7 +373,7 @@ def test_judgement_never_depends_on_the_llm(client, spirit, summoned, monkeypatc
     資料庫寫入完成之後，而且只為了產生包裝文字。
 
     判定本身仍然完全不依賴 LLM，而證明它的方式是：讓腦袋整個爆炸，任務照樣
-    完成、共鳴值照樣入帳。如果判定用到了 LLM，這裡會拿不到 200。
+    完成。如果判定用到了 LLM，這裡會拿不到 200。
     """
     from app.modules.brain import gemini
 
@@ -355,18 +394,16 @@ def test_judgement_never_depends_on_the_llm(client, spirit, summoned, monkeypatc
 
     assert response.status_code == 200
     assert _progress(db_session, pid, quest_id).status == STATUS_COMPLETED
-    assert _resonance_value(db_session, pid, spirit.spirit_id) == 20
 
 
 # ── #43：敘事欄位 ─────────────────────────────────────────────────────
 
-def test_narrative_fields_are_populated_when_a_threshold_is_crossed(client, spirit, summoned):
+def test_wrapper_text_is_populated(client, spirit, summoned):
     """
-    ⚠️ **這條測試在 #43 之後改寫過。** 原本斷言 `unlock_story` 與
-    `quest_wrapper_text` 一律為 null，那是 #34 刻意的範圍切割（§7.5 允許
-    `unlock_story` 為 null，所以那是合法的完整回應，不是半成品）。
+    #43 的任務包裝台詞仍然會生成——那一段跟共鳴值無關，是「你完成了一件事」
+    的語氣包裝。
 
-    #43 把 B11 與任務包裝接上來之後，跨門檻時它們就該有值了。
+    ⚠️ `unlock_story` 則恆為 null（見 `test_completion_never_crosses_a_threshold`）。
     """
     pid, sess = summoned
 
@@ -377,11 +414,8 @@ def test_narrative_fields_are_populated_when_a_threshold_is_crossed(client, spir
         encounter_token=issue_encounter_token(pid, spirit.spirit_id),
     ).json()
 
-    assert body["newly_unlocked_stages"] == [1]
-    assert body["unlock_story"] is not None
-    assert body["unlock_story"]["stage"] == 1
-    assert body["unlock_story"]["story_text"]
     assert body["quest_wrapper_text"]
+    assert body["unlock_story"] is None
 
 
 # ── quest_id 格式 ─────────────────────────────────────────────────────
@@ -458,9 +492,9 @@ def test_duplicate_is_rejected_by_the_database_not_by_application_code(spirit, p
             models.ResonanceEvent(
                 player_id=player_id,
                 spirit_id=spirit.spirit_id,
-                source_type=SOURCE_QUEST,
+                source_type=SOURCE_DAILY_ENCOUNTER,
                 source_id=source_id,
-                amount=20,
+                amount=10,
             )
         )
         session.commit()
@@ -469,9 +503,9 @@ def test_duplicate_is_rejected_by_the_database_not_by_application_code(spirit, p
             models.ResonanceEvent(
                 player_id=player_id,
                 spirit_id=spirit.spirit_id,
-                source_type=SOURCE_QUEST,
+                source_type=SOURCE_DAILY_ENCOUNTER,
                 source_id=source_id,
-                amount=20,
+                amount=10,
             )
         )
         with pytest.raises(IntegrityError):

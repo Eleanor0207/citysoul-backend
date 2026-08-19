@@ -85,7 +85,6 @@ EXPECTED_RESPONSE_CODES = {
     # #34：只收 encounter token，所以沒有獨立的 sense 錯誤碼。
     ("post", "/api/v1/quests/{quest_id}/complete"): {"200", "401", "403", "404", "422"},
     # #44：配額擋在辨識之前，所以有 429。同樣只收 encounter token。
-    ("post", "/api/v1/quests/{quest_id}/landmark-photo"): {"200", "401", "403", "404", "422", "429"},
     # ── S8 查詢端點（#33／#35／#36／#37）──
     # 都只需要 session token，所以沒有 403。
     ("get", "/api/v1/quests/daily"): {"200", "401"},

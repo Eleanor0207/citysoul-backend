@@ -40,11 +40,21 @@ from sqlalchemy.orm import Session
 
 from app.core.redis_client import redis_client
 from app.modules.body.models import UsageTier, UsageTierLimit
-from app.modules.body.quests import TAIPEI, taipei_today
+from app.modules.body.taipei import TAIPEI, taipei_today
 
 # 資源名稱常數。呼叫端用這些而不是字面字串，避免打錯字造成「查不到上限」
 # 而被靜默當成無限制。
 RESOURCE_DIALOGUE = "dialogue_calls_daily"
+
+# ⚠️ 2026-08-19：地標拍照辨識整條路已拆除（`/landmarks/{id}/photo` 端點與
+# `landmark_recognition.py` 都刪了），**這個常數已經沒有呼叫端**。
+#
+# 名字刻意留著不刪：`usage_tier_limits` 裡仍然有以這個字串為 key 的列，而
+# `consume()` 對「查不到上限」的處置是**靜默當成無限制**。哪天有人重新接上
+# 影像類的端點、順手寫了一個拼法不同的資源名，那道上限就等於不存在，而且
+# 不會有任何錯誤訊息。留著這個常數是為了讓那個人先撞到它。
+#
+# 真要清掉的話，得連 `usage_tier_limits` 的資料一起遷移，那是一次獨立的決定。
 RESOURCE_LANDMARK_RECOGNITION = "landmark_recognition_daily"
 
 

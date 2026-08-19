@@ -39,7 +39,7 @@ def _entry(payload: dict, collection_id: str) -> dict | None:
 
 
 @pytest.fixture
-def spirit(db_session, unique_spirit_id):
+def spirit(db_session, unique_spirit_id, purge_spirit_child_rows):
     row = models.Spirit(
         spirit_id=unique_spirit_id,
         display_name="測試地標",
@@ -51,6 +51,8 @@ def spirit(db_session, unique_spirit_id):
     db_session.add(row)
     db_session.commit()
     yield row
+    # 召喚會寫 resonance／resonance_events，兩者都對 spirits 有外鍵（2026-08-19）。
+    purge_spirit_child_rows(row.spirit_id)
     db_session.delete(row)
     db_session.commit()
 
@@ -168,21 +170,59 @@ def test_failed_summon_does_not_unlock(client, player, spirit):
     assert _entry(payload, item_id)["unlocked"] is False
 
 
-def test_summon_awards_no_resonance(client, player, spirit, db_session):
+def test_granting_the_collectible_does_not_award_extra_resonance(
+    client, player, spirit, db_session
+):
     """
-    召喚送圖但**不加共鳴值**。共鳴只來自任務完成（+20）與地標拍照（+10）。
+    🔒 **送圖與加分仍然是兩件事**，即使它們現在發生在同一支端點裡。
 
-    這條在這裡守著，是因為「解鎖收藏」看起來很像一件該給獎勵的事——哪天有人順手
-    加上去，親近度門檻的意義會跟著變，而且不會有別的測試變紅。
+    ⚠️ 這條測試在 2026-08-19 改寫過。原本斷言「召喚完全不加共鳴值」——那在舊規則
+    （共鳴只來自任務 +20 與拍照 +10）下是對的。新規則裡召喚**就是** +10 的來源，
+    所以那個斷言必然紅。
+
+    但它原本要守的東西沒有變，只是換了形狀：`grant_encounter_collectible()` 的
+    docstring 寫著「送圖是紀念，不是計分」，而**紀念品一輩子一張、分數每天一次**
+    ——兩者頻率不同，合併就錯了。所以這裡改成守「入帳只有一筆，而且來自
+    `daily_encounter`」：如果哪天有人在發圖那條路上順手也加一次分，帳本會多出
+    一列別的 source_type，這條就會紅。
+
+    只斷言 `resonance_value == 10` 是不夠的——兩筆各 +5 也是 10。要看帳本。
     """
     _summon(client, player["session_token"], spirit.spirit_id)
 
-    total = (
-        db_session.query(models.Resonance)
+    db_session.expire_all()
+    events = (
+        db_session.query(models.ResonanceEvent)
+        .filter_by(player_id=uuid.UUID(player["player_id"]))
+        .all()
+    )
+
+    assert [e.source_type for e in events] == ["daily_encounter"], (
+        "召喚應該只入帳一筆每日共鳴；多出來的列代表發圖那條路也在加分"
+    )
+    assert events[0].amount == 10
+
+
+def test_repeated_summon_awards_resonance_only_once_per_day(
+    client, player, spirit, db_session
+):
+    """
+    同一天連續召喚兩次：圖只有一張（既有測試涵蓋），**分也只有一筆**。
+
+    兩層去重的機制不同（inventory 靠 `uq_inventory_player_item`，共鳴靠
+    `uq_resonance_events_source`），所以要各自驗。
+    """
+    _summon(client, player["session_token"], spirit.spirit_id)
+    _summon(client, player["session_token"], spirit.spirit_id)
+
+    db_session.expire_all()
+    count = (
+        db_session.query(models.ResonanceEvent)
         .filter_by(player_id=uuid.UUID(player["player_id"]))
         .count()
     )
-    assert total == 0
+
+    assert count == 1
 
 
 # ── 未解鎖的遮蔽 ───────────────────────────────────────────────────────

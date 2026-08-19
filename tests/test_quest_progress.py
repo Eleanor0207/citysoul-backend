@@ -58,7 +58,7 @@ def _today_taipei_at(hour: int) -> datetime:
 
 
 @pytest.fixture
-def spirit(db_session):
+def spirit(db_session, purge_spirit_child_rows):
     row = models.Spirit(
         spirit_id=f"test-spirit-{uuid.uuid4()}",
         display_name="測試地標",
@@ -70,6 +70,8 @@ def spirit(db_session):
     db_session.add(row)
     db_session.commit()
     yield row
+    # 召喚會寫 resonance／resonance_events，兩者都對 spirits 有外鍵。
+    purge_spirit_child_rows(row.spirit_id)
     db_session.delete(row)
     db_session.commit()
 

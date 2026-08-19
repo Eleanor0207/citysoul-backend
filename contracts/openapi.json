@@ -30,20 +30,6 @@
         "title": "AvatarAssetResponse",
         "type": "object"
       },
-      "Body_landmark_photo_api_v1_quests__quest_id__landmark_photo_post": {
-        "properties": {
-          "photo": {
-            "format": "binary",
-            "title": "Photo",
-            "type": "string"
-          }
-        },
-        "required": [
-          "photo"
-        ],
-        "title": "Body_landmark_photo_api_v1_quests__quest_id__landmark_photo_post",
-        "type": "object"
-      },
       "CollectionEntry": {
         "description": "收藏視窗的一格（`GET /api/v1/collections`）。\n\n🔒 **未解鎖時只有 `title`；`image_url`、`caption`、`acquired_at` 都是 `null`。**\n\n界線是「名字不是秘密，內容才是」：地標名玩家在地圖上本來就看得到，遮起來只會讓\n收藏視窗變得難懂；圖與說明文字是解鎖真正換到的東西，照樣送出去的話抓一次封包\n就看完了整本圖鑑。遮蔽做在伺服器端，不是靠客戶端自律。\n\n`caption` 是放大檢視裡圖底下那段說明文字，長度不設限——客戶端那邊是可捲動的。\n\n`source_type` 是客戶端判斷來源的唯一依據（`encounter`＝初次相遇圖，\n`arc_completion`＝劇本完成圖）。**不要用 `collection_id` 的前綴去判斷**——\n那是伺服器的內部命名，改了不該要發一版客戶端。\n\n⚠️ 兩種來源在介面上**排在同一個方陣裡、不分區**（A.L. 2026-08-18）。所以\n`entries` 的順序就是畫面的順序，客戶端不會再排一次——不要為了「整理一下」\n去改這裡的排序。",
         "properties": {
@@ -374,30 +360,6 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
-      "LandmarkPhotoResponse": {
-        "description": "`POST /api/v1/quests/{questId}/landmark-photo` 的回應（S12／#44）。\n\n⚠️ **回應裡沒有任何影像相關的東西**——沒有 URL、沒有雜湊、沒有尺寸。\n照片只在記憶體處理、辨識完立即捨棄（SDD §7.7），回應也不該留下它存在過的\n痕跡。\n\n`resonance_awarded` 為 false 有兩種可能：辨識失敗，或這個地標之前已經收藏過\n（`UNIQUE(player_id, place_id)`，每個地標只加一次 10 點）。兩者對玩家的意義\n不同，但都不是錯誤。",
-        "properties": {
-          "landmark_recognized": {
-            "title": "Landmark Recognized",
-            "type": "boolean"
-          },
-          "resonance_awarded": {
-            "title": "Resonance Awarded",
-            "type": "boolean"
-          },
-          "resonance_value": {
-            "title": "Resonance Value",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "landmark_recognized",
-          "resonance_awarded",
-          "resonance_value"
-        ],
-        "title": "LandmarkPhotoResponse",
-        "type": "object"
-      },
       "MemoryGroup": {
         "description": "依靈魂分組的記憶。",
         "properties": {
@@ -664,7 +626,7 @@
         "type": "object"
       },
       "QuestCompleteResponse": {
-        "description": "SDD §7.5 的完成回應。\n\n## 為什麼有 `unlock_story` **和** `unlock_stories`\n\n§7.5 定義的是**單數** `unlock_story`，但 `newly_unlocked_stages` 是 list\n——一次入帳理論上可能跨過多個門檻（#16 刻意的設計）。單數欄位表達不了那件事。\n\n所以兩個都有，各有明確職責：\n\n- `unlock_story`：**第一個**新解鎖的階段，維持 §7.5 的形狀與客戶端相容。\n- `unlock_stories`：**完整清單**，這是真相。\n\nMVP 的 +10／+20 跨不過兩個門檻，所以清單目前最多一個元素，兩者實質相同。\n但呼叫端不該假設這件事——每個新解鎖的 stage 都該有自己的一段敘事，漏掉中間\n那段是靜默的內容缺漏，不會有任何錯誤訊息提醒。\n\n`stage` 與 `newly_unlocked_stages` 不在 §7.5 的範例 body 裡，是 #34 的 AC\n要求「跨門檻時回應標示新達成 stage」才補上的。",
+        "description": "SDD §7.5 的完成回應。\n\n## 為什麼有 `unlock_story` **和** `unlock_stories`\n\n§7.5 定義的是**單數** `unlock_story`，但 `newly_unlocked_stages` 是 list\n——一次入帳理論上可能跨過多個門檻（#16 刻意的設計）。單數欄位表達不了那件事。\n\n所以兩個都有，各有明確職責：\n\n- `unlock_story`：**第一個**新解鎖的階段，維持 §7.5 的形狀與客戶端相容。\n- `unlock_stories`：**完整清單**，這是真相。\n\n## 🔴 2026-08-19 起這兩個欄位**恆為 null／空**\n\n任務完成不再入帳共鳴值（來源改為每日召喚 +10 與劇本節點 +30），所以這條\n路徑不會跨門檻，也就不會有解鎖敘事。解鎖敘事現在由 `/summon` 產生。\n\n⚠️ **欄位刻意留著不刪**：形狀是對外契約，拿掉會是破壞性變更（§11.2.1），\n而劇本任務接上來之後這條路徑會重新開始跨門檻——那時要填的就是這兩個欄位。\n客戶端看到空陣列不要當成壞掉。\n\n`resonance_value` 與 `stage` 現在是**唯讀查詢的結果**，不是入帳結果：客戶端\n完成任務後本來就想知道關係到哪了，而它已經在這一次往返裡，拿掉只會逼客戶端\n多打一次 `GET /resonance/{spiritId}`。",
         "properties": {
           "newly_unlocked_stages": {
             "items": {
@@ -991,10 +953,18 @@
         "type": "object"
       },
       "SummonResponse": {
+        "description": "召喚回應（SDD 第8.4節）＋ 🆕 2026-08-19 的共鳴欄位。\n\n## 新增的五個欄位都是「加法」，客戶端不改也不會壞\n\nNewtonsoft 忽略不認識的欄位，所以現有的 `ApiModels.SummonResponse` 照樣\n反序列化得出來，只是拿不到新資訊。要顯示「+10」與解鎖敘事時再補 C# 欄位。\n\n- `resonance_awarded`：**false 是正常結果**，代表今天已經在這個地標領過了，\n  不是錯誤。客戶端要用它決定要不要播加分動畫，不要用\n  `resonance_value` 有沒有變來推——玩家看不到前一次的值。\n- `newly_unlocked_stages`：這次跨過的門檻，通常是空的。\n- `unlock_stories`：對應每個新解鎖階段的敘事。⚠️ **可能比\n  `newly_unlocked_stages` 短**——生成失敗時它是空的，但階段已經確實解鎖了。\n  判斷「有沒有解鎖」要看 `newly_unlocked_stages`，不要看這個陣列。",
         "properties": {
           "encounter_token": {
             "title": "Encounter Token",
             "type": "string"
+          },
+          "newly_unlocked_stages": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Newly Unlocked Stages",
+            "type": "array"
           },
           "quest": {
             "anyOf": [
@@ -1006,9 +976,31 @@
               }
             ]
           },
+          "resonance_awarded": {
+            "default": false,
+            "title": "Resonance Awarded",
+            "type": "boolean"
+          },
+          "resonance_value": {
+            "default": 0,
+            "title": "Resonance Value",
+            "type": "integer"
+          },
           "spirit_id": {
             "title": "Spirit Id",
             "type": "string"
+          },
+          "stage": {
+            "default": 0,
+            "title": "Stage",
+            "type": "integer"
+          },
+          "unlock_stories": {
+            "items": {
+              "$ref": "#/components/schemas/UnlockStoryResponse"
+            },
+            "title": "Unlock Stories",
+            "type": "array"
           }
         },
         "required": [
@@ -1033,7 +1025,7 @@
         "type": "object"
       },
       "UnlockStoryResponse": {
-        "description": "一段解鎖敘事（SDD §7.5 的 `unlock_story` 物件）。",
+        "description": "一段解鎖敘事（SDD §7.5 的 `unlock_story` 物件）。\n\n⚠️ 定義**刻意放在 `SummonResponse` 之前**：2026-08-19 起共鳴入帳搬到\n`/summon`，解鎖敘事跟著搬過來，所以召喚回應要引用它。放在後面就得靠前向\n引用字串加 `model_rebuild()`，那是一個純粹因為檔案順序而存在的複雜度。",
         "properties": {
           "stage": {
             "title": "Stage",
@@ -1474,7 +1466,7 @@
     },
     "/api/v1/quests/{quest_id}/complete": {
       "post": {
-        "description": "S4＋S5．任務完成、共鳴入帳與解鎖敘事（SDD §7.5，#34 ＋ #43）。\n\n    確定性規則判定 → quest_progress.status = 'completed'\n      → resonance += 20 → 門檻判定\n      → 回傳（unlock_story 與 quest_wrapper_text 皆為 null）\n\n## 不呼叫腦袋，一次都不\n\nCONTEXT.md 明訂「可驗證微任務由**後端確定性規則**判定，不由 LLM 判定」。\n這支端點因此完全不 import 任何腦袋模組——判定只看資料庫裡的狀態。\n\n## 呼叫順序硬規則（v2.1 §6.4）\n\n身體必須「先寫完自己的表、再呼叫腦袋」，不可顛倒。本票只做前半，正好\n符合此順序；#43 接上敘事生成時，那一段要加在所有寫入**之後**。\n\n## 只收 Encounter Token\n\nSDD §6：持 Sense Token 者**不可**呼叫這支端點。感應憑證代表「你在 150m\n內」，而任務完成需要「你真的到了現場」。兩者用不同金鑰簽章，所以把\nsense token 塞進 `X-Encounter-Token` 會在驗章就失敗——這不是靠我們記得\n檢查 purpose，是兩套憑證本來就換不過來。",
+        "description": "S4．任務完成（SDD §7.5，#34 ＋ #43）。\n\n    確定性規則判定 → quest_progress.status = 'completed' → 敘事包裝\n\n## 🔴 2026-08-19：這支端點**不再入帳共鳴值**\n\n舊規則裡任務完成給 +20（`source_type = \"quest\"`）。新規則的兩條來源是\n每日召喚 +10 與劇本節點 +30，每日任務這個玩法不做了，所以入帳整段拿掉。\n\n⚠️ **端點本身刻意留著。** `quests` 表的 `quest_type` 是\n`'daily' / 'story' / 'resonance_gated'`，`story_beat_id` 欄位註明「僅 story\n類型有值」——這張表與 `quest_progress` 狀態機從一開始就是設計成同時裝每日\n任務與**劇本任務**的。劇本節點完成需要的「在現場、可挑戰、可失敗、當天最多\n三次」那套狀態機就是這一支。把它刪掉，接劇本 beat 時得原地重建一套一樣的。\n\n接劇本時要做的是：判定成功後在**同一個交易裡**叫\n`resonance.award_story_beat(beat_id=...)`，而不是把 `AMOUNT_QUEST` 改個數字\n——那兩者的去重語意不同（見 `award_story_beat` 的 docstring）。\n\n## 不呼叫腦袋，一次都不\n\nCONTEXT.md 明訂「可驗證微任務由**後端確定性規則**判定，不由 LLM 判定」。\n這支端點因此完全不 import 任何腦袋模組——判定只看資料庫裡的狀態。\n\n## 呼叫順序硬規則（v2.1 §6.4）\n\n身體必須「先寫完自己的表、再呼叫腦袋」，不可顛倒。本票只做前半，正好\n符合此順序；#43 接上敘事生成時，那一段要加在所有寫入**之後**。\n\n## 只收 Encounter Token\n\nSDD §6：持 Sense Token 者**不可**呼叫這支端點。感應憑證代表「你在 150m\n內」，而任務完成需要「你真的到了現場」。兩者用不同金鑰簽章，所以把\nsense token 塞進 `X-Encounter-Token` 會在驗章就失敗——這不是靠我們記得\n檢查 purpose，是兩套憑證本來就換不過來。",
         "operationId": "complete_quest_endpoint_api_v1_quests__quest_id__complete_post",
         "parameters": [
           {
@@ -1571,120 +1563,6 @@
           }
         ],
         "summary": "Complete Quest Endpoint",
-        "tags": [
-          "body"
-        ]
-      }
-    },
-    "/api/v1/quests/{quest_id}/landmark-photo": {
-      "post": {
-        "description": "S12．紀念照片（後端側，#44）。\n\n    Session ＋ Encounter → 辨識配額（#32）→ 讀進記憶體 → B13（#22）\n      → 立即捨棄影像 → 相遇收藏入帳\n\n## 隱私是核心約束（SDD §7.7）\n\n照片**只在記憶體處理，辨識完立即捨棄**：不寫檔、不上傳 Cloud Storage、\n不留作訓練資料，`encounter_collections` 也不存原始照片、GPS 座標或影像雜湊。\n\n`image_bytes` 是區域變數，函式結束就沒了。這裡刻意**不**把它存進任何\n地方——連「最近一次辨識失敗的照片」都不留（見 `brain/landmark_recognition.py`\n的模組註解）。\n\n## 只收 Encounter Token\n\nSDD §6：持 Sense Token 者不可觸發相機疊圖相關動作。感應憑證代表「你在 150m\n內」，拍紀念照需要「你真的到了現場」。\n\n## 辨識失敗不是錯誤\n\n回 `landmark_recognized: false`，任務仍可完成——玩家只是拿不到特別徽章\n（CONTEXT.md）。",
-        "operationId": "landmark_photo_api_v1_quests__quest_id__landmark_photo_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "quest_id",
-            "required": true,
-            "schema": {
-              "title": "Quest Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Encounter-Token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Encounter-Token"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "multipart/form-data": {
-              "schema": {
-                "$ref": "#/components/schemas/Body_landmark_photo_api_v1_quests__quest_id__landmark_photo_post"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LandmarkPhotoResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Session token 無效或未提供"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Encounter token 屬於別的靈魂，或兩張憑證不屬於同一個玩家"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "任務或地標不存在"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          },
-          "429": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "今日地標辨識配額已用完"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Landmark Photo",
         "tags": [
           "body"
         ]
@@ -2200,7 +2078,7 @@
     },
     "/api/v1/summon": {
       "post": {
-        "description": "S2．在場驗證與召喚（SDD 第7.1／8.4節）。",
+        "description": "S2．在場驗證與召喚（SDD 第7.1／8.4節）。\n\n    在場驗證 → 觀察期紀錄 → 任務狀態機 → 相遇收藏\n      → 🆕 每日共鳴 +10（每個地標每天一次）→ 門檻判定 → 解鎖敘事\n\n## 🆕 2026-08-19：這支端點現在是共鳴值的主要來源\n\n「每天第一次召喚該地標 +10」是新規則的兩條來源之一（另一條是劇本節點 +30，\n還沒接上）。A.L. 拍板接在**召喚**而不是**送出對話**，代價與收益都很明確：\n\n- 收益：玩家必須真的走到 50m 內才拿得到分。`/dialogue` 收 sense token\n  （150m 隔空聊天）也算數的話，共鳴值就變成可以站在對街累積的東西，\n  而共鳴值是「關係深度」，隔空刷不該算。\n- 代價：召喚完就關掉 App 也拿得到 +10。這是接受的——他人已經到現場了。\n\n入帳放在在場驗證通過**之後**，跟同一支端點裡的觀察期紀錄與相遇收藏同一個\n理由：沒通過驗證的請求不構成一次相遇，不該產生任何入帳。",
         "operationId": "summon_api_v1_summon_post",
         "requestBody": {
           "content": {

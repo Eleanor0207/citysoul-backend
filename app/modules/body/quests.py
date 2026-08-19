@@ -26,15 +26,17 @@ SDD 第7.4節刻意的選擇（「以後端確定性規則驗證完成與否」�
 """
 import uuid
 from datetime import date, datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
 from app.modules.body.encounter_tokens import ENCOUNTER_TOKEN_EXPIRE_SECONDS
 from app.modules.body.models import QuestProgress
 
-# SDD 第7節決策8：所有「每日一次」「隔天重置」統一以 Asia/Taipei 午夜為基準。
-TAIPEI = ZoneInfo("Asia/Taipei")
+# 2026-08-19 起這兩個名字的家在 `taipei.py`。它們是三個以上模組共用的時間基準，
+# 跟任務本身沒有關係——`quota.py` 一直從這個模組 import 它們，那是位置放錯的
+# 結果，共鳴值改制時 `resonance.py` 也需要，才搬走的。
+# 這裡 re-export 只為了不動既有的 import；**新程式碼請直接從 `taipei` 拿**。
+from app.modules.body.taipei import TAIPEI, taipei_today  # noqa: F401
 
 # SDD 第7節決策6：當天最多失敗重試 3 次。
 MAX_DAILY_ATTEMPTS = 3
@@ -61,11 +63,6 @@ def quest_id_for_spirit(spirit_id: str) -> str:
     等真的有多個任務、或任務內容需要編輯時，這裡要換成查任務目錄表。
     """
     return f"{spirit_id}:daily"
-
-
-def taipei_today(now: datetime) -> date:
-    """把一個帶時區的時間點換算成 Asia/Taipei 的日期。"""
-    return now.astimezone(TAIPEI).date()
 
 
 class QuestState:

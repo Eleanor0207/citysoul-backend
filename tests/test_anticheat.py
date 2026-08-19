@@ -44,7 +44,7 @@ def _anticheat_records(caplog, event: str | None = None):
 
 
 @pytest.fixture
-def make_spirit(db_session):
+def make_spirit(db_session, purge_spirit_child_rows):
     """建立測試用地標，測試結束一併清掉。"""
     created = []
 
@@ -65,6 +65,8 @@ def make_spirit(db_session):
     yield _make
 
     for row in created:
+        # 召喚會寫 resonance／resonance_events，兩者都對 spirits 有外鍵。
+        purge_spirit_child_rows(row.spirit_id)
         db_session.delete(row)
     db_session.commit()
 

@@ -24,7 +24,7 @@ def _offset_north(lat: float, meters: float) -> float:
 
 
 @pytest.fixture
-def spirit(db_session, unique_spirit_id):
+def spirit(db_session, unique_spirit_id, purge_spirit_child_rows):
     """建立一個測試專用的啟用中 spirit，測試結束後刪掉。"""
     row = models.Spirit(
         spirit_id=unique_spirit_id,
@@ -37,6 +37,10 @@ def spirit(db_session, unique_spirit_id):
     db_session.add(row)
     db_session.commit()
     yield row
+    # 🔴 召喚會寫 resonance／resonance_events，兩者都對 spirits 有外鍵
+    # （2026-08-19 起）。少了這一行，**這個檔案裡每一條成功召喚的測試**都會在
+    # teardown 撞 ForeignKeyViolation——測試本身是綠的，錯誤只出現在拆卸階段。
+    purge_spirit_child_rows(row.spirit_id)
     db_session.delete(row)
     db_session.commit()
 
@@ -249,3 +253,80 @@ def test_haversine_matches_constructed_offset():
     lat = _offset_north(_SPIRIT_LAT, 50)
     d = haversine_distance_m(_SPIRIT_LAT, _SPIRIT_LON, lat, _SPIRIT_LON)
     assert d == pytest.approx(50, abs=0.001)
+
+
+# ── 🆕 每日共鳴 +10（A.L. 2026-08-19 定案的新規則）─────────────────────
+#
+# 這一段測的是「後端真的接上了」，不是入帳邏輯本身——後者在
+# `test_resonance.py` 有完整覆蓋。這裡只走端到端那條路。
+
+
+def test_summon_awards_daily_resonance(client, spirit, session_token, db_session, purge_spirit_child_rows):
+    """走到現場召喚 → +10、stage 1。"""
+    try:
+        body = _summon(client, session_token, spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON).json()
+
+        assert body["resonance_awarded"] is True
+        assert body["resonance_value"] == 10
+        assert body["stage"] == 1
+        assert body["newly_unlocked_stages"] == [1]
+    finally:
+        purge_spirit_child_rows(spirit.spirit_id)
+
+
+def test_second_summon_same_day_does_not_award(client, spirit, session_token, db_session, purge_spirit_child_rows):
+    """
+    同一天第二次召喚不加分，但**仍然是 200**。
+
+    ⚠️ `resonance_awarded: false` 不是錯誤，客戶端要靠它決定要不要播加分動畫。
+    這條紅了通常代表有人把「已領過」當成 4xx 回了。
+    """
+    try:
+        _summon(client, session_token, spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON)
+        resp = _summon(client, session_token, spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["resonance_awarded"] is False
+        assert body["resonance_value"] == 10
+        assert body["newly_unlocked_stages"] == []
+    finally:
+        purge_spirit_child_rows(spirit.spirit_id)
+
+
+def test_failed_summon_awards_nothing(client, spirit, session_token, db_session, purge_spirit_child_rows):
+    """
+    🔒 不在半徑內 → 403，**而且沒有留下任何入帳**。
+
+    入帳刻意排在在場驗證之後。這條守的是那個順序：如果哪天有人把
+    `award_daily_encounter` 移到距離判定前面，玩家在家就能刷共鳴值，
+    而 403 的回應本身看起來完全正常。
+    """
+    far_lat = _offset_north(_SPIRIT_LAT, _RADIUS_M + 100)
+    try:
+        resp = _summon(client, session_token, spirit.spirit_id, far_lat, _SPIRIT_LON)
+        assert resp.status_code == 403
+
+        assert (
+            db_session.query(models.ResonanceEvent)
+            .filter_by(spirit_id=spirit.spirit_id)
+            .count()
+            == 0
+        )
+    finally:
+        purge_spirit_child_rows(spirit.spirit_id)
+
+
+def test_summon_response_keeps_quest_field(client, spirit, session_token, db_session, purge_spirit_child_rows):
+    """
+    🔒 新欄位是**加法**，`quest` 沒有被拿掉。
+
+    客戶端 `TokenManager.cs` 在讀這個欄位；共鳴值改制不該讓它變成 null。
+    """
+    try:
+        body = _summon(client, session_token, spirit.spirit_id, _SPIRIT_LAT, _SPIRIT_LON).json()
+
+        assert body["quest"] is not None
+        assert body["quest"]["quest_id"] == f"{spirit.spirit_id}:daily"
+    finally:
+        purge_spirit_child_rows(spirit.spirit_id)
