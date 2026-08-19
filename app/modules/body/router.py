@@ -520,7 +520,12 @@ def list_spirits(db: Session = Depends(get_db)):
         .all()
     )
 
-    return [schemas.SpiritResponse.from_spirit(spirit) for spirit in spirits]
+    return [
+        schemas.SpiritResponse.from_spirit(
+            spirit, persona=load_active_persona(db, spirit.spirit_id)
+        )
+        for spirit in spirits
+    ]
 
 
 @router.get(
@@ -543,7 +548,9 @@ def get_spirit(place_id: str, db: Session = Depends(get_db)):
     if spirit is None or not spirit.is_active:
         raise HTTPException(status_code=404, detail="spirit not found")
 
-    return schemas.SpiritResponse.from_spirit(spirit)
+    return schemas.SpiritResponse.from_spirit(
+        spirit, persona=load_active_persona(db, spirit.spirit_id)
+    )
 
 
 @router.post(

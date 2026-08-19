@@ -142,6 +142,14 @@ def persona_section(persona) -> str:
     add("語氣調整", persona.tone_override)
     add("你不是誰", persona.not_this_character)
     add("不談論的主題", persona.taboos)
+    # 緊接在 taboos 後面：先講「不談什麼」，馬上接「被問到時怎麼辦」，
+    # 兩者在同一個決策點上，排版上不該隔開（backend#48 AC2）。
+    #
+    # getattr 而不是直接屬性存取：這個欄位比其他人格欄位晚出現
+    # （backend#48 才加），測試套件裡大量既有的 fake persona 是
+    # SimpleNamespace，沒有這個屬性——直接存取會讓那些測試全部炸開，
+    # 跟 daily_event.py 讀 daily_event_fallback 的防禦方式一致。
+    add("被問到這些主題時，怎麼轉開", getattr(persona, "taboo_redirect_style", None))
 
     return "\n".join(lines)
 

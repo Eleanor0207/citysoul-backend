@@ -151,12 +151,12 @@ INSERT_PERSONA = text(
     INSERT INTO brain.character_personas
         (character_id, version, archetype, speech_style, personality_traits, values,
          taboos, not_this_character, imagination_license, quest_themes, tone_override,
-         daily_event_fallback,
+         daily_event_fallback, quota_fallback, llm_failure_fallback, taboo_redirect_style,
          reviewed_by, reviewed_at, active)
     VALUES
         (:character_id, :version, :archetype, :speech_style, :personality_traits, :values,
          :taboos, :not_this_character, :imagination_license, :quest_themes, :tone_override,
-         :daily_event_fallback,
+         :daily_event_fallback, :quota_fallback, :llm_failure_fallback, :taboo_redirect_style,
          :reviewed_by, now(), true)
     """
 )
@@ -238,6 +238,11 @@ def main() -> int:
                     # Optional by design: content authors add this only after
                     # writing and reviewing a player-visible fallback line.
                     "daily_event_fallback": d.get("daily_event_fallback"),
+                    # backend#48：一樣是選填。三者都是 NULL 代表尚未填寫，
+                    # 呼叫端退回通用保底句，不是這支腳本要擋的錯誤。
+                    "quota_fallback": d.get("quota_fallback"),
+                    "llm_failure_fallback": d.get("llm_failure_fallback"),
+                    "taboo_redirect_style": d.get("taboo_redirect_style"),
                     "reviewed_by": d["reviewed_by"],
                 },
             )

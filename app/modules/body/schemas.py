@@ -240,10 +240,20 @@ class SpiritResponse(BaseModel):
     # 這層轉換由 `from_spirit()` 做，不靠 `from_attributes` 自動推——
     # ORM 物件上沒有 `orientation` 這個屬性可讀。
     orientation: SpiritOrientation
+    # backend#48：配額用完／LLM 生成失敗的角色口吻文案，跟著靈魂資料一起帶下來，
+    # 讓客戶端遇到這兩種狀況時不必再多打一支 API。人格卡沒有生效版本，或版本
+    # 有但這兩個欄位還沒填時都是 None——客戶端要自己準備通用保底文案。
+    quota_fallback_text: str | None = None
+    llm_failure_fallback_text: str | None = None
 
     @classmethod
-    def from_spirit(cls, spirit) -> "SpiritResponse":
-        """把 ORM 的 `Spirit` 轉成對外回應，含平鋪欄位 → `orientation` 的收攏。"""
+    def from_spirit(cls, spirit, persona=None) -> "SpiritResponse":
+        """
+        把 ORM 的 `Spirit` 轉成對外回應，含平鋪欄位 → `orientation` 的收攏。
+
+        `persona` 是選填的：呼叫端沒有查（或查不到生效人格）就傳 None，
+        兩個 fallback 欄位回 None，不是這支函式的責任去查資料庫。
+        """
         return cls(
             place_id=spirit.spirit_id,
             name=spirit.display_name,
@@ -256,6 +266,8 @@ class SpiritResponse(BaseModel):
                 bearing_deg=spirit.bearing_deg,
                 height_offset_m=spirit.height_offset_m,
             ),
+            quota_fallback_text=getattr(persona, "quota_fallback", None),
+            llm_failure_fallback_text=getattr(persona, "llm_failure_fallback", None),
         )
 
 

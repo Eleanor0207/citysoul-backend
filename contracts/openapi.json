@@ -684,6 +684,17 @@
             "title": "Latitude",
             "type": "number"
           },
+          "llm_failure_fallback_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Failure Fallback Text"
+          },
           "longitude": {
             "title": "Longitude",
             "type": "number"
@@ -698,6 +709,17 @@
           "place_id": {
             "title": "Place Id",
             "type": "string"
+          },
+          "quota_fallback_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quota Fallback Text"
           },
           "sense_radius_m": {
             "title": "Sense Radius M",

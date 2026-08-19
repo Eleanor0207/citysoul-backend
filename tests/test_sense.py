@@ -136,6 +136,9 @@ def test_get_spirit_wire_contract_is_independent_of_column_names(client, spirit)
         "sense_radius_m",
         "is_active",
         "orientation",
+        # backend#48：配額/LLM 失敗的角色口吻 fallback 文案，新增而非改名。
+        "quota_fallback_text",
+        "llm_failure_fallback_text",
     }
     assert body["place_id"] == spirit.spirit_id
     assert body["name"] == spirit.display_name

@@ -155,6 +155,14 @@ class CharacterPersona(Base):
     # 當日情境無合格輸入或生成失敗時，使用該靈魂自己的人工預寫台詞。
     # NULL 代表尚未填寫，呼叫端才會退回通用保底句。
     daily_event_fallback = Column(Text, nullable=True)
+    # backend#48 AC4/AC5：配額用完與 LLM 生成失敗是兩種不同的意思，各自要有
+    # 角色口吻的說法，不能共用同一段「現在說不了話」。NULL 時退回通用保底句，
+    # 邏輯與 daily_event_fallback 一致。
+    quota_fallback = Column(Text, nullable=True)
+    llm_failure_fallback = Column(Text, nullable=True)
+    # backend#48 AC2：被問到禁忌主題時「怎麼轉開」的角色口吻示範，跟 taboos
+    # （條列式的「不談什麼」）分開存——這裡是給模型的風格示範，不是規則清單。
+    taboo_redirect_style = Column(Text, nullable=True)
     reviewed_by = Column(String(128), nullable=False)
     reviewed_at = Column(DateTime(timezone=True), nullable=False)
     active = Column(Boolean, nullable=False, server_default="false", default=False)
