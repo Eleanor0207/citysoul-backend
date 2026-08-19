@@ -161,11 +161,36 @@ def featured_event(db: Session, *, spirit_id: str, on_date: date) -> LandmarkEve
     多數是單日演出，只推「今天正在進行」的話等於推不出東西（2026-08-18 實測，
     22 筆有 18 筆是單日）。完整推論見 `rules.FEATURE_LEAD_DAYS`。
 
-    ## 排序：最快結束的優先
+    ## 排序：插隊層優先，其次最快結束的
 
-    「限時」是這個功能的賣點，剩三天的演出比剩三個月的展覽更值得現在推。並列時用
-    `event_id` 決勝，讓結果穩定——不穩定的話同一天重新排程會換一場活動，而
-    昨天生成的敘事就跟今天的活動卡對不起來了。
+    兩層：
+
+    1. **插隊層**（`rules.is_priority_on()`）＝ 今天就開著的，或七天內開演的
+    2. 同一層之內，**最快結束的優先**——「限時」是這個功能的賣點，剩三天的演出
+       比剩三個月的展覽更值得現在推。並列時用 `event_id` 決勝，讓結果穩定
+       （不穩定的話同一天重新排程會換一場活動，昨天生成的敘事就跟今天的活動卡
+       對不起來了）
+
+    ### 第一層是 2026-08-19 加的，起因是真實資料
+
+    原本只有第二層。松山文創放行 21 筆之後推演每一天會挑到誰，結果是：櫻桃小丸子
+    特展（6/18～9/28，唯一的長檔期）**在整個檔期裡只有 9/28 一天會被推出去**，
+    而那是它的最後一天。因為另外 17 筆單日演出的 `end_date` 全都排在 9/28 前面，
+    一路把它壓到最後。
+
+    這不是排序寫錯，是「最快結束優先」碰上「一個長檔期 ＋ 十七場單日演出」這種
+    資料形狀的必然結果。而它剛好壓掉了最有用的那一筆：**這是定位遊戲，玩家是人
+    已經站在這個地標才看到活動卡的**。「五號倉庫現在有小丸子特展」他走幾步就進
+    得去；「四天後誠品有場音樂會」他得另外買票、另外挑一天再來。
+
+    ⚠️ 但插隊層**不能只有「今天開著」**。那樣只要有一檔長展覽開著，所有單日演出
+    就只剩開演當天露出一次，而那天已經來不及訂票——等於把 08-18 加前置期的理由
+    整個抵消掉。所以 `is_priority_on()` 把「七天內開演」也算進插隊層。
+    同一份資料實測：小丸子 1 天 → 12 天，演出各自保有一週售票期，兩邊都不歸零。
+
+    ⚠️ 三支規則現在各有各的用途，改之前先確認三個都還說得通：
+    `is_featurable_on()` 決定**資格**、`is_priority_on()` 決定**優先序**、
+    `is_running_on()` 是審核清單的狀態標示（也是前者的第一個條件）。
 
     ## 為什麼過濾寫在 Python 而不是 SQL
 
@@ -183,10 +208,21 @@ def featured_event(db: Session, *, spirit_id: str, on_date: date) -> LandmarkEve
         .all()
     )
 
-    for row in rows:
-        if rules.is_featurable_on(row.start_date, row.end_date, on_date):
-            return row
-    return None
+    eligible = [
+        row for row in rows
+        if rules.is_featurable_on(row.start_date, row.end_date, on_date)
+    ]
+    if not eligible:
+        return None
+
+    # `rows` 已經照 (end_date, event_id) 排好，而 list comprehension 保序，所以
+    # 這兩個清單各自的第一筆就是該層裡「最快結束」的那一場。不重新排序是刻意的：
+    # 排序鍵只寫在上面那句 `order_by` 一個地方。
+    priority = [
+        row for row in eligible
+        if rules.is_priority_on(row.start_date, row.end_date, on_date)
+    ]
+    return (priority or eligible)[0]
 
 
 def prompt_text(row: LandmarkEvent) -> str:

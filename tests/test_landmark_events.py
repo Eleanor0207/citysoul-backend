@@ -649,6 +649,162 @@ def test_the_soonest_to_end_wins(db_session, spirit):
     assert row.title == "快的"
 
 
+def test_a_running_exhibition_beats_a_show_that_has_not_opened(db_session, spirit):
+    """
+    🔒 玩家人已經站在地標前了：走幾步就進得去的，勝過還要另外買票挑一天再來的。
+
+    這是 2026-08-19 從真實資料發現的。松山文創放行 21 筆後推演，櫻桃小丸子特展
+    （6/18～9/28）**整個檔期只有最後一天 9/28 會被推出去**——另外 17 場單日演出
+    的 `end_date` 全排在它前面，一路把它壓到最後。
+
+    這裡的音樂會結束得比展覽早，照舊規則會贏；照新規則展覽贏，因為它今天就開著，
+    而音樂會還有 10 天才開演（＞ `PRIORITY_LEAD_DAYS`，還沒到插隊的時候）。
+    """
+    concert = _TODAY + timedelta(days=10)
+    service.upsert_events(
+        db_session,
+        [
+            _record(
+                spirit.spirit_id,
+                event_id="iculture:EXPO:0",
+                title="正在展出的特展",
+                start_date=_TODAY - timedelta(days=30),
+                end_date=_TODAY + timedelta(days=40),
+            ),
+            _record(
+                spirit.spirit_id,
+                event_id="iculture:GIG:0",
+                title="還沒開演的單日音樂會",
+                start_date=concert,
+                end_date=concert,
+            ),
+        ],
+    )
+    service.approve(db_session, "iculture:EXPO:0", reviewer="AL")
+    service.approve(db_session, "iculture:GIG:0", reviewer="AL")
+
+    row = service.featured_event(db_session, spirit_id=spirit.spirit_id, on_date=_TODAY)
+
+    assert row.title == "正在展出的特展"
+
+
+def _running_expo_and_a_show_opening_in(db_session, spirit, days):
+    """一檔正在展出的長展覽，加一場 `days` 天後開演的單日演出。兩筆都放行。"""
+    show = _TODAY + timedelta(days=days)
+    service.upsert_events(
+        db_session,
+        [
+            _record(
+                spirit.spirit_id,
+                event_id="iculture:EXPO:0",
+                title="正在展出的特展",
+                start_date=_TODAY - timedelta(days=30),
+                end_date=_TODAY + timedelta(days=40),
+            ),
+            _record(
+                spirit.spirit_id,
+                event_id="iculture:GIG:0",
+                title="即將開演",
+                start_date=show,
+                end_date=show,
+            ),
+        ],
+    )
+    service.approve(db_session, "iculture:EXPO:0", reviewer="AL")
+    service.approve(db_session, "iculture:GIG:0", reviewer="AL")
+    return service.featured_event(db_session, spirit_id=spirit.spirit_id, on_date=_TODAY)
+
+
+def test_a_show_opening_within_a_week_jumps_the_queue(db_session, spirit):
+    """
+    🔒 插隊層**不能只有「今天開著」**，否則單日演出的售票前置期會被長展覽吃光。
+
+    只看「今天開著」的話，只要有一檔展覽開著，演出就只剩開演當天露得出來——
+    而那天玩家已經來不及訂票，等於把 2026-08-18 加前置期的理由整個抵消掉。
+    """
+    assert _running_expo_and_a_show_opening_in(db_session, spirit, 5).title == "即將開演"
+
+
+def test_the_priority_lead_window_has_an_edge(db_session, spirit):
+    """邊界要釘住：第 7 天算插隊，第 8 天不算。"""
+    assert _running_expo_and_a_show_opening_in(
+        db_session, spirit, rules.PRIORITY_LEAD_DAYS
+    ).title == "即將開演"
+
+
+def test_a_show_just_outside_the_lead_window_does_not_jump(db_session, spirit):
+    assert _running_expo_and_a_show_opening_in(
+        db_session, spirit, rules.PRIORITY_LEAD_DAYS + 1
+    ).title == "正在展出的特展"
+
+
+def test_priority_lead_is_shorter_than_feature_lead():
+    """
+    ⚠️ 兩個前置期回答不同的問題，沿用同一個數字會讓插隊層失去作用。
+
+    `FEATURE_LEAD_DAYS`(30) 決定推不推得出去；`PRIORITY_LEAD_DAYS`(7) 決定誰先推。
+    若兩者相等，松山文創那種資料形狀下十幾場演出會全部擠進插隊層。
+    """
+    assert rules.PRIORITY_LEAD_DAYS < rules.FEATURE_LEAD_DAYS
+
+
+def test_the_soonest_to_end_still_wins_among_running_events(db_session, spirit):
+    """第一層只分「開著沒有」，同一層之內仍然是最快結束的優先。"""
+    service.upsert_events(
+        db_session,
+        [
+            _record(
+                spirit.spirit_id,
+                event_id="iculture:LONG:0",
+                title="開很久的",
+                start_date=_TODAY - timedelta(days=10),
+                end_date=_TODAY + timedelta(days=60),
+            ),
+            _record(
+                spirit.spirit_id,
+                event_id="iculture:SHORT:0",
+                title="快結束的",
+                start_date=_TODAY - timedelta(days=10),
+                end_date=_TODAY + timedelta(days=3),
+            ),
+        ],
+    )
+    service.approve(db_session, "iculture:LONG:0", reviewer="AL")
+    service.approve(db_session, "iculture:SHORT:0", reviewer="AL")
+
+    row = service.featured_event(db_session, spirit_id=spirit.spirit_id, on_date=_TODAY)
+
+    assert row.title == "快結束的"
+
+
+def test_upcoming_shows_are_still_featured_when_nothing_is_running(db_session, spirit):
+    """
+    ⚠️ 新的第一層**不能**把前置期規則吃掉。
+
+    大多數地標大多數日子沒有任何展覽開著，這時候仍然要推得出即將開演的單日演出
+    ——那正是 2026-08-18 加前置期的理由，22 筆有 18 筆是單日。
+    """
+    concert = _TODAY + timedelta(days=20)
+    service.upsert_events(
+        db_session,
+        [
+            _record(
+                spirit.spirit_id,
+                event_id="iculture:GIG:0",
+                title="即將開演",
+                start_date=concert,
+                end_date=concert,
+            )
+        ],
+    )
+    service.approve(db_session, "iculture:GIG:0", reviewer="AL")
+
+    row = service.featured_event(db_session, spirit_id=spirit.spirit_id, on_date=_TODAY)
+
+    assert row is not None
+    assert row.title == "即將開演"
+
+
 def test_event_view_has_no_summary(db_session, spirit):
     """
     ⚠️ 簡介只餵 B9 的 prompt，不給玩家看。多帶一個沒有人顯示的欄位，

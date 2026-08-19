@@ -281,6 +281,44 @@ def is_featurable_on(
     return True
 
 
+# 高優先層的售票前置期。**跟 `FEATURE_LEAD_DAYS`(30) 是兩個不同的問題**：
+# 那個決定「推不推得出去」，這個決定「同時有好幾場合格的，先推誰」。
+#
+# 為什麼是 7 而不是沿用 30：30 天內開演的演出，在松山文創那種資料形狀下有十幾場，
+# 全部擠進高優先層等於這一層沒有作用（見 `landmark_events_service.featured_event`
+# 的「今天就進得去的優先」）。7 天是「還來得及訂票、又已經近到值得插隊」的長度。
+PRIORITY_LEAD_DAYS = 7
+
+
+def is_priority_on(
+    start: date | None,
+    end: date | None,
+    on_date: date,
+    *,
+    lead_days: int = PRIORITY_LEAD_DAYS,
+) -> bool:
+    """
+    這場活動在 `on_date` 當天算不算「插隊層」。**只影響排序，不影響資格。**
+
+    資格永遠是 `is_featurable_on()`；這一支只在多場都合格時決定誰先上。
+    兩種算插隊：
+
+    1. **今天就開著**（`is_running_on()`）——玩家人已經站在地標前，走幾步就進得去
+    2. **七天內開演**——演出當天才打廣告，玩家買不到票
+
+    ⚠️ 少了第 2 條會出事：只要有一檔長展覽開著，所有單日演出就只剩開演當天推得
+    出來，而那天已經來不及訂票。2026-08-19 用松山文創 21 筆真實資料推演過，
+    只有第 1 條時那 17 場演出全部只在自己那天露出一次。
+    """
+    if is_running_on(start, end, on_date):
+        return True
+    if start is None or end is None:
+        return False
+    if on_date > end:
+        return False
+    return (start - on_date).days <= lead_days
+
+
 def content_fingerprint(record: dict) -> str:
     """
     內容指紋。**「哪些欄位算內容」只寫在這裡一個地方。**
