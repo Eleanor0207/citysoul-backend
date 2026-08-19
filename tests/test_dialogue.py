@@ -87,6 +87,10 @@ def spirit(db_session, unique_spirit_id):
     db_session.query(CannedGreeting).filter_by(character_id=character_id).delete()
     db_session.query(CharacterPersona).filter_by(character_id=character_id).delete()
     db_session.query(models.GuidedQuestionCache).filter_by(place_id=unique_spirit_id).delete()
+    # backend#70：每日對話會入帳共鳴值。不先清掉 resonance/resonance_events
+    # 就砍 spirit，會撞上 FK 約束——這兩張表沒有 ON DELETE CASCADE。
+    db_session.query(models.ResonanceEvent).filter_by(spirit_id=unique_spirit_id).delete()
+    db_session.query(models.Resonance).filter_by(spirit_id=unique_spirit_id).delete()
     db_session.delete(row)
     db_session.query(Character).filter_by(character_id=character_id).delete()
     db_session.query(LandmarkSoul).filter_by(landmark_id=landmark_id).delete()
@@ -233,6 +237,110 @@ def test_response_shape(client, spirit, player, active_card):
     assert body["segments"]
     for seg in body["segments"]:
         assert seg in body["reply_text"]
+
+
+# ── 共鳴值：每日對話（backend#70／#52 拍板）────────────────────────────
+
+def _resonance_value(db_session, player_id, spirit_id):
+    row = (
+        db_session.query(models.Resonance)
+        .filter_by(player_id=player_id, spirit_id=spirit_id)
+        .first()
+    )
+    return row.resonance_value if row else 0
+
+
+def test_generated_reply_awards_daily_dialogue_resonance(
+    client, db_session, spirit, player, active_card
+):
+    """source=="generated" 是真的跟靈魂對上話，該入帳。"""
+    pid, sess = player
+    enc = issue_encounter_token(pid, spirit.spirit_id)
+    body = _say(client, spirit, sess, enc, "這座廟什麼時候蓋的？").json()
+
+    assert body["source"] == "generated"
+    assert _resonance_value(db_session, pid, spirit.spirit_id) == 10
+
+
+def test_canned_greeting_also_awards_resonance(client, db_session, spirit, player, active_card):
+    """source=="canned" 一樣算對上話——只是不需要跑模型，不代表沒聊天。"""
+    pid, sess = player
+    enc = issue_encounter_token(pid, spirit.spirit_id)
+    body = _say(client, spirit, sess, enc, "你好").json()
+
+    assert body["source"] == "canned"
+    assert _resonance_value(db_session, pid, spirit.spirit_id) == 10
+
+
+def test_fallback_reply_does_not_award_resonance(client, db_session, spirit, player):
+    """
+    source=="fallback"（沒有生效人格卡，或生成失敗）不算：玩家拿到的是
+    一句人工預寫保底句，不是這個靈魂真的回應了什麼。
+    """
+    pid, sess = player
+    enc = issue_encounter_token(pid, spirit.spirit_id)
+    body = _say(client, spirit, sess, enc, "你好").json()
+
+    assert body["source"] == "fallback"
+    assert _resonance_value(db_session, pid, spirit.spirit_id) == 0
+
+
+def test_refused_reply_does_not_award_resonance(client, db_session, spirit, player, active_card):
+    """source=="refused"（B4 擋下）不算：玩家沒有真的跟靈魂對上話。"""
+    spirit.safety_gate_enabled = True
+    db_session.commit()
+
+    pid, sess = player
+    enc = issue_encounter_token(pid, spirit.spirit_id)
+    body = _say(client, spirit, sess, enc, "你好").json()
+
+    assert body["source"] == "refused"
+    assert _resonance_value(db_session, pid, spirit.spirit_id) == 0
+
+
+def test_second_dialogue_same_day_does_not_award_twice(
+    client, db_session, spirit, player, active_card
+):
+    """一天只入帳一次，同一天第二輪對話不重複加值。"""
+    pid, sess = player
+    enc = issue_encounter_token(pid, spirit.spirit_id)
+
+    _say(client, spirit, sess, enc, "這座廟什麼時候蓋的？")
+    body = _say(client, spirit, sess, enc, "還有其他故事嗎？").json()
+
+    assert body["source"] == "generated"
+    assert _resonance_value(db_session, pid, spirit.spirit_id) == 10
+
+
+def test_dialogue_resonance_is_per_spirit_not_global(
+    client, db_session, spirit, player, active_card, unique_spirit_id
+):
+    """
+    resonance_events 的 UNIQUE 不含 spirit_id（見 ResonanceEvent 的
+    docstring）——source_id 沒帶好靈魂 id 的話，跟一個靈魂聊過會讓所有
+    靈魂當天都算入帳。這裡用第二個靈魂驗證沒有這件事。
+    """
+    other_id = f"{unique_spirit_id}-other"
+    other = models.Spirit(
+        spirit_id=other_id, display_name="另一個測試地標",
+        latitude=_LAT, longitude=_LON, summon_radius_meters=50, is_active=True,
+    )
+    db_session.add(other)
+    db_session.commit()
+
+    try:
+        pid, sess = player
+        enc = issue_encounter_token(pid, spirit.spirit_id)
+        _say(client, spirit, sess, enc, "這座廟什麼時候蓋的？")
+
+        assert _resonance_value(db_session, pid, spirit.spirit_id) == 10
+        assert _resonance_value(db_session, pid, other_id) == 0
+    finally:
+        db_session.query(models.ResonanceEvent).filter_by(spirit_id=other_id).delete()
+        db_session.query(models.Resonance).filter_by(spirit_id=other_id).delete()
+        db_session.commit()
+        db_session.delete(other)
+        db_session.commit()
 
 
 # ── B4 安全閘（逐地標開關，0019）──────────────────────────────────────

@@ -23,6 +23,7 @@ from app.modules.body.resonance import (
 # `test_seeded_config_matches_the_pace_decided_in_52` 對著 DB 驗證。
 AMOUNT_ENCOUNTER_COLLECTION = 10
 AMOUNT_QUEST = 20
+AMOUNT_DIALOGUE = 10
 THRESHOLDS = (10, 40, 100)
 
 
@@ -94,6 +95,7 @@ def test_seeded_config_matches_the_pace_decided_in_52(db_session):
     assert rules.thresholds == THRESHOLDS
     assert rules.amount_encounter_collection == AMOUNT_ENCOUNTER_COLLECTION
     assert rules.amount_quest == AMOUNT_QUEST
+    assert rules.amount_dialogue == AMOUNT_DIALOGUE
 
 
 def test_load_resonance_rules_raises_when_a_required_key_is_missing(db_session):

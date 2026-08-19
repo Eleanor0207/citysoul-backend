@@ -92,6 +92,10 @@ def spirit(db_session, unique_spirit_id):
 
     db_session.query(CannedGreeting).filter_by(character_id=character_id).delete()
     db_session.query(models.GuidedQuestionCache).filter_by(place_id=unique_spirit_id).delete()
+    # backend#70：每日對話會入帳共鳴值。不先清掉 resonance/resonance_events
+    # 就砍 spirit，會撞上 FK 約束——這兩張表沒有 ON DELETE CASCADE。
+    db_session.query(models.ResonanceEvent).filter_by(spirit_id=unique_spirit_id).delete()
+    db_session.query(models.Resonance).filter_by(spirit_id=unique_spirit_id).delete()
     db_session.delete(row)
     db_session.query(CharacterPersona).filter_by(character_id=character_id).delete()
     db_session.query(Character).filter_by(character_id=character_id).delete()

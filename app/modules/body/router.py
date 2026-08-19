@@ -1,5 +1,6 @@
 import logging
 import uuid
+from datetime import datetime, timezone
 from functools import lru_cache
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
@@ -27,9 +28,11 @@ from app.modules.body.quota import (
     default_tier_id,
 )
 from app.modules.body.resonance import (
+    SOURCE_DIALOGUE,
     SOURCE_ENCOUNTER_COLLECTION,
     SOURCE_QUEST,
     apply_resonance,
+    dialogue_source_id,
     load_resonance_rules,
 )
 from app.modules.body.sense_tokens import SENSE_TOKEN_HEADER, require_sense_token
@@ -452,6 +455,33 @@ def dialogue(
         reply_text = SafetyGate(GeminiSafetyChecker(gemini)).run(payload.user_input, _reply)
     else:
         reply_text = _reply(payload.user_input)
+
+    # ── 共鳴值：每日對話 ─────────────────────────────────────────────
+    #
+    # backend#70（#52 拍板）：玩家與這個靈魂當天完成一輪對話 +10，同一天
+    # 只入帳一次。**只有 "canned" 與 "generated" 算**——"refused" 是被 B4
+    # 擋下來，玩家沒有真的跟靈魂對上話；"fallback" 是沒有生效人格卡或生成
+    # 失敗，玩家拿到的是一句人工預寫的保底句，不是這個靈魂的回應。兩者都不
+    # 是「完成一輪對話」。
+    #
+    # 去重靠 resonance_events 的 UNIQUE，source_id 帶靈魂 id 與 Asia/Taipei
+    # 日期（見 dialogue_source_id() 的說明）。
+    #
+    # ⚠️ 這裡入帳後若剛好跨過門檻，**不會**觸發 B11 解鎖敘事生成——那段邏輯
+    # 目前只接在 `/quests/{questId}/complete`，`DialogueResponse` 也還沒有
+    # 對應欄位可以承載敘事文字。玩家的階段仍然正確入庫、GET /resonance 與
+    # GET /profile 讀得到，只是不會在這一輪對話裡跳出解鎖故事——這是已知的
+    # 範圍縮減，不是遺漏，需要的話另開票。
+    if source in ("canned", "generated"):
+        today = quests.taipei_today(datetime.now(timezone.utc))
+        apply_resonance(
+            db,
+            player_id=session_player_id,
+            spirit_id=place_id,
+            source_type=SOURCE_DIALOGUE,
+            source_id=dialogue_source_id(place_id, today),
+            amount=load_resonance_rules(db).amount_dialogue,
+        )
 
     # ── B10 語音 ─────────────────────────────────────────────────────
     #

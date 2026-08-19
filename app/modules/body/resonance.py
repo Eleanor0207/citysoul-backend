@@ -1,9 +1,9 @@
 """
 S5．共鳴值入帳與門檻判定（SDD 第3.1／7.5節）。
 
-刻意做成**獨立服務函式**，不綁任何 API 端點。真正的呼叫方
-`POST /quests/{questId}/complete` 要等 S4（#15）與 B11 解鎖敘事生成都到位後
-才會在 Sprint6 整合，不屬於這裡。
+刻意做成**獨立服務函式**，不綁任何 API 端點。呼叫方目前有兩個：
+`POST /quests/{questId}/complete`（任務完成）與
+`POST /spirits/{placeId}/dialogue`（每日對話，backend#70）。
 
 ## 防重複入帳靠資料庫，不靠先查後寫
 
@@ -25,17 +25,23 @@ from app.modules.body.models import Resonance, ResonanceConfig, ResonanceEvent
 
 SOURCE_ENCOUNTER_COLLECTION = "encounter_collection"
 SOURCE_QUEST = "quest"
+# 每日對話（backend#70／#52 拍板）。source_id 帶靈魂 id 與 Asia/Taipei 日期
+# （`dialogue_source_id()`），因為 resonance_events 的 UNIQUE 是全域的
+# （不含 spirit_id）——只用日期當 source_id 會變成「今天跟任何一個靈魂聊過，
+# 所有靈魂都入帳」。
+SOURCE_DIALOGUE = "dialogue"
 
 # resonance_config 裡目前有程式碼在讀的 key（backend#73／migration 0026）。
-# `amount_dialogue`／`amount_story_completion` 也已經種進表裡，但屬於 #70／
-# #72 的範圍，這裡先不強制要求，等那兩張票接上了再補進來——不然表裡種了值
-# 但這支函式還沒對應欄位讀，會被誤以為漏做。
+# `amount_story_completion` 也已經種進表裡，但屬於 #72 的範圍，這裡先不強制
+# 要求，等那張票接上了再補進來——不然表裡種了值但這支函式還沒對應欄位讀，
+# 會被誤以為漏做。
 _REQUIRED_CONFIG_KEYS = (
     "threshold_stage_1",
     "threshold_stage_2",
     "threshold_stage_3",
     "amount_encounter_collection",
     "amount_quest",
+    "amount_dialogue",
 )
 
 
@@ -53,6 +59,7 @@ class ResonanceRules:
     thresholds: tuple[int, int, int]
     amount_encounter_collection: int
     amount_quest: int
+    amount_dialogue: int
 
 
 def load_resonance_rules(db: Session) -> ResonanceRules:
@@ -78,7 +85,21 @@ def load_resonance_rules(db: Session) -> ResonanceRules:
         ),
         amount_encounter_collection=values["amount_encounter_collection"],
         amount_quest=values["amount_quest"],
+        amount_dialogue=values["amount_dialogue"],
     )
+
+
+def dialogue_source_id(spirit_id: str, taipei_date) -> str:
+    """
+    每日對話入帳用的 `source_id`（backend#70）。
+
+    `resonance_events` 的 UNIQUE 不含 `spirit_id`（見 `ResonanceEvent` 的
+    docstring），所以這裡自己把 `spirit_id` 編進去，只用日期會變成「今天
+    只要跟任何一個靈魂聊過，所有靈魂都算入帳」。`taipei_date` 由呼叫端傳入
+    （`quests.taipei_today()`），這支函式不自己決定「今天」是哪一天——
+    日期換算的規則只該有一個地方。
+    """
+    return f"{spirit_id}:{taipei_date.isoformat()}"
 
 
 def stage_for_value(thresholds: tuple[int, ...], value: int) -> int:
