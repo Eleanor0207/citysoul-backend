@@ -35,12 +35,20 @@ def _today_taipei_at(hour: int) -> datetime:
     """
     「台北今天」的某個時刻，以 UTC 表示。
 
-    走 API 的測試必須用這個，不能用 `datetime.now(timezone.utc).replace(hour=...)`：
-    後者釘的是 **UTC 今天**，而 API 內部用真實時鐘算的是 **台北今天**。UTC 16:00
-    之後兩者就是不同日期，注入的嘗試次數會在 API 呼叫時被當成「昨天的」而重置。
+    ⚠️ **這個檔案裡的每個起點都用這支，不要用 `datetime.now(timezone.utc)`。**
 
-    這個 bug 真的發生過——測試寫好當天在 UTC 16:00 前跑都是綠的，過了台北午夜
-    才爆，而且爆在專門處理台北午夜的那個模組上。
+    兩個理由，各自都足夠：
+
+    1. 走 API 的測試不能用 `datetime.now(timezone.utc).replace(hour=...)`——後者釘
+       的是 **UTC 今天**，而 API 內部用真實時鐘算的是 **台北今天**。UTC 16:00 之後
+       兩者就是不同日期，注入的嘗試次數會在 API 呼叫時被當成「昨天的」而重置。
+    2. 直接用真實時鐘當起點的測試，只要往後加幾次 `_EXPIRED` 就可能跨過 UTC 16:00
+       ＝台北午夜，`attempts_today` 被當成新的一天歸零。**釘在台北凌晨 1 點就有
+       整整 23 小時的餘裕**，怎麼加都跨不過去。
+
+    這兩個 bug 都真的發生過——測試寫好當天在 UTC 16:00 前跑都是綠的，過了台北午夜
+    才爆，而且爆在專門處理台北午夜的那個模組上。第二種在 2026-08-18 又出現一次
+    （`test_attempts_accumulate_across_repeated_timeouts`），所以現在整個檔案統一。
     """
     return (
         datetime.now(TAIPEI)
@@ -103,7 +111,7 @@ def _summon(client, token, spirit):
 
 def test_first_summon_creates_in_progress_quest(db_session, player, spirit):
     player_id, _ = player
-    now = datetime.now(timezone.utc)
+    now = _today_taipei_at(1)
 
     state = evaluate_on_summon(
         db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=now
@@ -124,7 +132,7 @@ def test_first_summon_creates_in_progress_quest(db_session, player, spirit):
 def test_expired_token_counts_as_failed_attempt(db_session, player, spirit):
     """憑證過期、任務仍 in_progress → 下一次召喚記一次失敗。"""
     player_id, _ = player
-    start = datetime.now(timezone.utc)
+    start = _today_taipei_at(1)
 
     evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=start)
     state = evaluate_on_summon(
@@ -142,7 +150,7 @@ def test_unexpired_token_does_not_count_as_failure(db_session, player, spirit):
     這是失敗判定最容易寫錯的方向：把「又召喚了一次」當成「上一次失敗了」。
     """
     player_id, _ = player
-    start = datetime.now(timezone.utc)
+    start = _today_taipei_at(1)
 
     evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=start)
     state = evaluate_on_summon(
@@ -158,7 +166,7 @@ def test_unexpired_token_does_not_count_as_failure(db_session, player, spirit):
 def test_completed_quest_does_not_accrue_failures(db_session, player, spirit):
     """任務已完成的話，憑證放到過期也不算失敗。"""
     player_id, _ = player
-    start = datetime.now(timezone.utc)
+    start = _today_taipei_at(1)
 
     evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=start)
     row = _progress(db_session, player_id, spirit.spirit_id)
@@ -174,8 +182,14 @@ def test_completed_quest_does_not_accrue_failures(db_session, player, spirit):
 
 
 def test_attempts_accumulate_across_repeated_timeouts(db_session, player, spirit):
+    """
+    連續逾時兩次 → 次數累加成 2。
+
+    起點必須是 `_today_taipei_at(1)`：這裡會往後加兩次 `_EXPIRED`（約 32 分鐘），
+    用真實時鐘的話在台北午夜前約半小時跑就會跨日，第二次的期望值 2 會拿到 1。
+    """
     player_id, _ = player
-    now = datetime.now(timezone.utc)
+    now = _today_taipei_at(1)
 
     evaluate_on_summon(db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=now)
     for expected in (1, 2):
@@ -250,7 +264,7 @@ def test_attempts_reset_after_taipei_midnight(db_session, player, spirit):
     _burn_attempts(db_session, player_id, spirit.spirit_id, yesterday, MAX_DAILY_ATTEMPTS)
     assert _progress(db_session, player_id, spirit.spirit_id).attempts_today == MAX_DAILY_ATTEMPTS
 
-    today = datetime.now(timezone.utc)
+    today = _today_taipei_at(1)
     state = evaluate_on_summon(
         db_session, player_id=player_id, spirit_id=spirit.spirit_id, now=today
     )
