@@ -7,6 +7,7 @@ from app.core.database import SessionLocal
 from app.modules.body import models
 from app.modules.body.districts import check_player_in_district
 from app.modules.body.router import _grant_district_entry_item
+from app.modules.brain.models import StoryArc
 
 
 _INSIDE = {"latitude": 25.0375, "longitude": 121.4998}
@@ -38,6 +39,13 @@ def test_check_entry_returns_200_and_grants_wanhua_letter_once(client, db_sessio
     player_id, token = _new_player(client)
     headers = {"Authorization": f"Bearer {token}"}
 
+    # #66 這支測試寫的時候 brain.story_arcs 還沒有任何列，所以曾經直接寫死
+    # `arc_id: None`。#59 匯入萬華 arc 之後那個假設不再成立——查資料庫的實際
+    # 值，而不是重新假設一個常數，否則下一次內容匯入又會讓這裡靜默過期。
+    expected_arc_id = (
+        db_session.query(StoryArc.arc_id).filter_by(district_id="wanhua").scalar()
+    )
+
     first = client.post("/api/v1/districts/check-entry", json=_INSIDE, headers=headers)
     second = client.post("/api/v1/districts/check-entry", json=_INSIDE, headers=headers)
 
@@ -45,13 +53,13 @@ def test_check_entry_returns_200_and_grants_wanhua_letter_once(client, db_sessio
     assert first.json() == {
         "district_id": "wanhua",
         "entry_granted": True,
-        "arc_id": None,
+        "arc_id": expected_arc_id,
     }
     assert second.status_code == 200
     assert second.json() == {
         "district_id": "wanhua",
         "entry_granted": False,
-        "arc_id": None,
+        "arc_id": expected_arc_id,
     }
     assert (
         db_session.query(models.PlayerInventory)

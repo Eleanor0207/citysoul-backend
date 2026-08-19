@@ -406,6 +406,10 @@ class StoryArc(Base):
     # 值關聯 → public.media_assets.asset_id，不建跨 schema 外鍵（WBS-API 決策4）。
     intro_document_asset_id = Column(UUID(as_uuid=True), nullable=True)
     summary = Column(Text, nullable=True)
+    # Story content is active on import for the MVP.  reviewed_by is audit-only;
+    # unlike persona and district content, it does not gate activation.
+    active = Column(Boolean, nullable=False, server_default="true", default=True)
+    reviewed_by = Column(Text, nullable=True)
 
 
 class StoryBeat(Base):
@@ -448,6 +452,10 @@ class StoryBeat(Base):
     required_item_ids = Column(ARRAY(Text), nullable=True)
     contingency_notes = Column(Text, nullable=True)
     one_time = Column(Boolean, nullable=False, server_default="true", default=True)
+    # Story content is active on import for the MVP.  reviewed_by is audit-only;
+    # unlike persona and district content, it does not gate activation.
+    active = Column(Boolean, nullable=False, server_default="true", default=True)
+    reviewed_by = Column(Text, nullable=True)
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     __table_args__ = (
