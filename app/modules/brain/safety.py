@@ -44,9 +44,10 @@ logger = logging.getLogger(__name__)
 
 # 🔒 婉拒文案審核狀態。與 B5 同一個慣例（historical_boundary.RULES_REVIEW_STATUS）。
 #
-# 文案來源是 #41 內容治理的交付物 C（docs/content-governance/longshan-temple.md §5），
-# 那份文件本身也還沒過審。
-REFUSAL_REVIEW_STATUS = "PENDING_NARRATIVE_REVIEW"
+# backend #41 已由 Lead 決定關閉（not planned），MVP 先暫時沿用這批婉拒文案。
+# 這不代表完成正式敘事審核；狀態值與 personas 表的 MVP_NO_REVIEW 決策一致，
+# 也不再把文案標成等待一張已關閉的票。
+REFUSAL_REVIEW_STATUS = "MVP_NO_REVIEW"
 
 
 class SafetyCategory:

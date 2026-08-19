@@ -3,8 +3,9 @@ B4．角色安全邊界檢查層（issue #11）。
 
 純單元測試——用 fake 驗證兩條路徑，**不需要 GCP 憑證、不需要資料庫**。
 
-⚠️ 婉拒文案是待審核草稿（見 `REFUSAL_REVIEW_STATUS`）。這裡守的是**語氣方向
-與結構**，不逐字比對文案——同 B5 的處理，逐字比對會讓每次潤稿變成破壞性變更。
+⚠️ 婉拒文案是 MVP 暫時沿用的內容（見 `REFUSAL_REVIEW_STATUS`），不代表完成正式
+敘事審核。這裡守的是**語氣方向與結構**，不逐字比對文案——同 B5 的處理，逐字
+比對會讓每次潤稿變成破壞性變更。
 """
 import pytest
 
@@ -272,13 +273,11 @@ def test_gate_still_returns_text_when_refusal_is_missing():
 
 # ── 文案審核狀態 ───────────────────────────────────────────────────────
 
-def test_refusals_are_marked_as_pending_review():
+def test_refusals_use_the_mvp_no_review_marker():
     """
-    文案來源是 #41 交付物 C，而那份文件本身也還沒過審。
-
-    這條會在有人把標記改成審核者與日期時變紅——那時候紅是對的。
+    #41 已關閉，MVP 暫時沿用文案，但不把它假裝成正式敘事審核完成。
     """
-    assert REFUSAL_REVIEW_STATUS == "PENDING_NARRATIVE_REVIEW"
+    assert REFUSAL_REVIEW_STATUS == "MVP_NO_REVIEW"
 
 
 def test_review_marker_never_reaches_the_player():

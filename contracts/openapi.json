@@ -1770,7 +1770,7 @@
     },
     "/api/v1/spirits/{place_id}/dialogue": {
       "post": {
-        "description": "對話端點（**Phase 2 可用版**，#42）。\n\n    Session ＋（Encounter 或 Sense）\n      → 配額（#32）\n      → B12 招呼比對（命中就直接回，不呼叫 Gemini）\n      → B2 組裝（#12）→ B1 生成（#8）→ B10 語音（#21）\n      → B7 短期記憶寫入\n\n**B4 安全邊界不在這條路徑上**——那是 Phase 3（#45）。目前 Prompt 用 B2 的\n最小可用組裝（沒有 embedding，所以沒有長期記憶；沒有當日情境）。\n\n## 順序不是隨意的\n\n配額是**第一道關卡**（SDD v1 §3）。它排在最前面的理由跟 B4 排在 B2 之前\n一樣：被擋下的請求不該讓下游付出任何成本。B12 排在生成之前，是因為命中\n預寫台詞時完全不需要模型——那是 B12 的全部價值（零成本、零延遲）。\n\n## 三種 token 的驗證邏輯不共用（SDD 第6節）\n\nSession ＋ Encounter 或 Session ＋ Sense 都可以。Encounter 代表「你真的\n到了現場（50m）」，Sense 代表「你在感應範圍內（150m），可以隔空聊天」。\n兩者換到的對話能力相同，差別在別的端點。",
+        "description": "對話端點（**Phase 3 完整版**，#45）。\n\n    Session ＋（Encounter 或 Sense）\n      → 配額（#32）\n      → B4 安全邊界（僅對逐地標開啟安全閘的靈魂）\n      → B12 招呼比對（命中就直接回，不呼叫 Gemini）\n      → B2 組裝（#12）→ B1 生成（#8）→ B10 語音（#21）\n      → B7 短期記憶寫入\n\n**B4 已接在這條路徑上**，由 `spirit.safety_gate_enabled` 逐地標控制。\n安全閘會先分類輸入；只有判定安全才進入 B12／B2／B1 closure。Prompt 目前仍\n不傳 embedding 或當日情境，這兩項不是本端點本票的範圍。\n\n## 順序不是隨意的\n\n配額是**第一道關卡**（SDD v1 §3）。它排在最前面的理由跟 B4 排在 B2 之前\n一樣：被擋下的請求不該讓下游付出任何成本。B12 排在生成之前，是因為命中\n預寫台詞時完全不需要模型——那是 B12 的全部價值（零成本、零延遲）。\n\n## 三種 token 的驗證邏輯不共用（SDD 第6節）\n\nSession ＋ Encounter 或 Session ＋ Sense 都可以。Encounter 代表「你真的\n到了現場（50m）」，Sense 代表「你在感應範圍內（150m），可以隔空聊天」。\n兩者換到的對話能力相同，差別在別的端點。",
         "operationId": "dialogue_api_v1_spirits__place_id__dialogue_post",
         "parameters": [
           {

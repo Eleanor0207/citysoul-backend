@@ -1,13 +1,13 @@
 """
-`POST /spirits/{placeId}/dialogue` —— Phase 2 可用版（issue #42）。
+`POST /spirits/{placeId}/dialogue` —— 對話完整鏈路（issue #45）。
 
-    Session ＋（Encounter 或 Sense）→ 配額 → B12 招呼 → B1 生成 → B10 語音
-    → B7 短期記憶
+    Session ＋（Encounter 或 Sense）→ 配額 → B12 招呼 → B4 安全閘
+    → B2 組裝 → B1 生成 → B10 語音 → B7 短期記憶
 
 模型與語音由 `conftest.py` 的 autouse fixture 預設注入 fake，所以整條路徑
 **不需要 GCP 憑證**。要驗證失敗降級的測試自己覆寫成會失敗的 fake。
 
-B4 安全邊界與 B2 完整組裝屬 Phase 3（#45），不在本檔範圍。
+B4 安全邊界與 B2 完整組裝已接在端點中；本檔補上逐地標安全閘的端到端驗收。
 """
 import uuid
 from datetime import datetime, timezone
@@ -16,9 +16,11 @@ import jwt
 import pytest
 
 from app.core.config import settings
+from app.main import app
 from app.modules.body import models
 from app.modules.body.encounter_tokens import ENCOUNTER_TOKEN_HEADER, issue_encounter_token
-from app.modules.body.router import FALLBACK_REPLY
+from app.modules.body.router import FALLBACK_REPLY, get_gemini_client
+from app.modules.brain.gemini import FakeGeminiClient
 from app.modules.brain.models import (
     CannedGreeting,
     Character,
@@ -26,9 +28,31 @@ from app.modules.brain.models import (
     CitySoul,
     LandmarkSoul,
 )
+from app.modules.brain.safety import (
+    FakeSafetyChecker,
+    SafetyCategory,
+    SafetyGate,
+    SafetyResult,
+    refusal_for,
+)
 
 _LAT, _LON = 25.0955, 121.5186
 _GREETING = "你來了。今晚雲不多。"
+
+
+@pytest.fixture
+def gemini_factory():
+    """讓每個情境都能注入固定回應並記錄本次請求的模型呼叫。"""
+    clients = []
+
+    def make(response: str):
+        client = FakeGeminiClient(response=response)
+        clients.append(client)
+        app.dependency_overrides[get_gemini_client] = lambda: client
+        return client
+
+    yield make
+    app.dependency_overrides.pop(get_gemini_client, None)
 
 
 @pytest.fixture
@@ -254,6 +278,92 @@ def test_gated_spirit_refuses_without_calling_the_model(
     # 玩家會拿到一句愉快的問候。
     assert body["reply_text"] != _GREETING
     assert body["reply_text"]
+
+
+# ── B4 完整分類與 B1 阻斷 ─────────────────────────────────────────────
+
+_DANGEROUS_DIALOGUES = [
+    (SafetyCategory.MEDICAL, "我這個症狀是不是癌症？"),
+    (SafetyCategory.LEGAL, "我可以告他嗎？"),
+    (SafetyCategory.FINANCIAL, "我該買哪一支股票？"),
+    (SafetyCategory.RELIGIOUS_DOCTRINE, "這個籤詩代表我一定會發財嗎？"),
+]
+
+
+@pytest.mark.parametrize("category,user_input", _DANGEROUS_DIALOGUES)
+def test_安全閘攔下各類高風險提問並阻止生成(
+    client, db_session, spirit, player, active_card, gemini_factory, category, user_input
+):
+    """
+    AC：醫療、法律、財務與宗教教義提問都在生成前婉拒。
+
+    fake Gemini 回固定分類標籤；分類本身會用掉一次呼叫，但 B1 生成不應再被呼叫。
+    `source` 維持 refused，證明 router 的下游 closure 沒有被安全閘放行。
+    """
+    spirit.safety_gate_enabled = True
+    db_session.commit()
+    gemini = gemini_factory(category)
+
+    pid, sess = player
+    enc = issue_encounter_token(pid, spirit.spirit_id)
+    body = _say(client, spirit, sess, enc, user_input).json()
+
+    assert body["source"] == "refused"
+    assert body["reply_text"] == refusal_for(category)
+    assert gemini.call_count == 1, "分類後不應再呼叫 Gemini 生成回應"
+
+
+def test_安全輸入的系統指令不含B4文案或分類規則(
+    client, spirit, player, active_card, gemini_factory
+):
+    """
+    AC：B4 在輸入端攔截，不把婉拒文案或分類規則重複塞進 B2 的 system instruction。
+
+    從送給 fake Gemini 的完整 prompt 取出 `build_prompt()` 的 system instruction，
+    這樣測到的是端點實際送出的組裝結果，而不是只測一個沒有被呼叫的函式。
+    """
+    gemini = gemini_factory("安全的生成回應")
+    pid, sess = player
+    enc = issue_encounter_token(pid, spirit.spirit_id)
+    _say(client, spirit, sess, enc, "這座廟最早是什麼時候蓋的？")
+    system_instruction = gemini.prompts[0].split("\n\n---\n\n", 1)[0]
+
+    for category in SafetyCategory.__dict__.values():
+        if isinstance(category, str) and category != SafetyCategory.SAFE:
+            refusal = refusal_for(category)
+            assert refusal not in system_instruction
+            assert refusal[:10] not in system_instruction
+
+    for rule_fragment in (
+        "你是一個輸入分類器",
+        "safe：一般對話",
+        "self_harm：自傷、輕生、傷害他人",
+        "medical：詢問病症、診斷、治療、用藥",
+        "legal：詢問法律責任、訴訟、權利義務",
+        "financial：詢問投資、理財、金錢決策",
+        "religious_doctrine：詢問教義解釋",
+        "political_stance：詢問政治立場",
+        "other：其他不適合或明顯偏離主題",
+    ):
+        assert rule_fragment not in system_instruction
+
+
+def test_安全閘被旁路時不安全輸入仍會呼叫生成模型(
+    client, spirit, player, active_card
+):
+    """
+    mutation 對照：若 checker 被突變成永遠回傳安全，危險輸入就會流到下游。
+
+    這條刻意使用永遠放行的 `FakeSafetyChecker`，確認測試能看見 B1 被叫到；
+    上面的端點測試則保證正式分類結果不會走到這條路。
+    """
+    gemini = FakeGeminiClient(response="不該送出的生成結果")
+    gate = SafetyGate(FakeSafetyChecker(SafetyResult(is_safe=True)))
+
+    reply = gate.run("我該買哪一支股票？", gemini.generate)
+
+    assert reply == "不該送出的生成結果"
+    assert gemini.call_count == 1
 
 
 def test_generated_text_has_no_stray_spaces_after_chinese_punctuation():

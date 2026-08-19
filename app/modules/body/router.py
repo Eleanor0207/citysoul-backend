@@ -351,16 +351,18 @@ def dialogue(
     tts: TTSClient = Depends(get_tts_client),
 ):
     """
-    對話端點（**Phase 2 可用版**，#42）。
+    對話端點（**Phase 3 完整版**，#45）。
 
         Session ＋（Encounter 或 Sense）
           → 配額（#32）
+          → B4 安全邊界（僅對逐地標開啟安全閘的靈魂）
           → B12 招呼比對（命中就直接回，不呼叫 Gemini）
           → B2 組裝（#12）→ B1 生成（#8）→ B10 語音（#21）
           → B7 短期記憶寫入
 
-    **B4 安全邊界不在這條路徑上**——那是 Phase 3（#45）。目前 Prompt 用 B2 的
-    最小可用組裝（沒有 embedding，所以沒有長期記憶；沒有當日情境）。
+    **B4 已接在這條路徑上**，由 `spirit.safety_gate_enabled` 逐地標控制。
+    安全閘會先分類輸入；只有判定安全才進入 B12／B2／B1 closure。Prompt 目前仍
+    不傳 embedding 或當日情境，這兩項不是本端點本票的範圍。
 
     ## 順序不是隨意的
 
