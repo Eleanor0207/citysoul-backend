@@ -319,6 +319,32 @@ class QuestCompleteResponse(BaseModel):
     newly_unlocked_stages: list[int] = Field(default_factory=list)
 
 
+class StoryArcStateResponse(BaseModel):
+    """
+    `GET /api/v1/story-arcs/{arcId}/state` 的回應（backend#72）。
+
+    唯讀查詢，不觸發任何寫入——跟 `GET /resonance/{spiritId}` 同一個原則。
+
+    `eligible_beat_ids` 是**前置已全部滿足、但玩家還沒完成**的 beat，不是
+    「這條 arc 全部的 beat」——玩家不需要看到還鎖著的節點長什麼樣，那會
+    洩漏未解鎖的劇情內容。
+    """
+
+    arc_id: str
+    completed_beat_ids: list[str] = Field(default_factory=list)
+    eligible_beat_ids: list[str] = Field(default_factory=list)
+    story_completed: bool = False
+
+
+class BeatAdvanceResponse(BaseModel):
+    """`POST /api/v1/story-arcs/{arcId}/beats/{beatId}/advance` 的回應（backend#72）。"""
+
+    beat_id: str
+    already_completed: bool
+    story_completed: bool
+    completed_beat_ids: list[str] = Field(default_factory=list)
+
+
 class DailyEventResponse(BaseModel):
     """
     `GET /api/v1/spirits/{placeId}/daily-event` 的回應（S10／#26）。

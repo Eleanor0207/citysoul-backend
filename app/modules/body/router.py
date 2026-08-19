@@ -19,7 +19,14 @@ from app.modules.body.encounter_tokens import (
 )
 from app.core.redis_client import append_session_turn
 from app.modules.body.geo import haversine_distance_m
-from app.modules.body import daily_event_service, guided_questions_service, push, queries, quests
+from app.modules.body import (
+    daily_event_service,
+    guided_questions_service,
+    push,
+    queries,
+    quests,
+    story_progress,
+)
 from app.modules.body.quests import evaluate_on_summon
 from app.modules.body.quota import (
     RESOURCE_DIALOGUE,
@@ -79,6 +86,9 @@ router = APIRouter(prefix="/api/v1", tags=["body"])
 _UNAUTHORIZED = {401: {"model": schemas.ErrorResponse, "description": "Session token 無效或未提供"}}
 _SPIRIT_NOT_FOUND = {
     404: {"model": schemas.ErrorResponse, "description": "靈魂不存在，或已下架（is_active=false）"}
+}
+_ARC_NOT_FOUND = {
+    404: {"model": schemas.ErrorResponse, "description": "劇情主線或 beat 不存在（或已停用）"}
 }
 
 
@@ -705,6 +715,72 @@ def complete_quest_endpoint(
         resonance_value=result.resonance_value,
         stage=result.stage,
         newly_unlocked_stages=result.newly_unlocked_stages,
+    )
+
+
+@router.get(
+    "/story-arcs/{arc_id}/state",
+    response_model=schemas.StoryArcStateResponse,
+    responses={**_UNAUTHORIZED, **_ARC_NOT_FOUND},
+)
+def get_story_arc_state(
+    arc_id: str,
+    session_player_id: uuid.UUID = Depends(require_session_token),
+    db: Session = Depends(get_db),
+):
+    """
+    劇情主線目前進度（backend#72）。唯讀，不觸發任何寫入。
+
+    ⚠️ **目前沒有真正的呼叫端**——三地標觀察任務（`quest_type='story'`）卡在
+    實地勘查，還沒有任何內容能推進 beat（見 `story_progress.py` 模組說明）。
+    這支端點先把讀取機制建好，等內容到位時客戶端直接接上。
+    """
+    try:
+        state = story_progress.arc_state(db, player_id=session_player_id, arc_id=arc_id)
+    except story_progress.ArcNotFoundError:
+        raise HTTPException(status_code=404, detail="story arc not found")
+
+    return schemas.StoryArcStateResponse(**state)
+
+
+@router.post(
+    "/story-arcs/{arc_id}/beats/{beat_id}/advance",
+    response_model=schemas.BeatAdvanceResponse,
+    responses={**_UNAUTHORIZED, **_ARC_NOT_FOUND, **_forbidden("這個 beat 的前置還沒全部完成")},
+)
+def advance_story_beat(
+    arc_id: str,
+    beat_id: str,
+    session_player_id: uuid.UUID = Depends(require_session_token),
+    db: Session = Depends(get_db),
+):
+    """
+    把一個 beat 記成這個玩家已完成（backend#72）。
+
+    確定性規則，不經 LLM——前置是否都在 `players_story_progress` 裡（見
+    `story_progress.advance_beat()`）。推進到終點 beat 時同一次呼叫發放結局
+    共鳴值（三個地標各 +30，#52 拍板）。
+
+    ⚠️ **只驗證 session token，沒有比照 `/quests/{questId}/complete` 要求
+    encounter token 做在場證明**——現在完全沒有真正的呼叫端，無從決定「哪
+    一種在場證明」是對的。等三地標觀察任務落地、真正的呼叫端（quest
+    turn-in）確定形狀時，這道 gating 需要一併補上，不該假設這個寬鬆版本
+    就是終版（見 `story_progress.py` 模組說明）。
+    """
+    try:
+        result = story_progress.advance_beat(
+            db, player_id=session_player_id, arc_id=arc_id, beat_id=beat_id
+        )
+    except story_progress.BeatNotFoundError:
+        raise HTTPException(status_code=404, detail="story beat not found")
+    except story_progress.BeatNotUnlockedError:
+        raise HTTPException(status_code=403, detail="prerequisite beats not completed")
+
+    return schemas.BeatAdvanceResponse(
+        beat_id=result.beat_id,
+        already_completed=result.already_completed,
+        story_completed=result.story_completed,
+        completed_beat_ids=result.completed_beat_ids,
     )
 
 

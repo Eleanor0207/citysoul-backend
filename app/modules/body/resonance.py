@@ -1,9 +1,10 @@
 """
 S5．共鳴值入帳與門檻判定（SDD 第3.1／7.5節）。
 
-刻意做成**獨立服務函式**，不綁任何 API 端點。呼叫方目前有兩個：
-`POST /quests/{questId}/complete`（任務完成）與
-`POST /spirits/{placeId}/dialogue`（每日對話，backend#70）。
+刻意做成**獨立服務函式**，不綁任何 API 端點。呼叫方目前有三個：
+`POST /quests/{questId}/complete`（任務完成）、
+`POST /spirits/{placeId}/dialogue`（每日對話，backend#70）與
+`story_progress.advance_beat()`（劇情結局，backend#72）。
 
 ## 防重複入帳靠資料庫，不靠先查後寫
 
@@ -30,11 +31,10 @@ SOURCE_QUEST = "quest"
 # （不含 spirit_id）——只用日期當 source_id 會變成「今天跟任何一個靈魂聊過，
 # 所有靈魂都入帳」。
 SOURCE_DIALOGUE = "dialogue"
+# 劇情結局（backend#72／#52 拍板）。同一個理由：source_id 帶 arc_id 與
+# spirit_id（`story_completion_source_id()`），三個地標各自入帳一筆。
+SOURCE_STORY_COMPLETION = "story_completion"
 
-# resonance_config 裡目前有程式碼在讀的 key（backend#73／migration 0026）。
-# `amount_story_completion` 也已經種進表裡，但屬於 #72 的範圍，這裡先不強制
-# 要求，等那張票接上了再補進來——不然表裡種了值但這支函式還沒對應欄位讀，
-# 會被誤以為漏做。
 _REQUIRED_CONFIG_KEYS = (
     "threshold_stage_1",
     "threshold_stage_2",
@@ -42,6 +42,7 @@ _REQUIRED_CONFIG_KEYS = (
     "amount_encounter_collection",
     "amount_quest",
     "amount_dialogue",
+    "amount_story_completion",
 )
 
 
@@ -60,6 +61,7 @@ class ResonanceRules:
     amount_encounter_collection: int
     amount_quest: int
     amount_dialogue: int
+    amount_story_completion: int
 
 
 def load_resonance_rules(db: Session) -> ResonanceRules:
@@ -86,6 +88,7 @@ def load_resonance_rules(db: Session) -> ResonanceRules:
         amount_encounter_collection=values["amount_encounter_collection"],
         amount_quest=values["amount_quest"],
         amount_dialogue=values["amount_dialogue"],
+        amount_story_completion=values["amount_story_completion"],
     )
 
 
@@ -100,6 +103,17 @@ def dialogue_source_id(spirit_id: str, taipei_date) -> str:
     日期換算的規則只該有一個地方。
     """
     return f"{spirit_id}:{taipei_date.isoformat()}"
+
+
+def story_completion_source_id(arc_id: str, spirit_id: str) -> str:
+    """
+    劇情結局入帳用的 `source_id`（backend#72）。
+
+    一條 arc 結局時會對三個地標各入帳一筆，同一個理由：`resonance_events`
+    的 UNIQUE 不含 `spirit_id`，只用 `arc_id` 當 source_id 會讓玩家只拿到
+    一次入帳（三個地標搶同一把鎖），而不是三個地標各自 +30。
+    """
+    return f"{arc_id}:{spirit_id}"
 
 
 def stage_for_value(thresholds: tuple[int, ...], value: int) -> int:

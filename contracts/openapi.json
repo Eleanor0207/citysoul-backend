@@ -30,6 +30,37 @@
         "title": "AvatarAssetResponse",
         "type": "object"
       },
+      "BeatAdvanceResponse": {
+        "description": "`POST /api/v1/story-arcs/{arcId}/beats/{beatId}/advance` 的回應（backend#72）。",
+        "properties": {
+          "already_completed": {
+            "title": "Already Completed",
+            "type": "boolean"
+          },
+          "beat_id": {
+            "title": "Beat Id",
+            "type": "string"
+          },
+          "completed_beat_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Completed Beat Ids",
+            "type": "array"
+          },
+          "story_completed": {
+            "title": "Story Completed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "beat_id",
+          "already_completed",
+          "story_completed"
+        ],
+        "title": "BeatAdvanceResponse",
+        "type": "object"
+      },
       "Body_landmark_photo_api_v1_quests__quest_id__landmark_photo_post": {
         "properties": {
           "photo": {
@@ -741,6 +772,39 @@
           "orientation"
         ],
         "title": "SpiritResponse",
+        "type": "object"
+      },
+      "StoryArcStateResponse": {
+        "description": "`GET /api/v1/story-arcs/{arcId}/state` 的回應（backend#72）。\n\n唯讀查詢，不觸發任何寫入——跟 `GET /resonance/{spiritId}` 同一個原則。\n\n`eligible_beat_ids` 是**前置已全部滿足、但玩家還沒完成**的 beat，不是\n「這條 arc 全部的 beat」——玩家不需要看到還鎖著的節點長什麼樣，那會\n洩漏未解鎖的劇情內容。",
+        "properties": {
+          "arc_id": {
+            "title": "Arc Id",
+            "type": "string"
+          },
+          "completed_beat_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Completed Beat Ids",
+            "type": "array"
+          },
+          "eligible_beat_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Eligible Beat Ids",
+            "type": "array"
+          },
+          "story_completed": {
+            "default": false,
+            "title": "Story Completed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "arc_id"
+        ],
+        "title": "StoryArcStateResponse",
         "type": "object"
       },
       "SuggestedQuestionsResponse": {
@@ -2003,6 +2067,161 @@
           }
         ],
         "summary": "Get Suggested Questions Endpoint",
+        "tags": [
+          "body"
+        ]
+      }
+    },
+    "/api/v1/story-arcs/{arc_id}/beats/{beat_id}/advance": {
+      "post": {
+        "description": "把一個 beat 記成這個玩家已完成（backend#72）。\n\n確定性規則，不經 LLM——前置是否都在 `players_story_progress` 裡（見\n`story_progress.advance_beat()`）。推進到終點 beat 時同一次呼叫發放結局\n共鳴值（三個地標各 +30，#52 拍板）。\n\n⚠️ **只驗證 session token，沒有比照 `/quests/{questId}/complete` 要求\nencounter token 做在場證明**——現在完全沒有真正的呼叫端，無從決定「哪\n一種在場證明」是對的。等三地標觀察任務落地、真正的呼叫端（quest\nturn-in）確定形狀時，這道 gating 需要一併補上，不該假設這個寬鬆版本\n就是終版（見 `story_progress.py` 模組說明）。",
+        "operationId": "advance_story_beat_api_v1_story_arcs__arc_id__beats__beat_id__advance_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "arc_id",
+            "required": true,
+            "schema": {
+              "title": "Arc Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "beat_id",
+            "required": true,
+            "schema": {
+              "title": "Beat Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BeatAdvanceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Session token 無效或未提供"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "這個 beat 的前置還沒全部完成"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "劇情主線或 beat 不存在（或已停用）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Advance Story Beat",
+        "tags": [
+          "body"
+        ]
+      }
+    },
+    "/api/v1/story-arcs/{arc_id}/state": {
+      "get": {
+        "description": "劇情主線目前進度（backend#72）。唯讀，不觸發任何寫入。\n\n⚠️ **目前沒有真正的呼叫端**——三地標觀察任務（`quest_type='story'`）卡在\n實地勘查，還沒有任何內容能推進 beat（見 `story_progress.py` 模組說明）。\n這支端點先把讀取機制建好，等內容到位時客戶端直接接上。",
+        "operationId": "get_story_arc_state_api_v1_story_arcs__arc_id__state_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "arc_id",
+            "required": true,
+            "schema": {
+              "title": "Arc Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoryArcStateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Session token 無效或未提供"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "劇情主線或 beat 不存在（或已停用）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Story Arc State",
         "tags": [
           "body"
         ]

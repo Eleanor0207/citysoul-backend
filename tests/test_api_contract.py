@@ -95,6 +95,13 @@ EXPECTED_RESPONSE_CODES = {
     # #39：只需要 session token。
     ("post", "/api/v1/push/register"): {"200", "401", "422"},
     ("post", "/api/v1/push/unsubscribe"): {"200", "401"},
+    # #72：只收 session token，沒有 encounter token 那組 403（目前沒有真正的
+    # 呼叫端，見 story_progress.py 模組說明；advance 的 403 是「前置未完成」，
+    # 不是憑證問題）。
+    ("get", "/api/v1/story-arcs/{arc_id}/state"): {"200", "401", "404", "422"},
+    ("post", "/api/v1/story-arcs/{arc_id}/beats/{beat_id}/advance"): {
+        "200", "401", "403", "404", "422",
+    },
     ("get", "/health"): {"200"},
 }
 

@@ -24,6 +24,7 @@ from app.modules.body.resonance import (
 AMOUNT_ENCOUNTER_COLLECTION = 10
 AMOUNT_QUEST = 20
 AMOUNT_DIALOGUE = 10
+AMOUNT_STORY_COMPLETION = 30
 THRESHOLDS = (10, 40, 100)
 
 
@@ -96,6 +97,7 @@ def test_seeded_config_matches_the_pace_decided_in_52(db_session):
     assert rules.amount_encounter_collection == AMOUNT_ENCOUNTER_COLLECTION
     assert rules.amount_quest == AMOUNT_QUEST
     assert rules.amount_dialogue == AMOUNT_DIALOGUE
+    assert rules.amount_story_completion == AMOUNT_STORY_COMPLETION
 
 
 def test_load_resonance_rules_raises_when_a_required_key_is_missing(db_session):
