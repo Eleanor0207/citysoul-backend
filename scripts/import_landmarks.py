@@ -19,14 +19,20 @@
 產生，而研究檔已經過 Lead 覆核。這支腳本會擋掉明顯未完成的內容（佔位字串、空的
 史實表），但它擋不掉「寫錯的史實」——那是人的責任。
 
-## 🔒 基調有審核閘，這支腳本只會把它關掉
+## 基調的審核閘已在 MVP 取消（2026-08-18 決定）
 
-`brain.districts` 有 `active` / `reviewed_by` / `reviewed_at`（0018），語意與人格
-卡一致：**沒有任何程式路徑會把 `active` 設成 true**，只有人工審核流程能 flip。
-`prompt_builder` 只注入 `active=true` 的基調。
+`brain.districts` 有 `active` / `reviewed_by` / `reviewed_at`（0018）。這支腳本
+原本永遠把 `active` 寫成 false、把 `reviewed_by` 清成 NULL，要生效得由人跑
+`scripts.activate_content` 手動 flip。那道閘門拿掉了：**匯入即生效**。
 
-而且**重新匯入會把已審核的列退回未審核**。內容換了、審核狀態留著，等於讓上一次
-的簽名替這一次的文字背書——那比一開始就沒有審核更糟，因為它看起來是有審核的。
+理由與人格卡那邊相同（見 `import_personas.py`）：審核者只有一個人，而閘門實際
+擋住的是自己的產出，不是壞內容。
+
+沒有人看過的基調，`reviewed_by` 記成 `MVP_NO_REVIEW`——讓「這段文字沒有人讀過」
+在資料庫裡是一個查得到的值，而不是一個空格。日後恢復審核時，要重看哪些，查這個
+字串就知道。
+
+`prompt_builder` 仍然只注入 `active=true` 的基調，那條路徑不變。
 
 ## 區級基調寫進 brain.districts（0016）
 
@@ -62,6 +68,9 @@ from app.core.text_normalize import strip_fold_spaces
 
 CONTENT_DIR = pathlib.Path(__file__).resolve().parent.parent / "content" / "landmarks"
 DISTRICTS_YAML = pathlib.Path(__file__).resolve().parent.parent / "content" / "districts.yaml"
+
+# 見 docstring：沒有人讀過的內容，在資料庫裡要是一個查得到的值。
+MVP_NO_REVIEW = "MVP_NO_REVIEW"
 
 # 研究檔還沒寫完時留下的記號。這些不該進資料庫。
 PLACEHOLDERS = ("PENDING_NARRATIVE_REVIEW", "PENDING_HUMAN_REVIEW", "待定", "TODO")
@@ -144,19 +153,20 @@ UPSERT_LANDMARK = text(
 UPSERT_DISTRICT = text(
     """
     INSERT INTO brain.districts
-        (district_id, city_id, name, core_tone_descriptors, shared_values, macro_history_summary)
-    VALUES (:district_id, :city_id, :name, :core_tone_descriptors, :shared_values, :macro)
+        (district_id, city_id, name, core_tone_descriptors, shared_values, macro_history_summary,
+         active, reviewed_by, reviewed_at)
+    VALUES (:district_id, :city_id, :name, :core_tone_descriptors, :shared_values, :macro,
+            true, :reviewed_by, now())
     ON CONFLICT (district_id) DO UPDATE SET
         city_id               = EXCLUDED.city_id,
         name                  = EXCLUDED.name,
         core_tone_descriptors = EXCLUDED.core_tone_descriptors,
         shared_values         = EXCLUDED.shared_values,
         macro_history_summary = EXCLUDED.macro_history_summary,
-        -- 🔒 改了基調文字就退回未審核。內容變了而審核狀態沒變，等於讓上一次的
-        -- 簽名替這一次的文字背書——那比一開始就沒有審核更糟。
-        active                = false,
-        reviewed_by           = NULL,
-        reviewed_at           = NULL
+        -- MVP 取消人工文字審核（2026-08-18），基調改成匯入即生效。見 docstring。
+        active                = true,
+        reviewed_by           = EXCLUDED.reviewed_by,
+        reviewed_at           = EXCLUDED.reviewed_at
     """
 )
 
@@ -279,6 +289,7 @@ def main() -> int:
                     "core_tone_descriptors": tone.get("core_tone_descriptors"),
                     "shared_values": tone.get("shared_values"),
                     "macro": tone.get("macro_history_summary"),
+                    "reviewed_by": MVP_NO_REVIEW,
                 },
             )
 
