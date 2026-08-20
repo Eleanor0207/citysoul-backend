@@ -45,7 +45,7 @@ spec:
           #   gcloud artifacts docker images describe \
           #     asia-east1-docker.pkg.dev/citysoul/citysoul/backend:latest \
           #     --format='value(image_summary.digest)'
-          image: asia-east1-docker.pkg.dev/citysoul/citysoul/backend@sha256:57649d2a99ffefcc873b64fe47cdd6c8b5e0c7eeaab1e8c79d743f353bfc881a
+          image: asia-east1-docker.pkg.dev/citysoul/citysoul/backend@sha256:dd06857b313714083eb128a555166c398a1ac18179430fc77a65cb027039b94e
           ports:
             - name: http1
               containerPort: 8080
@@ -67,6 +67,12 @@ spec:
             # Unity client 可以驗端到端流程。上真實玩家之前要拿掉這一行。
             - name: DEV_CONSOLE_ENABLED
               value: 'true'
+            # B10 TTS 音檔存放。留空時 tts.py 會降級成「只回文字」——那是刻意的
+            # 支援狀態，不是失敗，所以少了這一行不會有任何錯誤浮上來，只會安靜
+            # 地沒有聲音。bucket 設了 age=1 天的 lifecycle rule 自動清除：對話
+            # 語音是一次性的，留著只會累積成本，而且等於錄下玩家聽過什麼。
+            - name: TTS_AUDIO_BUCKET
+              value: citysoul-tts-audio
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef: { name: citysoul-database-url, key: latest }

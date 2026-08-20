@@ -174,16 +174,82 @@ class GcsAudioStorage(AudioStorage):
     bucket，而「沒有語音」本來就是這條流程支援的狀態。
     """
 
-    def __init__(self, *, bucket_name: str | None = None, url_ttl_seconds: int | None = None, client_factory=None):
+    def __init__(
+        self,
+        *,
+        bucket_name: str | None = None,
+        url_ttl_seconds: int | None = None,
+        client_factory=None,
+        credentials_factory=None,
+    ):
         self._bucket_name = bucket_name if bucket_name is not None else settings.tts_audio_bucket
         self._url_ttl_seconds = url_ttl_seconds or settings.tts_audio_url_ttl_seconds
         self._client_factory = client_factory or self._create_client
+        self._credentials_factory = credentials_factory or self._default_credentials
         self._client = None
 
     def _create_client(self):
         from google.cloud import storage
 
         return storage.Client()
+
+    @staticmethod
+    def _default_credentials():
+        import google.auth
+
+        credentials, _ = google.auth.default()
+        return credentials
+
+    def _signing_kwargs(self) -> dict:
+        """
+        簽章網址要怎麼簽，取決於當下這組憑證有沒有私鑰。
+
+        Cloud Run 上的服務帳號憑證**只有一個 access token，沒有私鑰**，而
+        `generate_signed_url()` 預設是拿私鑰在本地簽——所以它會以
+        「you need a private key to sign credentials」失敗。那個例外會被
+        `store()` 吞掉、降級成沒有語音，**測試與 log 都不會有紅字**，只有戴上
+        耳機的人才會發現。這個方法存在就是為了不讓那件事再發生一次。
+
+        帶了 `service_account_email` 與 `access_token` 之後，SDK 改走 IAM 的
+        `signBlob` API 代簽，需要該服務帳號對自己有
+        `roles/iam.serviceAccountTokenCreator`。
+
+        有私鑰的憑證（金鑰檔）走原本的本地簽章即可，不必多繞一趟 IAM。
+        """
+        credentials = self._credentials_factory()
+
+        from google.auth import credentials as auth_credentials
+
+        if isinstance(credentials, auth_credentials.Signing):
+            return {}
+
+        from google.auth.transport import requests as auth_requests
+
+        # ⚠️ 順序有意義：**先 refresh，再讀 email**。
+        #
+        # Cloud Run 的 compute 憑證剛建好時，`service_account_email` 是字面值
+        # "default"——那是 metadata server 的別名，不是信箱。真正的位址要等
+        # `refresh()` 內部呼叫 `_retrieve_info()` 才會填進來。倒過來寫的話會把
+        # "default" 送進 IAM signBytes，換回
+        # 「Invalid form of account ID default」400，而那個例外一樣會被
+        # store() 吞掉、降級成沒有語音。
+        if not credentials.valid:
+            credentials.refresh(auth_requests.Request())
+
+        email = getattr(credentials, "service_account_email", None)
+
+        if email == "default":
+            # 憑證已經是 valid（例如別處先 refresh 過）而沒走上面那條路時，
+            # email 可能還停在別名上。再 refresh 一次把它換成真的信箱。
+            credentials.refresh(auth_requests.Request())
+            email = getattr(credentials, "service_account_email", None)
+
+        if not email or email == "default":
+            # 本機的使用者憑證兩條路都走不了。回空字典讓它照原本的方式失敗，
+            # 由 store() 統一降級——在這裡丟例外只會把「沒有語音」變成當機。
+            return {}
+
+        return {"service_account_email": email, "access_token": credentials.token}
 
     def store(self, audio: bytes, *, content_type: str = "audio/mpeg") -> str | None:
         if not self._bucket_name:
@@ -200,7 +266,10 @@ class GcsAudioStorage(AudioStorage):
             blob = bucket.blob(f"tts/{uuid.uuid4().hex}.mp3")
             blob.upload_from_string(audio, content_type=content_type)
 
-            return blob.generate_signed_url(expiration=timedelta(seconds=self._url_ttl_seconds))
+            return blob.generate_signed_url(
+                expiration=timedelta(seconds=self._url_ttl_seconds),
+                **self._signing_kwargs(),
+            )
 
         except Exception as exc:  # noqa: BLE001
             logger.warning("音檔存放失敗：%s: %s", type(exc).__name__, exc)

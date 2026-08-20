@@ -256,6 +256,164 @@ def test_gcs_storage_failure_does_not_raise():
     assert storage.store(b"\x00audio") is None
 
 
+# ── GCS 存放：成功路徑與簽章方式 ───────────────────────────────────────
+#
+# 這一組補的是一個真實發生過的缺口：原本只有「沒設 bucket」與「建 client 失敗」
+# 兩個測試，兩者都在碰到 blob 之前就 return 了。也就是說
+# `upload_from_string()` 與 `generate_signed_url()` 從來沒有被執行過，而 bug
+# 正好在後者——線上簽章失敗、例外被 store() 吞掉、降級成沒有語音，測試全綠。
+#
+# 所以這裡驗的不只是「有沒有例外」，而是「有沒有用對的方式簽」。
+
+
+class _StubBlob:
+    def __init__(self):
+        self.uploaded = None
+        self.content_type = None
+        self.signed_with = None
+
+    def upload_from_string(self, data, content_type=None):
+        self.uploaded = data
+        self.content_type = content_type
+
+    def generate_signed_url(self, **kwargs):
+        self.signed_with = kwargs
+        return "https://signed.test/audio.mp3"
+
+
+class _StubBucket:
+    def __init__(self, blob):
+        self._blob = blob
+        self.blob_names = []
+
+    def blob(self, name):
+        self.blob_names.append(name)
+        return self._blob
+
+
+class _StubStorageClient:
+    def __init__(self, bucket):
+        self._bucket = bucket
+        self.bucket_names = []
+
+    def bucket(self, name):
+        self.bucket_names.append(name)
+        return self._bucket
+
+
+REAL_EMAIL = "citysoul-run@citysoul.iam.gserviceaccount.com"
+
+
+class _ComputeCredentials:
+    """
+    Cloud Run 上的憑證形狀：有 token、沒有私鑰，而且**剛建好時
+    `service_account_email` 是字面值 "default"**——那是 metadata server 的別名。
+    真正的信箱要等 `refresh()` 內部的 `_retrieve_info()` 才會填進來。
+
+    這個 stub 刻意照著那個順序模擬。之前的版本一開始就給真信箱，於是
+    「先讀 email 後 refresh」的錯誤順序測不出來，線上換回
+    「Invalid form of account ID default」400。
+    """
+
+    def __init__(self, valid=False):
+        self.valid = valid
+        self.token = "ya29.stub-token"
+        self.service_account_email = "default"
+        self.refresh_count = 0
+
+    def refresh(self, request):  # noqa: ARG002
+        self.refresh_count += 1
+        self.valid = True
+        self.service_account_email = REAL_EMAIL
+
+
+def _gcs(credentials):
+    blob = _StubBlob()
+    bucket = _StubBucket(blob)
+    client = _StubStorageClient(bucket)
+    storage = GcsAudioStorage(
+        bucket_name="citysoul-tts-audio",
+        url_ttl_seconds=3600,
+        client_factory=lambda: client,
+        credentials_factory=lambda: credentials,
+    )
+    return storage, client, bucket, blob
+
+
+def test_gcs_storage_uploads_and_returns_the_signed_url():
+    storage, client, bucket, blob = _gcs(_ComputeCredentials())
+
+    url = storage.store(b"audio-bytes")
+
+    assert url == "https://signed.test/audio.mp3"
+    assert client.bucket_names == ["citysoul-tts-audio"]
+    assert blob.uploaded == b"audio-bytes"
+    assert blob.content_type == "audio/mpeg"
+
+    # 音檔放在 tts/ 底下，檔名隨機，不含台詞內容。
+    assert len(bucket.blob_names) == 1
+    assert bucket.blob_names[0].startswith("tts/")
+    assert bucket.blob_names[0].endswith(".mp3")
+
+
+def test_gcs_storage_signs_through_iam_when_credentials_have_no_private_key():
+    """
+    這是線上真正壞掉的地方。沒有這個測試，改回本地簽章不會有任何一個測試轉紅，
+    只會安靜地不發聲音。
+    """
+    credentials = _ComputeCredentials()
+    storage, _, _, blob = _gcs(credentials)
+
+    storage.store(b"audio-bytes")
+
+    assert blob.signed_with["service_account_email"] == REAL_EMAIL
+    assert blob.signed_with["access_token"] == "ya29.stub-token"
+
+
+def test_gcs_storage_resolves_the_real_email_before_signing():
+    """
+    憑證已經 valid、但 email 還停在 "default" 別名上時，要再 refresh 一次把它
+    換成真的信箱。送 "default" 進 IAM signBytes 會換回 400，而那個例外會被
+    store() 吞掉——log 上只會看到「音檔存放失敗」，聽的人只會覺得沒有聲音。
+    """
+    credentials = _ComputeCredentials(valid=True)
+    storage, _, _, blob = _gcs(credentials)
+
+    storage.store(b"audio-bytes")
+
+    assert credentials.refresh_count == 1
+    assert blob.signed_with["service_account_email"] == REAL_EMAIL
+    assert blob.signed_with["service_account_email"] != "default"
+
+
+def test_gcs_storage_refreshes_an_expired_token_before_signing():
+    credentials = _ComputeCredentials(valid=False)
+    storage, _, _, blob = _gcs(credentials)
+
+    storage.store(b"audio-bytes")
+
+    assert credentials.refresh_count == 1
+    assert blob.signed_with["access_token"] == "ya29.stub-token"
+    assert blob.signed_with["service_account_email"] == REAL_EMAIL
+
+
+def test_gcs_storage_leaves_signing_to_the_sdk_for_local_user_credentials():
+    """
+    本機的使用者憑證既沒有私鑰、也沒有服務帳號 email。兩條路都走不了時要安靜
+    降級——在這裡丟例外只會把「沒有語音」變成當機。
+    """
+
+    class _UserCredentials:
+        valid = True
+
+    storage, _, _, blob = _gcs(_UserCredentials())
+
+    storage.store(b"audio-bytes")
+
+    assert "service_account_email" not in blob.signed_with
+    assert "access_token" not in blob.signed_with
+
+
 # ── 抽象介面 ───────────────────────────────────────────────────────────
 
 def test_both_implementations_satisfy_the_interface():
