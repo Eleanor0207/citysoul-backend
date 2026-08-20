@@ -14,6 +14,9 @@ __pycache__/
 *.pyc
 .pytest_cache/
 uv.lock
+.claude/
+.codex/
+/AGENTS.md
 
 # 文件與規格（只留在本機，不上雲端也不上版控，見 .gitignore）
 docs/

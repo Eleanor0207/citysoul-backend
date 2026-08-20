@@ -9,6 +9,9 @@ node_modules/
 build/
 .idea/
 .vscode/
+.claude/
+.codex/
+/AGENTS.md
 # 個人的多資料夾 workspace 檔，路徑假設 citysoul-client 就在隔壁目錄
 *.code-workspace
 

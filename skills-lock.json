@@ -13,6 +13,12 @@
       "skillPath": "skills/in-progress/batch-grill-me/SKILL.md",
       "computedHash": "574a9c661c3ba9682f33aa924c0638a9553c5b110e45f73d4c55efab0ecbe2fe"
     },
+    "blender-motion-state-inspection": {
+      "source": "affaan-m/ecc",
+      "sourceType": "github",
+      "skillPath": "skills/blender-motion-state-inspection/SKILL.md",
+      "computedHash": "dd620dca99aedd7079553f49ba97f4d24d26672195cc4aa5f4ebf2bb8bf9bc1c"
+    },
     "claude-handoff": {
       "source": "mattpocock/skills",
       "sourceType": "github",
@@ -54,6 +60,12 @@
       "sourceType": "github",
       "skillPath": "skills/personal/edit-article/SKILL.md",
       "computedHash": "db56e5af37c1d91ca8516c40ceb0f108332e7290ab1b65bdae5a089a64271431"
+    },
+    "game-development": {
+      "source": "sickn33/agentic-awesome-skills",
+      "sourceType": "github",
+      "skillPath": "skills/game-development/SKILL.md",
+      "computedHash": "8753fc0806c1ea8eaa68bb71a192214ad1b32cd76a5e5d61f1b5948fa689db1a"
     },
     "git-guardrails-claude-code": {
       "source": "mattpocock/skills",
