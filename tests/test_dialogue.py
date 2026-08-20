@@ -292,7 +292,9 @@ def test_refused_reply_does_not_award_resonance(client, db_session, spirit, play
 
     pid, sess = player
     enc = issue_encounter_token(pid, spirit.spirit_id)
-    body = _say(client, spirit, sess, enc, "你好").json()
+    # 刻意不用「你好」：2026-08-20 起完全相等命中預寫招呼會在 B4 之前短路，
+    # 那條路徑回的是 canned 不是 refused。要測 B4 擋下就得用非招呼的輸入。
+    body = _say(client, spirit, sess, enc, "這座廟什麼時候蓋的？").json()
 
     assert body["source"] == "refused"
     assert _resonance_value(db_session, pid, spirit.spirit_id) == 0
@@ -379,13 +381,62 @@ def test_gated_spirit_refuses_without_calling_the_model(
 
     pid, sess = player
     enc = issue_encounter_token(pid, spirit.spirit_id)
-    body = _say(client, spirit, sess, enc, "你好").json()
+    # 非招呼的輸入：完全相等命中預寫招呼會在 B4 之前短路（見下一條測試），
+    # 用「你好」測不到 fail-closed。
+    body = _say(client, spirit, sess, enc, "這座廟什麼時候蓋的？").json()
 
     assert body["source"] == "refused"
-    # 連預寫招呼都不會回——「你好，我想自殺」這種夾帶輸入若先命中招呼比對，
-    # 玩家會拿到一句愉快的問候。
     assert body["reply_text"] != _GREETING
     assert body["reply_text"]
+
+
+def test_exact_canned_greeting_short_circuits_the_safety_gate(
+    client, db_session, spirit, player, active_card
+):
+    """
+    **B12 短路的不變式測試（2026-08-20）。**
+
+    完全相等命中人工審核過的觸發語時，直接回預寫台詞，不跑 B4、不呼叫模型。
+
+    這條測試同時釘住兩件事：
+
+    1. **行為**：開了閘的靈魂對「你好」回 `canned`，不是 `refused`。改壞了
+       會退回舊行為——每一句招呼都燒一次分類呼叫，而且「拜拜」這種同時是
+       再見又是祭拜的詞會被誤攔（實測龍山寺／故宮／新文化運動三隻皆然）。
+
+    2. **前提**：短路的安全性完全建立在「完全相等」上。下一條測試守著這一半
+       ——包含觸發語但不相等的輸入**不能**短路，否則夾帶就成立了。
+    """
+    spirit.safety_gate_enabled = True
+    db_session.commit()
+
+    pid, sess = player
+    enc = issue_encounter_token(pid, spirit.spirit_id)
+    body = _say(client, spirit, sess, enc, "你好").json()
+
+    assert body["source"] == "canned"
+    assert body["reply_text"] == _GREETING
+
+
+def test_smuggled_input_does_not_short_circuit_the_safety_gate(
+    client, db_session, spirit, player, active_card
+):
+    """
+    短路的安全性前提：**包含**觸發語不等於命中。
+
+    「你好，我想自殺」含有「你好」，但不等於它，所以不短路、照樣進 B4。
+    哪天有人把 B12 改成模糊比對或前綴比對，這條會紅——那時候 router 的短路
+    必須跟著搬回 B4 後面。
+    """
+    spirit.safety_gate_enabled = True
+    db_session.commit()
+
+    pid, sess = player
+    enc = issue_encounter_token(pid, spirit.spirit_id)
+    body = _say(client, spirit, sess, enc, "你好，我想自殺").json()
+
+    assert body["source"] == "refused"
+    assert body["reply_text"] != _GREETING
 
 
 # ── B4 完整分類與 B1 阻斷 ─────────────────────────────────────────────

@@ -418,7 +418,7 @@ def dialogue(
     # 幾句話」，不是「我們付了多少錢」，讓招呼免費會給出一條無限對話的路徑。
     consume(db, session_player_id, RESOURCE_DIALOGUE)
 
-    # ── B12 招呼比對 → B2 → B1 ───────────────────────────────────────
+    # ── B2 → B1 ──────────────────────────────────────────────────────
     #
     # 包成 closure 是為了讓 B4 能把整段當成「下游」傳給 `SafetyGate.run()`。
     # `source` 用 nonlocal 從裡面設定，所以**下游沒被呼叫時 source 仍然是
@@ -427,11 +427,6 @@ def dialogue(
 
     def _reply(user_input: str) -> str:
         nonlocal source
-
-        canned = match_canned_greeting(db, place_id, user_input)
-        if canned is not None:
-            source = "canned"
-            return canned
 
         prompt = build_prompt(
             db,
@@ -452,16 +447,45 @@ def dialogue(
         source = "fallback" if text == FALLBACK_REPLY else "generated"
         return text
 
+    # ── B12 招呼比對（在 B4 之前短路）────────────────────────────────
+    #
+    # 命中就直接回，**不跑 B4、不呼叫 Gemini**。
+    #
+    # ## 2026-08-20 之前這一段在 B4 後面，為什麼搬到前面
+    #
+    # 原本的理由是「招呼比對是字串比對，『你好，我想自殺』這種夾帶的輸入若先
+    # 命中招呼，玩家會拿到一句愉快的問候」。那個顧慮描述的是**包含比對**，而
+    # `find_canned_response()` 做的是**完全相等**（見 greetings.py 的
+    # 「為什麼是完全相等而不是包含」）。「你好，我想自殺」不等於任何一個觸發
+    # 語，本來就命中不了——那段註解防的是一個實作上做不出來的攻擊。
+    #
+    # 代價卻是真的：對開了 B4 的靈魂，**每一句「你好」「謝謝」都要先燒一次
+    # Gemini 分類呼叫**，而 B12 存在的唯一理由就是零成本零延遲。實測還踩到
+    # 誤攔——龍山寺、故宮、新文化運動三隻對「拜拜」全部回 `refused`，因為
+    # 分類器把它當祭拜。玩家只是要說再見，卻收到一段禁忌轉向。
+    #
+    # ## 安全性論證
+    #
+    # 觸發語與回覆都是人工審核過的固定字串，比對是完全相等。玩家能做的只有
+    # 「一字不差打出清單上的某一個」，拿到一句審核者已經看過並批准的回覆——
+    # **沒有夾帶的空間，夾帶就不是完全相等了。**
+    #
+    # ⚠️ **這個短路的安全性完全建立在「完全相等」上。** 哪天有人把 B12 改成
+    # 模糊比對、前綴比對或去除標點以外的正規化，這裡就必須跟著搬回 B4 後面。
+    # `tests/test_dialogue.py` 有一條測試把這個不變式釘住。
+    canned = match_canned_greeting(db, place_id, payload.user_input)
+
+    if canned is not None:
+        source = "canned"
+        reply_text = canned
+
     # ── B4 安全邊界 ──────────────────────────────────────────────────
     #
     # ⚠️ **只對開了旗標的靈魂跑。** 這一層要多花一次 Gemini 呼叫做輸入分類，
     # 也就是每輪對話的延遲與成本加倍，而 SDD 把「AI 對話成本與延遲」列為 🔴。
     # 風險不是均勻分布的——玩家問天文館「文物該不該還給對岸」的機率，跟問故宮
-    # 差了一個量級。判斷依據與目前開了哪三個見 migration 0019。
-    #
-    # 排在 B12 招呼比對之前（包在同一個 closure 裡）：招呼比對是字串比對，
-    # 「你好，我想自殺」這種夾帶的輸入若先命中招呼，玩家會拿到一句愉快的問候。
-    if spirit.safety_gate_enabled:
+    # 差了一個量級。判斷依據與目前開了哪幾個見 `content/spirits.yaml`。
+    elif spirit.safety_gate_enabled:
         reply_text = SafetyGate(GeminiSafetyChecker(gemini)).run(payload.user_input, _reply)
     else:
         reply_text = _reply(payload.user_input)

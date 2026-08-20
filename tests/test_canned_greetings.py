@@ -71,6 +71,52 @@ def test_ascii_case_is_ignored(user_input):
     assert find_canned_response(_CANNED, user_input) == _GREETING
 
 
+@pytest.mark.parametrize(
+    "user_input",
+    [
+        "你好！",
+        "你好!",
+        "你好。",
+        "你好，",
+        "你好～",
+        "你好？",
+        "你好!!",          # 重複標點
+        "你好～～～",
+        "你好！ ",          # 標點後面還有空白：strip 要在 rstrip 標點之前
+        "  你好。 ",
+    ],
+)
+def test_trailing_punctuation_is_ignored(user_input):
+    """
+    2026-08-20 起去掉尾端標點。理由見模組 docstring：靠人工窮舉
+    `trigger_phrases` 會組合爆炸，清單會膨脹到沒有人審得動。
+    """
+    assert find_canned_response(_CANNED, user_input) == _GREETING
+
+
+def test_trailing_punctuation_does_not_weaken_the_containment_rule():
+    """
+    去標點**不能**讓「包含觸發語」變成命中——那是這個模組最重要的一條。
+
+    比對仍然是完全相等，所以句尾的問號被去掉之後，剩下的字串跟「你好」
+    還是不相等。
+    """
+    assert find_canned_response(_CANNED, "你好，龍山寺是什麼時候蓋的？") is None
+
+
+def test_punctuation_only_input_is_a_miss():
+    """全部被去掉之後是空字串，走既有的空輸入分支。"""
+    assert find_canned_response(_CANNED, "？？？") is None
+
+
+def test_full_width_ascii_is_still_not_converted():
+    """
+    全形半形轉換維持不做：那個會讓「ＨＥＬＬＯ」命中「hello」，屬於真的在猜。
+    這條是把「刻意不做」釘住，不是描述缺陷。
+    """
+    assert find_canned_response(_CANNED, "ＨＥＬＬＯ") is None
+
+
 def test_unmatched_input_returns_none():
     assert find_canned_response(_CANNED, "龍山寺是什麼時候蓋的？") is None
 
