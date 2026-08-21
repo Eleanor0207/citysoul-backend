@@ -23,9 +23,11 @@ from app.modules.body.quota import (
     QuotaExceededError,
     UnknownQuotaResourceError,
     consume,
+    current_global_usage,
     current_usage,
     default_tier_id,
     next_taipei_midnight,
+    try_consume_global,
 )
 
 # 台北 = UTC+8。這兩個時間點刻意選在「台北已經是新的一天，UTC 還是昨天」的
@@ -330,3 +332,67 @@ def test_429_body_does_not_leak_other_players_or_internal_config():
 def test_default_tier_still_resolves(db_session):
     """`default_tier_id` 是既有行為，這次改動不該動到它。"""
     assert default_tier_id(db_session)
+
+
+# ── 全域上限（BE#65／SDD §18.6.4）──────────────────────────────────────
+#
+# per player per day 攔不住「1000 個玩家同時觸頂」。這一組釘的是那顆全域計數器。
+
+def test_no_global_limit_configured_never_blocks():
+    # 留空＝不設限，是刻意的預設：封測期人數由發碼控制，而一個沒填好的環境
+    # 變數不該在半夜把所有人的對話變成保底句。
+    for _ in range(50):
+        assert try_consume_global(RESOURCE_DIALOGUE, None) is True
+
+    assert current_global_usage(RESOURCE_DIALOGUE) == 0, "沒設上限時不該累計"
+
+
+def test_global_limit_blocks_after_it_is_reached():
+    assert try_consume_global(RESOURCE_DIALOGUE, 2) is True
+    assert try_consume_global(RESOURCE_DIALOGUE, 2) is True
+    # 「用滿」不等於「超過」：上限 2 時第 2 次仍然成功，第 3 次才被擋。
+    assert try_consume_global(RESOURCE_DIALOGUE, 2) is False
+
+
+def test_a_blocked_global_request_is_not_counted():
+    try_consume_global(RESOURCE_DIALOGUE, 1)
+    assert current_global_usage(RESOURCE_DIALOGUE) == 1
+
+    try_consume_global(RESOURCE_DIALOGUE, 1)
+
+    # 擋下的請求不記帳，理由同 per-player：`INCR` 後才比對的話，用量會從
+    # 1 變成 2，而那一次根本沒有真的花錢。
+    assert current_global_usage(RESOURCE_DIALOGUE) == 1
+
+
+def test_the_global_counter_is_shared_across_players():
+    # 這正是它存在的理由——per-player 計數器各自獨立，一千個玩家就是一千份
+    # 額度；全域這一顆不看是誰打來的。
+    assert try_consume_global(RESOURCE_DIALOGUE, 3) is True
+    assert try_consume_global(RESOURCE_DIALOGUE, 3) is True
+    assert try_consume_global(RESOURCE_DIALOGUE, 3) is True
+    assert try_consume_global(RESOURCE_DIALOGUE, 3) is False
+
+
+def test_global_resources_are_counted_independently():
+    try_consume_global(RESOURCE_DIALOGUE, 1)
+
+    assert try_consume_global(RESOURCE_LANDMARK_RECOGNITION, 1) is True
+
+
+def test_global_quota_resets_at_taipei_midnight():
+    assert try_consume_global(RESOURCE_DIALOGUE, 1, now=_TAIPEI_YESTERDAY_2300) is True
+    assert try_consume_global(RESOURCE_DIALOGUE, 1, now=_TAIPEI_YESTERDAY_2300) is False
+
+    # 台北跨了日，UTC 還在同一天。key 含台北日期，所以額度是新的。
+    assert try_consume_global(RESOURCE_DIALOGUE, 1, now=_TAIPEI_TODAY_0700) is True
+
+
+def test_concurrent_global_consumption_does_not_oversell():
+    # 「先查再寫」在併發下會讓多個請求同時查到「還有額度」然後全部通過。
+    # 這條釘的是 Lua 的原子性——同 per-player 那條的教訓。
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        results = list(pool.map(lambda _: try_consume_global(RESOURCE_DIALOGUE, 10), range(40)))
+
+    assert sum(results) == 10
+    assert current_global_usage(RESOURCE_DIALOGUE) == 10

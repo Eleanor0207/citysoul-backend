@@ -99,6 +99,21 @@ class Settings(BaseSettings):
     # 是簽章 URL 的有效期。
     tts_audio_url_ttl_seconds: int = 3600
 
+    # 全域（非單一玩家）每日對話上限，BE#65／SDD §18.6.4。
+    #
+    # `usage_tier_limits` 那一整套都是 per player per day，攔得住單一玩家濫用，
+    # **攔不住「1000 個玩家同時觸頂」**——帳單是 1000 倍，而沒有任何閘門會擋。
+    #
+    # 留空＝不設限，這是刻意的預設：封測期人數由發碼控制，而一個沒填好的環境
+    # 變數不該在半夜把所有人的對話變成保底句。**公開前必須設起來**（SDD §16
+    # 缺口清單）。觸頂時玩家看到的是角色口吻的保底句、HTTP 仍是 200，不是錯誤
+    # 碼——全域上限是我們的成本問題，不是玩家做錯事（§18.7.3）。
+    #
+    # ⚠️ 這個值要**大於**「預期同時在線人數 × 每人每日上限」以外的安全邊際思考
+    # 方式：它不是容量規劃，是止血閥。設得太貼近日常用量，正常的熱門時段就會
+    # 把玩家推進保底句。
+    global_dialogue_daily_limit: int | None = None
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 

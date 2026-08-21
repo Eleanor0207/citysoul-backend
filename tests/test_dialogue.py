@@ -16,6 +16,7 @@ import jwt
 import pytest
 
 from app.core.config import settings
+from app.core.redis_client import redis_client
 from app.main import app
 from app.modules.body import models
 from app.modules.body.encounter_tokens import ENCOUNTER_TOKEN_HEADER, issue_encounter_token
@@ -280,6 +281,102 @@ def test_fallback_reply_does_not_award_resonance(client, db_session, spirit, pla
     pid, sess = player
     enc = issue_encounter_token(pid, spirit.spirit_id)
     body = _say(client, spirit, sess, enc, "你好").json()
+
+    assert body["source"] == "fallback"
+    assert _resonance_value(db_session, pid, spirit.spirit_id) == 0
+
+
+# ── 全域上限（BE#65／SDD §18.6.4）──────────────────────────────────────
+
+@pytest.fixture
+def _clear_global_quota():
+    """
+    全域計數器的 key **不含 player_id**，所以它會跨測試累積——每個測試自己的
+    玩家夾具擋不住這件事（那正是這顆計數器存在的理由）。不清的話，測試之間
+    的通過與否會取決於執行順序。
+    """
+    def _clear():
+        for key in redis_client.scan_iter("quota:global:*"):
+            redis_client.delete(key)
+
+    _clear()
+    yield
+    _clear()
+
+
+
+def test_global_limit_serves_a_fallback_instead_of_an_error(
+    client, db_session, spirit, player, active_card, monkeypatch, _clear_global_quota
+):
+    """
+    全域額度用完時玩家拿到的是 **200 ＋ 保底台詞**，不是 429。
+
+    §18.7.3：回退一律不阻擋玩家進度。全域上限是我們的帳單問題，不是玩家做錯
+    事——玩家不該看到錯誤碼，也不該從回應裡推敲出我們的總量設定。
+    """
+    monkeypatch.setattr(settings, "global_dialogue_daily_limit", 1)
+
+    pid, sess = player
+    enc = issue_encounter_token(pid, spirit.spirit_id)
+
+    first = _say(client, spirit, sess, enc, "這座廟什麼時候蓋的？")
+    assert first.status_code == 200
+    assert first.json()["source"] == "generated"
+
+    second = _say(client, spirit, sess, enc, "還有其他故事嗎？")
+
+    assert second.status_code == 200, "全域上限不能變成錯誤碼"
+    assert second.json()["source"] == "fallback"
+    assert second.json()["reply_text"]
+
+
+def test_global_limit_does_not_block_canned_greetings(
+    client, db_session, spirit, player, active_card, monkeypatch, _clear_global_quota
+):
+    """
+    招呼比對是完全相等的字串查詢，零成本零延遲。沒有理由因為預算而讓玩家
+    連「你好」都得不到回應——這道閘門省的是 Gemini 呼叫，不是資料庫查詢。
+    """
+    monkeypatch.setattr(settings, "global_dialogue_daily_limit", 1)
+
+    pid, sess = player
+    enc = issue_encounter_token(pid, spirit.spirit_id)
+
+    _say(client, spirit, sess, enc, "這座廟什麼時候蓋的？")
+    body = _say(client, spirit, sess, enc, "你好").json()
+
+    assert body["source"] == "canned"
+
+
+def test_no_global_limit_configured_changes_nothing(
+    client, db_session, spirit, player, active_card, monkeypatch, _clear_global_quota
+):
+    """
+    留空＝不設限，是刻意的預設：封測期人數由發碼控制，而一個沒填好的環境變數
+    不該在半夜把所有人的對話變成保底句。
+    """
+    monkeypatch.setattr(settings, "global_dialogue_daily_limit", None)
+
+    pid, sess = player
+    enc = issue_encounter_token(pid, spirit.spirit_id)
+
+    for _ in range(3):
+        body = _say(client, spirit, sess, enc, "這座廟什麼時候蓋的？").json()
+        assert body["source"] == "generated"
+
+
+def test_global_fallback_does_not_award_resonance(
+    client, db_session, spirit, player, active_card, monkeypatch, _clear_global_quota
+):
+    """
+    觸頂走的是 source=="fallback"，跟生成失敗同一條規則——玩家拿到的是保底句，
+    不是這個靈魂真的回應了什麼，所以不入帳。
+    """
+    monkeypatch.setattr(settings, "global_dialogue_daily_limit", 0)
+
+    pid, sess = player
+    enc = issue_encounter_token(pid, spirit.spirit_id)
+    body = _say(client, spirit, sess, enc, "這座廟什麼時候蓋的？").json()
 
     assert body["source"] == "fallback"
     assert _resonance_value(db_session, pid, spirit.spirit_id) == 0

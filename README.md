@@ -452,6 +452,28 @@ Cloud SQL 的 `DATABASE_URL` 走 unix socket，不是 IP：
 postgresql+psycopg://<user>:<pass>@/<db>?host=/cloudsql/citysoul:asia-east1:citysoul
 ```
 
+### 3.5 接上當日情境的每日排程
+
+```bash
+scripts/gcp/daily-event-job.sh      # 加 DRY_RUN=1 可以先看要跑什麼
+```
+
+建立（或更新）Cloud Run Job `citysoul-daily-event`，並把它接上 Cloud Scheduler，
+每天 05:00（Asia/Taipei）跑一次 B9 當日情境批次。**時區一定要明確指定**——不指定
+的話 Scheduler 走 UTC，會變成台灣下午 1 點，那時候玩家早就看過今天的內容了。
+
+觸發用的服務帳號需要對這個 Job 有 `roles/run.invoker`：
+
+```bash
+gcloud run jobs add-iam-policy-binding citysoul-daily-event   --project=citysoul --region=asia-east1   --member=serviceAccount:citysoul-run@citysoul.iam.gserviceaccount.com   --role=roles/run.invoker
+```
+
+少了這一行，排程會準時觸發並安靜地拿到 403：Scheduler 的執行紀錄看得到，Job
+的執行清單則什麼都不會多出來。
+
+> ⚠️ **接上排程不等於內容就有了。** 輪播池是空的時候，批次跑完每隻靈魂仍然回
+> `is_fallback: true`。順序是：先接排程 → 再填輪播池 → 才看得到非 fallback 的內容。
+
 ### 4. 驗一下
 
 ```bash

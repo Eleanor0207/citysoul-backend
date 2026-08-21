@@ -17,6 +17,7 @@ from app.modules.body.encounter_tokens import (
     issue_encounter_token,
     require_encounter_token,
 )
+from app.core.config import settings
 from app.core.redis_client import append_session_turn
 from app.modules.body.geo import haversine_distance_m
 from app.modules.body import (
@@ -33,6 +34,7 @@ from app.modules.body.quota import (
     RESOURCE_LANDMARK_RECOGNITION,
     consume,
     default_tier_id,
+    try_consume_global,
 )
 from app.modules.body.resonance import (
     SOURCE_DIALOGUE,
@@ -416,6 +418,22 @@ def dialogue(
     # ⚠️ 放在 B12 比對**之前**：AC 說配額是第一道關卡。代價是命中預寫招呼也
     # 會扣一格，而那次其實零成本。這是刻意的取捨——配額擋的是「玩家一天能講
     # 幾句話」，不是「我們付了多少錢」，讓招呼免費會給出一條無限對話的路徑。
+    #
+    # ── 全域上限（BE#65／SDD §18.6.4）─────────────────────────────
+    #
+    # 上面那道是 per player per day，攔不住「1000 個玩家同時觸頂」。這一道
+    # 不看玩家，只看今天全站燒了幾輪。
+    #
+    # **順序：全域在前、玩家在後。** 反過來的話，全域觸頂時玩家仍然被扣了一格
+    # 額度——那是拿玩家的額度去付我們的成本問題。代價是玩家自己的 429 會讓
+    # 全域計數多算一格；那個方向的誤差是保守的（偏向省錢），也小得多。
+    #
+    # 觸頂**不拋例外、不回 429**：全域上限是我們的帳單問題，不是玩家做錯事。
+    # 這裡只記下來，下面的生成路徑會安靜地切到保底句（§18.7.3）。
+    global_budget_left = try_consume_global(
+        RESOURCE_DIALOGUE, settings.global_dialogue_daily_limit
+    )
+
     consume(db, session_player_id, RESOURCE_DIALOGUE)
 
     # ── B2 → B1 ──────────────────────────────────────────────────────
@@ -485,6 +503,22 @@ def dialogue(
     # 也就是每輪對話的延遲與成本加倍，而 SDD 把「AI 對話成本與延遲」列為 🔴。
     # 風險不是均勻分布的——玩家問天文館「文物該不該還給對岸」的機率，跟問故宮
     # 差了一個量級。判斷依據與目前開了哪幾個見 `content/spirits.yaml`。
+    # ── 全域上限觸頂：跳過所有會花錢的路徑 ───────────────────────────
+    #
+    # 排在 B12 **之後**是刻意的：招呼比對是完全相等的字串查詢，零成本零延遲，
+    # 沒有理由因為預算而讓玩家連「你好」都得不到回應。B4 與 B1 則各是一次
+    # Gemini 呼叫，那正是這道閘門要省下來的東西。
+    #
+    # 玩家看到的是這隻靈魂自己的保底句（`llm_failure_fallback`），跟生成失敗
+    # 時一模一樣——玩家不需要、也不該分辨得出「我們今天沒預算了」。
+    elif not global_budget_left:
+        source = "fallback"
+        persona = load_active_persona(db, place_id)
+        reply_text = getattr(persona, "llm_failure_fallback", None) or FALLBACK_REPLY
+        logger.warning(
+            "global dialogue quota exhausted; serving fallback place_id=%s", place_id
+        )
+
     elif spirit.safety_gate_enabled:
         reply_text = SafetyGate(GeminiSafetyChecker(gemini)).run(payload.user_input, _reply)
     else:

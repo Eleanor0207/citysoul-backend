@@ -145,6 +145,14 @@ def _quota_key(player_id, resource_type: str, day) -> str:
     return f"quota:{player_id}:{resource_type}:{day.isoformat()}"
 
 
+def _global_key(resource_type: str, day) -> str:
+    """
+    全域計數器的 key。**不含 `player_id`**——那正是它與上面那支的唯一差別，
+    也是它攔得住「1000 個玩家同時觸頂」的原因（SDD §18.6.4）。
+    """
+    return f"quota:global:{resource_type}:{day.isoformat()}"
+
+
 def next_taipei_midnight(now: datetime) -> datetime:
     """下一個台北午夜（含時區）。配額重置的時間點。"""
     local = now.astimezone(TAIPEI)
@@ -218,3 +226,64 @@ def consume(
         raise QuotaExceededError(resource_type=resource_type, reset_at=reset_at)
 
     return int(updated)
+
+
+def try_consume_global(
+    resource_type: str,
+    limit: int | None,
+    amount: int = 1,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """
+    消耗全域（非單一玩家）日額度；額度還夠回傳 True，用完回傳 False。
+
+    ## 為什麼跟 `consume()` 分開，而不是多一個參數
+
+    兩者的失敗語意完全相反。`consume()` **拋例外**，因為「這個玩家今天講太多
+    話」是玩家可以理解、也該被告知的狀況（429 ＋ 重置時間）。全域上限是**我們
+    的成本問題，不是玩家做錯事**——玩家不該看到錯誤碼，也不該知道我們的總量
+    設定，所以這支**回傳布林**，由呼叫端安靜地切到 fallback 台詞（§18.7.3：
+    回退一律不阻擋玩家進度，HTTP 仍是 200）。
+
+    ## limit 是 None 代表「沒有設定上限」
+
+    封測期人數由發碼控制，這道閘門不需要啟用；預設不設限，是為了不讓一個沒填
+    的環境變數在半夜把所有人的對話變成保底句。**公開前必須把它設起來**
+    （SDD §16 缺口清單、§18.6.4）。
+
+    ## 上限住在設定而不是 `usage_tier_limits`
+
+    那張表的每一列都掛在某個 `tier_id` 底下，而全域上限**不屬於任何分級**——
+    硬塞一個假的分級進去，會讓「一個玩家一個分級」這個模型出現一列永遠沒有
+    玩家指向它的孤兒，之後每一支讀分級的程式都要記得跳過它。
+
+    共用同一支 Lua script：檢查與累加必須原子，理由同 `consume()`——
+    「先查再寫」在併發下會讓多個請求同時查到「還有額度」然後全部通過。
+    """
+    if limit is None:
+        return True
+
+    moment = _now(now)
+    day = taipei_today(moment)
+
+    reset_at = next_taipei_midnight(moment)
+    ttl_seconds = max(int((reset_at - moment).total_seconds()), 1)
+
+    updated = redis_client.eval(
+        _CONSUME_SCRIPT,
+        1,
+        _global_key(resource_type, day),
+        limit,
+        amount,
+        ttl_seconds,
+    )
+
+    return int(updated) >= 0
+
+
+def current_global_usage(resource_type: str, *, now: datetime | None = None) -> int:
+    """今日（Asia/Taipei）全域已使用量。沒有紀錄時是 0。觀測用。"""
+    day = taipei_today(_now(now))
+    raw = redis_client.get(_global_key(resource_type, day))
+    return int(raw) if raw is not None else 0
