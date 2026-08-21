@@ -32,8 +32,9 @@ districts:
 
   - district_id: datong
     name: 大同區
-    tone_author: xiahai_city_god_temple
-    landmarks: [xiahai_city_god_temple, taiwan_new_cultural_movement_memorial]
+    # 霞海城隍廟移除後（2026-08-21），大同區只剩這一個地標，基調作者一併改由它擔任。
+    tone_author: taiwan_new_cultural_movement_memorial
+    landmarks: [taiwan_new_cultural_movement_memorial]
 
   - district_id: shilin
     name: 士林區

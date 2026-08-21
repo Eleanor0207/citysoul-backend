@@ -74,22 +74,6 @@ spirits:
     latitude: 25.036846
     longitude: 121.502268
 
-  # 停用（2026-08-15）：首發集合收斂成九個，霞海是被留下的那一個。
-  #
-  # 它是九個裡唯一沒有近景文件的——沒有召喚點，座標也就沒有對象可對齊，只能停在
-  # 未經勘查的公開座標上。其餘八個都對齊了客戶端的召喚點。
-  #
-  # 停用不是刪除：史實（content/landmarks/）與人格卡（content/personas/，v1 已
-  # 由人審核）都留著，citysoul-doc 的研究記錄也留著。要放行就是把這個旗標拿掉、
-  # 重跑一次匯入——前提是先產出它的近景文件並把座標兩邊一起定好。
-  - spirit_id: xiahai_city_god_temple
-    is_active: false
-    safety_gate: true
-    display_name: 霞海城隍廟
-    character_id: xiahai_neighbour
-    latitude: 25.055500
-    longitude: 121.510000
-
   # 召喚點 key 是 new_cultural_movement_museum，跟 spirit_id 不同名。
   # 舊值 25.057000 / 121.513300，差 301 m。
   - spirit_id: taiwan_new_cultural_movement_memorial

@@ -157,7 +157,7 @@ def test_generation_failure_at_far_proximity_uses_the_far_fallback():
 
 
 def test_every_shipped_card_has_short_player_ready_fallback_questions():
-    """十張人格卡各自的保底提問：2–3 則、每則 15 字以內、不含審核佔位字串。"""
+    """九張人格卡各自的保底提問：2–3 則、每則 15 字以內、不含審核佔位字串。"""
 
     import glob
     import os
@@ -172,7 +172,7 @@ def test_every_shipped_card_has_short_player_ready_fallback_questions():
         if version > latest.get(base, (0, ""))[0]:
             latest[base] = (version, path)
 
-    assert len(latest) == 10
+    assert len(latest) == 9
     for base, (_, path) in sorted(latest.items()):
         with open(path, encoding="utf-8") as handle:
             card = yaml.safe_load(handle)
