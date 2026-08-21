@@ -75,6 +75,30 @@
         "title": "Body_landmark_photo_api_v1_quests__quest_id__landmark_photo_post",
         "type": "object"
       },
+      "CurrentWeatherResponse": {
+        "description": "`GET /api/v1/weather/current` 的回應（backend#75／SDD §20.5）。\n\n⚠️ **回應裡沒有任何位置資訊**——沒有回傳查詢座標、沒有地名、沒有格點編號。\n請求帶了座標進來，回應不該再把它送回去；那只會讓這個值出現在客戶端的 log\n與快取裡（同 `LandmarkPhotoResponse` 不回傳任何影像痕跡的理由）。\n\n這三個值**不經過任何模型**。天氣仍然不得進入 B9 的生成輸入（§20.5.1）。",
+        "properties": {
+          "condition_text": {
+            "title": "Condition Text",
+            "type": "string"
+          },
+          "condition_type": {
+            "title": "Condition Type",
+            "type": "string"
+          },
+          "temperature_c": {
+            "title": "Temperature C",
+            "type": "number"
+          }
+        },
+        "required": [
+          "temperature_c",
+          "condition_text",
+          "condition_type"
+        ],
+        "title": "CurrentWeatherResponse",
+        "type": "object"
+      },
       "DailyEventResponse": {
         "description": "`GET /api/v1/spirits/{placeId}/daily-event` 的回應（S10／#26）。\n\n**公開世界狀態，不需要任何 token。**\n\n`is_fallback` 為 true 有兩種可能：內容是人工預寫保底，或是回退到了前一天的\n快取。客戶端**不需要**據此改變呈現——玩家看到的都該是一段正常的敘事。\n它存在是為了讓我們觀察排程的健康度。",
         "properties": {
@@ -2299,6 +2323,87 @@
           }
         ],
         "summary": "Summon",
+        "tags": [
+          "body"
+        ]
+      }
+    },
+    "/api/v1/weather/current": {
+      "get": {
+        "description": "「當地氛圍」：玩家目前位置的即時溫度與天氣狀況（backend#75／SDD §20.5）。\n\n## 為什麼要 session token\n\n這支不含任何玩家資料，本來可以是公開的。要求憑證是為了**不讓它變成一個\n免費的天氣代理**——我們的金鑰在後端，開著等於誰都能拿我們的額度去查天氣。\n\n## 座標會被降精度，這裡不做也會在下游做\n\n`weather.get_current_weather()` 的第一件事就是四捨五入到小數點後 2 位\n（約 1 km）。降精度是模組的不變式，不是呼叫端要記得的紀律。\n\n## 失敗回 503，不是 200 加空值\n\n§18.7.3「回退不阻擋玩家進度」講的是**敘事**：那些是包裝，玩家的進度是真的。\n這條 bar 不是敘事也不是進度，它就是一個數值——沒有值的時候客戶端整條\n隱藏（§20.5.2），而「沒有值」用狀態碼講比用一個假的 0 度乾淨。\n\n⚠️ **不寫任何東西進資料庫**：座標與結果都不落地（CONTEXT.md「不在背景追蹤、\n判斷或保存玩家位置」）。快取在 Redis，key 只含降精度後的格點。",
+        "operationId": "get_current_weather_endpoint_api_v1_weather_current_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "latitude",
+            "required": true,
+            "schema": {
+              "maximum": 90.0,
+              "minimum": -90.0,
+              "title": "Latitude",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "longitude",
+            "required": true,
+            "schema": {
+              "maximum": 180.0,
+              "minimum": -180.0,
+              "title": "Longitude",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentWeatherResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Session token 無效或未提供"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "這個環境沒有設定天氣金鑰，或上游查詢失敗"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Current Weather Endpoint",
         "tags": [
           "body"
         ]

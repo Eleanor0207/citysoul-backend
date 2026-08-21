@@ -195,6 +195,28 @@ class DialogueResponse(BaseModel):
     suggested_questions: list[str] = Field(default_factory=list)
 
 
+class CurrentWeatherResponse(BaseModel):
+    """
+    `GET /api/v1/weather/current` 的回應（backend#75／SDD §20.5）。
+
+    ⚠️ **回應裡沒有任何位置資訊**——沒有回傳查詢座標、沒有地名、沒有格點編號。
+    請求帶了座標進來，回應不該再把它送回去；那只會讓這個值出現在客戶端的 log
+    與快取裡（同 `LandmarkPhotoResponse` 不回傳任何影像痕跡的理由）。
+
+    這三個值**不經過任何模型**。天氣仍然不得進入 B9 的生成輸入（§20.5.1）。
+    """
+
+    # 攝氏。單位固定，不隨地區變——客戶端顯示成「26°」，不做換算。
+    temperature_c: float
+
+    # 在地化的天氣描述，直接顯示給玩家，例如「多雲時晴」。
+    condition_text: str
+
+    # 機器可讀的狀況列舉，例如 `PARTLY_CLOUDY`。客戶端日後要換圖示時用得到，
+    # 現在可以忽略——先帶著，免得那天要改契約。
+    condition_type: str
+
+
 class SpiritOrientation(BaseModel):
     """
     靈魂方位設定（SDD v2.1 §10.2），供客戶端 S14 的 3DoF 定向服務使用。

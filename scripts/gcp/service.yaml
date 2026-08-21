@@ -73,6 +73,12 @@ spec:
             # 語音是一次性的，留著只會累積成本，而且等於錄下玩家聽過什麼。
             - name: TTS_AUDIO_BUCKET
               value: citysoul-tts-audio
+            # 「當地氛圍」即時天氣（backend#75）。⚠️ 這把金鑰只能待在後端——
+            # 客戶端直接呼叫的話金鑰會跟著 APK 發出去，也等於讓玩家裝置直接把
+            # 位置送給第三方。沒設的話端點回 503，客戶端整條 bar 隱藏。
+            - name: GOOGLE_WEATHER_API_KEY
+              valueFrom:
+                secretKeyRef: { name: google-weather-api-key, key: latest }
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef: { name: citysoul-database-url, key: latest }

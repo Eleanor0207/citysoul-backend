@@ -99,6 +99,17 @@ class Settings(BaseSettings):
     # 是簽章 URL 的有效期。
     tts_audio_url_ttl_seconds: int = 3600
 
+    # 「當地氛圍」即時天氣（backend#75／SDD §20.5）。Google Maps Platform 的
+    # Weather API 金鑰。
+    #
+    # ⚠️ **這把金鑰只能待在後端。** 客戶端直接呼叫的話，金鑰會跟著 APK 一起發出
+    # 去，而且等於讓玩家裝置直接把位置送給第三方（§20.5.2）。
+    #
+    # 留空＝這個環境不提供天氣，端點回 503、客戶端整條 bar 隱藏。本機開發不該
+    # 為了跑起來而被迫先去申請一把金鑰——同 TTS 沒設 bucket 時降級成「只回文字」。
+    google_weather_api_key: str | None = None
+    weather_timeout_seconds: float = 5.0
+
     # 全域（非單一玩家）每日對話上限，BE#65／SDD §18.6.4。
     #
     # `usage_tier_limits` 那一整套都是 per player per day，攔得住單一玩家濫用，

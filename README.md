@@ -348,9 +348,22 @@ gcloud iam service-accounts create citysoul-run
 `storage.objectAdmin`），外加**對自己**的 `iam.serviceAccountTokenCreator`——
 最後這個是 TTS 簽章 URL 用的，ADC 沒有金鑰檔，簽章要走 IAM SignBlob。
 
-Secret Manager 裡有四個 secret：`citysoul-database-url` 與三把 token 金鑰。
-三把金鑰**各自獨立產生**，不是產一次複製三份——兩把相同就等於兩種 token 可以
-互相冒充（SDD 第6節）。
+Secret Manager 裡有五個 secret：`citysoul-database-url`、三把 token 金鑰，以及
+`google-weather-api-key`。三把 token 金鑰**各自獨立產生**，不是產一次複製三份
+——兩把相同就等於兩種 token 可以互相冒充（SDD 第6節）。
+
+> ⚠️ **`google-weather-api-key` 是 2026-08-21 新增的**（backend#75「當地氛圍」）。
+> `scripts/gcp/service.yaml` 會掛載它，**secret 不存在的話整個 revision 起不來**
+> ——不是天氣壞掉而已，是服務部署失敗。先建再部署：
+>
+> ```bash
+> gcloud services enable weather.googleapis.com --project=citysoul
+> printf '%s' "<API_KEY>" | gcloud secrets create google-weather-api-key \
+>   --project=citysoul --data-file=-
+> ```
+>
+> 金鑰請在 Google Cloud Console 限制成只能呼叫 Weather API。它只待在後端，
+> 客戶端不持有（SDD §20.5.2）。
 
 > ⚠️ 資料庫密碼只用英數字元。它要塞進 `DATABASE_URL` 的 userinfo 欄位，
 > 出現 `/ + = @` 就必須 percent-encoding，而那正是「本機測得過、雲端連不上」

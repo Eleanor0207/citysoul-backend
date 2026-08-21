@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 from functools import lru_cache
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
@@ -27,6 +27,7 @@ from app.modules.body import (
     queries,
     quests,
     story_progress,
+    weather,
 )
 from app.modules.body.quests import evaluate_on_summon
 from app.modules.body.quota import (
@@ -127,6 +128,16 @@ def get_gemini_client() -> GeminiClient:
 
 def get_tts_client() -> TTSClient:
     return _default_tts_client()
+
+
+@lru_cache(maxsize=1)
+def _default_weather_provider() -> weather.WeatherProvider | None:
+    return weather.build_provider()
+
+
+def get_weather_provider() -> weather.WeatherProvider | None:
+    """沒設金鑰時是 None＝這個環境不提供天氣，端點回 503（SDD §20.5.2）。"""
+    return _default_weather_provider()
 
 
 @lru_cache(maxsize=1)
@@ -919,6 +930,59 @@ def get_suggested_questions_endpoint(
         raise HTTPException(status_code=404, detail="spirit not found")
 
     return schemas.SuggestedQuestionsResponse(**content)
+
+
+@router.get(
+    "/weather/current",
+    response_model=schemas.CurrentWeatherResponse,
+    responses={
+        **_UNAUTHORIZED,
+        503: {
+            "model": schemas.ErrorResponse,
+            "description": "這個環境沒有設定天氣金鑰，或上游查詢失敗",
+        },
+    },
+)
+def get_current_weather_endpoint(
+    latitude: float = Query(..., ge=-90.0, le=90.0),
+    longitude: float = Query(..., ge=-180.0, le=180.0),
+    session_player_id: uuid.UUID = Depends(require_session_token),
+    provider: weather.WeatherProvider | None = Depends(get_weather_provider),
+):
+    """
+    「當地氛圍」：玩家目前位置的即時溫度與天氣狀況（backend#75／SDD §20.5）。
+
+    ## 為什麼要 session token
+
+    這支不含任何玩家資料，本來可以是公開的。要求憑證是為了**不讓它變成一個
+    免費的天氣代理**——我們的金鑰在後端，開著等於誰都能拿我們的額度去查天氣。
+
+    ## 座標會被降精度，這裡不做也會在下游做
+
+    `weather.get_current_weather()` 的第一件事就是四捨五入到小數點後 2 位
+    （約 1 km）。降精度是模組的不變式，不是呼叫端要記得的紀律。
+
+    ## 失敗回 503，不是 200 加空值
+
+    §18.7.3「回退不阻擋玩家進度」講的是**敘事**：那些是包裝，玩家的進度是真的。
+    這條 bar 不是敘事也不是進度，它就是一個數值——沒有值的時候客戶端整條
+    隱藏（§20.5.2），而「沒有值」用狀態碼講比用一個假的 0 度乾淨。
+
+    ⚠️ **不寫任何東西進資料庫**：座標與結果都不落地（CONTEXT.md「不在背景追蹤、
+    判斷或保存玩家位置」）。快取在 Redis，key 只含降精度後的格點。
+    """
+    if provider is None:
+        raise HTTPException(status_code=503, detail="weather is not configured")
+
+    current = weather.get_current_weather(provider, latitude, longitude)
+    if current is None:
+        raise HTTPException(status_code=503, detail="weather lookup failed")
+
+    return schemas.CurrentWeatherResponse(
+        temperature_c=current.temperature_c,
+        condition_text=current.condition_text,
+        condition_type=current.condition_type,
+    )
 
 
 @router.post(
