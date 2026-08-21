@@ -1,0 +1,37 @@
+# B9 當日情境的人工審核輪播池（brain.daily_event_curated_notes）。
+#
+# 這些不是玩家看到的文字。它們是餵給 B9 的「補充」素材，模型據此寫一段 40–80 字
+# 的第一人稱短敘事——見 app/modules/brain/daily_event.py 的 build_daily_event_prompt。
+#
+# ## 輪播規則
+#
+# 選哪一則由 `event_date.toordinal() % len(active notes)` 決定，沒有游標、不存狀態
+# （daily_event_sources.py:86-93）。所以七則就是七天一輪，改順序只在人工調整
+# rotation_order 時發生。
+#
+# ## 寫法上的三個限制
+#
+# - 不代神明發言、不談靈驗與吉凶（CONTEXT.md 的宗教安全下限，龍山寺與城隍廟尤其）
+# - 不寫查不到來源的具體斷言（幾點開門、幾點早課、某年某月的單一事件）
+# - 寫可觀察的常態，不寫新聞——新聞有自己的來源，這一池是「這個地方平常的樣子」
+
+
+place_id: taipei_fine_arts_museum
+display_name: 臺北市立美術館
+reviewed_by: Jessie_Lee
+
+notes:
+  - rotation_order: 0
+    note_text: 中庭的光從上方落下來，位置隨時間移動。
+  - rotation_order: 1
+    note_text: 換展的空檔展間關閉，館內的腳步聲聽得特別清楚。
+  - rotation_order: 2
+    note_text: 圓山園區的樹在館外連成一片，公園與美術館之間沒有明顯的界線。
+  - rotation_order: 3
+    note_text: 週末的工作坊在樓下，聲音跟樓上不一樣。
+  - rotation_order: 4
+    note_text: 雨天觀眾變多，寄傘的地方會排隊。
+  - rotation_order: 5
+    note_text: 大型作品進館要走特別的通道，前後得花上好幾天。
+  - rotation_order: 6
+    note_text: 閉館前燈光轉暗，白牆的顏色跟著變。

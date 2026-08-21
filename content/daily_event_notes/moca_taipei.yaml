@@ -1,0 +1,37 @@
+# B9 當日情境的人工審核輪播池（brain.daily_event_curated_notes）。
+#
+# 這些不是玩家看到的文字。它們是餵給 B9 的「補充」素材，模型據此寫一段 40–80 字
+# 的第一人稱短敘事——見 app/modules/brain/daily_event.py 的 build_daily_event_prompt。
+#
+# ## 輪播規則
+#
+# 選哪一則由 `event_date.toordinal() % len(active notes)` 決定，沒有游標、不存狀態
+# （daily_event_sources.py:86-93）。所以七則就是七天一輪，改順序只在人工調整
+# rotation_order 時發生。
+#
+# ## 寫法上的三個限制
+#
+# - 不代神明發言、不談靈驗與吉凶（CONTEXT.md 的宗教安全下限，龍山寺與城隍廟尤其）
+# - 不寫查不到來源的具體斷言（幾點開門、幾點早課、某年某月的單一事件）
+# - 寫可觀察的常態，不寫新聞——新聞有自己的來源，這一池是「這個地方平常的樣子」
+
+
+place_id: moca_taipei
+display_name: 台北當代藝術館
+reviewed_by: Jessie_Lee
+
+notes:
+  - rotation_order: 0
+    note_text: 中央鐘樓的時鐘走著，正面兩翼對稱得像鏡子。
+  - rotation_order: 1
+    note_text: 換展期間門口圍起圍籬，走廊空著。
+  - rotation_order: 2
+    note_text: 赤峰街的老車行與新店家夾在同一條巷子裡。
+  - rotation_order: 3
+    note_text: 午後陽光斜進拱廊，紅磚的顏色偏暖。
+  - rotation_order: 4
+    note_text: 有些展件需要觀眾自己動手，館員站在旁邊提醒。
+  - rotation_order: 5
+    note_text: 週末的參觀者裡親子居多，館前廣場坐著等的人不少。
+  - rotation_order: 6
+    note_text: 傍晚閉館前燈光調暗，鐘樓的輪廓在天色裡反而清楚。

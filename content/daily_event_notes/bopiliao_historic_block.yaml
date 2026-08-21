@@ -1,0 +1,37 @@
+# B9 當日情境的人工審核輪播池（brain.daily_event_curated_notes）。
+#
+# 這些不是玩家看到的文字。它們是餵給 B9 的「補充」素材，模型據此寫一段 40–80 字
+# 的第一人稱短敘事——見 app/modules/brain/daily_event.py 的 build_daily_event_prompt。
+#
+# ## 輪播規則
+#
+# 選哪一則由 `event_date.toordinal() % len(active notes)` 決定，沒有游標、不存狀態
+# （daily_event_sources.py:86-93）。所以七則就是七天一輪，改順序只在人工調整
+# rotation_order 時發生。
+#
+# ## 寫法上的三個限制
+#
+# - 不代神明發言、不談靈驗與吉凶（CONTEXT.md 的宗教安全下限，龍山寺與城隍廟尤其）
+# - 不寫查不到來源的具體斷言（幾點開門、幾點早課、某年某月的單一事件）
+# - 寫可觀察的常態，不寫新聞——新聞有自己的來源，這一池是「這個地方平常的樣子」
+
+
+place_id: bopiliao_historic_block
+display_name: 剝皮寮歷史街區
+reviewed_by: Jessie_Lee
+
+notes:
+  - rotation_order: 0
+    note_text: 亭仔腳的柱子在午後留下一長排影子，走廊比街上涼。
+  - rotation_order: 1
+    note_text: 紅磚牆補過的痕跡深淺不一，新舊接在同一面牆上。
+  - rotation_order: 2
+    note_text: 街區常出借給劇組與展覽，門口的招牌換了又換。
+  - rotation_order: 3
+    note_text: 雨天積水沿著街屋的洩水坡流回街心。
+  - rotation_order: 4
+    note_text: 有人穿過街區抄近路，腳步聲在騎樓下有回音。
+  - rotation_order: 5
+    note_text: 假日導覽團在街口集合，講解聲從街頭一路移到街尾。
+  - rotation_order: 6
+    note_text: 入夜鐵門拉上之後，街屋立面的線腳在燈下更明顯。

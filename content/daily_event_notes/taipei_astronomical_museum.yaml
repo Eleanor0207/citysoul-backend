@@ -1,0 +1,37 @@
+# B9 當日情境的人工審核輪播池（brain.daily_event_curated_notes）。
+#
+# 這些不是玩家看到的文字。它們是餵給 B9 的「補充」素材，模型據此寫一段 40–80 字
+# 的第一人稱短敘事——見 app/modules/brain/daily_event.py 的 build_daily_event_prompt。
+#
+# ## 輪播規則
+#
+# 選哪一則由 `event_date.toordinal() % len(active notes)` 決定，沒有游標、不存狀態
+# （daily_event_sources.py:86-93）。所以七則就是七天一輪，改順序只在人工調整
+# rotation_order 時發生。
+#
+# ## 寫法上的三個限制
+#
+# - 不代神明發言、不談靈驗與吉凶（CONTEXT.md 的宗教安全下限，龍山寺與城隍廟尤其）
+# - 不寫查不到來源的具體斷言（幾點開門、幾點早課、某年某月的單一事件）
+# - 寫可觀察的常態，不寫新聞——新聞有自己的來源，這一池是「這個地方平常的樣子」
+
+
+place_id: taipei_astronomical_museum
+display_name: 台北市立天文科學教育館
+reviewed_by: Jessie_Lee
+
+notes:
+  - rotation_order: 0
+    note_text: 宇宙劇場散場時，觀眾從暗處走回明亮的大廳，眼睛要適應一下。
+  - rotation_order: 1
+    note_text: 陰天看不到星，館內的展示照常運轉。
+  - rotation_order: 2
+    note_text: 特展期間排隊的隊伍會繞到中庭。
+  - rotation_order: 3
+    note_text: 團體參觀集中在上午，下午多是自己來的人。
+  - rotation_order: 4
+    note_text: 望遠鏡展區前有人站很久，看得比說得多。
+  - rotation_order: 5
+    note_text: 觀測活動遇上雲層取消是常有的事。
+  - rotation_order: 6
+    note_text: 冬天的夜空清得多，館外的天色也暗得早。
