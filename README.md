@@ -465,6 +465,29 @@ Cloud SQL 的 `DATABASE_URL` 走 unix socket，不是 IP：
 postgresql+psycopg://<user>:<pass>@/<db>?host=/cloudsql/citysoul:asia-east1:citysoul
 ```
 
+### 3.4 重跑內容匯入
+
+內容改了要重跑對應的匯入 Job。**每一支都先重建映像檔**——`content/` 是
+`COPY content ./content` 打包進去的，不重建的話跑的還是舊內容，而且 Job 的輸出
+看不出來，它會很正常地印出它讀到的那一版。
+
+```bash
+gcloud builds submit --project=citysoul   --tag=asia-east1-docker.pkg.dev/citysoul/citysoul/backend:latest .
+
+scripts/gcp/import-spirits-job.sh              # content/spirits.yaml
+scripts/gcp/import-personas-job.sh             # content/personas/*.yaml
+scripts/gcp/import-landmarks-job.sh            # content/landmarks/*.yaml
+scripts/gcp/load-districts-job.sh              # content/districts.yaml
+scripts/gcp/import-daily-event-notes-job.sh    # content/daily_event_notes/*.yaml
+```
+
+順序上 spirits 要在最前面：`brain.characters` 是人格卡與史實層的外鍵目標。
+每一支都吃 `ARGS_SUFFIX=,--dry-run`（只驗證不寫）與 `DRY_RUN=1`（連 gcloud 都
+不呼叫，只印指令）。
+
+`content/landmarks/*.yaml` 不要手改：它由 citysoul-doc 的 `landmark/*.md` 經
+`python -m scripts.landmark_md_to_yaml` 產生，改了會在下次轉檔時被蓋掉。
+
 ### 3.5 接上當日情境的每日排程
 
 ```bash
