@@ -48,10 +48,18 @@
 ⚠️ **`boundary` 不在這支腳本的職責內。** 邊界由 `scripts/load_districts.py` 從
 GeoJSON 載入，兩支互不覆蓋——這裡的 UPSERT 不碰 `boundary` 那一欄。
 
-## city_souls 一律不碰
+## city_souls 由 content/city.yaml 主寫，不從地標檔挑
 
-城市層目前沒有人在寫（`macro_history_summary` 還是 PENDING 佔位）。要寫必須用
-`--city-tone-from <檔名>` 明確指名，把「誰代表臺北」的決定留在指令上。
+九份地標檔的 `city_tone` 寫的都是**自己那一區**。從裡面挑一份寫進 city_souls，
+臺北就會用那一區的口吻講話——那正是 `0016` 把區級基調拆出去的理由。所以城市層
+有自己的 `content/city.yaml`，寫的是九個地標都成立的那一層。
+
+`--city-tone-from <檔名>` 仍然留著，它現在是**覆寫**：指名時改用那一份地標檔的
+區級基調，並印出警告。留著是因為第二座城市進來時，可能一時只有地標檔而還沒有
+城市層檔案；平常不該用到它。
+
+city_souls 的 `active` 照 YAML 寫，預設 false——`prompt_builder` 還沒讀這一層
+（也還沒讀 districts），false 讓「還沒接上」在資料庫裡查得到。
 """
 from __future__ import annotations
 
@@ -68,6 +76,7 @@ from app.core.text_normalize import strip_fold_spaces
 
 CONTENT_DIR = pathlib.Path(__file__).resolve().parent.parent / "content" / "landmarks"
 DISTRICTS_YAML = pathlib.Path(__file__).resolve().parent.parent / "content" / "districts.yaml"
+CITY_YAML = pathlib.Path(__file__).resolve().parent.parent / "content" / "city.yaml"
 
 # 見 docstring：沒有人讀過的內容，在資料庫裡要是一個查得到的值。
 MVP_NO_REVIEW = "MVP_NO_REVIEW"
@@ -173,15 +182,54 @@ UPSERT_DISTRICT = text(
 UPSERT_CITY = text(
     """
     INSERT INTO brain.city_souls
-        (city_id, name, macro_history_summary, core_tone_descriptors, shared_values, updated_at)
-    VALUES (:city_id, :name, :macro_history_summary, :core_tone_descriptors, :shared_values, now())
+        (city_id, name, macro_history_summary, core_tone_descriptors, shared_values,
+         active, reviewed_by, reviewed_at, updated_at)
+    VALUES (:city_id, :name, :macro_history_summary, :core_tone_descriptors, :shared_values,
+            :active, :reviewed_by, now(), now())
     ON CONFLICT (city_id) DO UPDATE SET
+        name                  = EXCLUDED.name,
         macro_history_summary = EXCLUDED.macro_history_summary,
         core_tone_descriptors = EXCLUDED.core_tone_descriptors,
         shared_values         = EXCLUDED.shared_values,
+        active                = EXCLUDED.active,
+        reviewed_by           = EXCLUDED.reviewed_by,
+        reviewed_at           = now(),
         updated_at            = now()
     """
 )
+
+
+def validate_city(data: dict) -> list[str]:
+    """
+    城市層的驗證。跟地標的 `validate` 分開，因為要求不一樣：這裡沒有史實表，
+    但三個欄位一個都不能是佔位字串——城市層只有一列，缺一欄就是缺三分之一。
+    """
+    errors: list[str] = []
+    if not isinstance(data, dict):
+        return [f"{CITY_YAML.name} 不是一個 mapping"]
+
+    for key in ("city_id", "name", "macro_history_summary"):
+        value = data.get(key)
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"{CITY_YAML.name}：`{key}` 缺漏或不是字串")
+        elif any(ph in value for ph in PLACEHOLDERS):
+            errors.append(f"{CITY_YAML.name}：`{key}` 還是佔位字串")
+
+    for key in ("core_tone_descriptors", "shared_values"):
+        value = data.get(key)
+        if not isinstance(value, list) or not value:
+            errors.append(f"{CITY_YAML.name}：`{key}` 缺漏或不是非空陣列")
+            continue
+        for item in value:
+            if not isinstance(item, str) or not item.strip():
+                errors.append(f"{CITY_YAML.name}：`{key}` 有空白項目")
+            elif any(ph in item for ph in PLACEHOLDERS):
+                errors.append(f"{CITY_YAML.name}：`{key}` 還是佔位字串")
+
+    if not isinstance(data.get("active", False), bool):
+        errors.append(f"{CITY_YAML.name}：`active` 不是布林值")
+
+    return errors
 
 
 def main() -> int:
@@ -191,7 +239,7 @@ def main() -> int:
     ap.add_argument(
         "--city-tone-from",
         metavar="FILE",
-        help="指名由哪一份 YAML 的 city_tone 寫入 brain.city_souls（見 docstring）",
+        help="改用某一份地標檔的區級 city_tone 覆寫 brain.city_souls（見 docstring）",
     )
     args = ap.parse_args()
 
@@ -236,9 +284,10 @@ def main() -> int:
         if lm not in landmark_district:
             warns.append(f"{lm} 沒有被指派到任何行政區，district_id 會留白")
 
-    # 見 docstring：city_souls 一律不碰，除非 --city-tone-from 指名。
+    # 見 docstring：城市層由 content/city.yaml 主寫，地標檔的 city_tone 是區級的。
     have_tone = [(p, d) for p, d in loaded if d.get("city_tone")]
     chosen = None
+    city: dict | None = None
     if args.city_tone_from:
         wanted = pathlib.Path(args.city_tone_from).name
         chosen = next((x for x in have_tone if x[0].name == wanted), None)
@@ -247,11 +296,18 @@ def main() -> int:
                 f"--city-tone-from {wanted} 找不到，或那一份沒有 city_tone。"
                 f" 有 city_tone 的是：{'、'.join(p.name for p, _ in have_tone)}"
             )
-    elif have_tone:
+        else:
+            warns.append(
+                f"--city-tone-from：city_souls 改用 {wanted} 的**區級**基調覆寫。"
+                f" 平常應該讓 {CITY_YAML.name} 主寫，那一份才是城市高度的內容"
+            )
+    elif CITY_YAML.exists():
+        city = strip_fold_spaces(yaml.safe_load(CITY_YAML.read_text(encoding="utf-8")))
+        errors.extend(validate_city(city))
+    else:
         warns.append(
-            f"{len(have_tone)} 份 YAML 帶 city_tone，但那是**各行政區**的基調，"
-            " 而 brain.city_souls 是一個城市一列。這次不寫 city_souls；"
-            " 要寫請用 --city-tone-from 指名一份"
+            f"沒有 {CITY_YAML.name}，這次不寫 city_souls。"
+            " 城市層要有自己的內容，不要從地標檔的區級 city_tone 挑一份頂替"
         )
 
     for w in warns:
@@ -327,9 +383,30 @@ def main() -> int:
                     "macro_history_summary": tone.get("macro_history_summary"),
                     "core_tone_descriptors": tone.get("core_tone_descriptors"),
                     "shared_values": tone.get("shared_values"),
+                    # 覆寫路徑寫的是區級內容，沒有人以城市層的高度審過它。
+                    "active": False,
+                    "reviewed_by": MVP_NO_REVIEW,
                 },
             )
-            print(f"\ncity_souls 的基調由 {path.name} 主寫")
+            print(f"\ncity_souls 的基調由 {path.name} 的區級 city_tone 覆寫（active=false）")
+        elif city is not None:
+            conn.execute(
+                UPSERT_CITY,
+                {
+                    "city_id": city["city_id"],
+                    "name": city["name"],
+                    "macro_history_summary": city["macro_history_summary"],
+                    "core_tone_descriptors": city["core_tone_descriptors"],
+                    "shared_values": city["shared_values"],
+                    "active": bool(city.get("active", False)),
+                    "reviewed_by": city.get("reviewed_by") or MVP_NO_REVIEW,
+                },
+            )
+            print(
+                f"\ncity_souls 由 {CITY_YAML.name} 主寫"
+                f"（active={bool(city.get('active', False))}，"
+                f"reviewed_by={city.get('reviewed_by') or MVP_NO_REVIEW}）"
+            )
 
     with engine.connect() as conn:
         rows = conn.execute(

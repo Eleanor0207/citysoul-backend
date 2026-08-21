@@ -476,7 +476,7 @@ gcloud builds submit --project=citysoul   --tag=asia-east1-docker.pkg.dev/cityso
 
 scripts/gcp/import-spirits-job.sh              # content/spirits.yaml
 scripts/gcp/import-personas-job.sh             # content/personas/*.yaml
-scripts/gcp/import-landmarks-job.sh            # content/landmarks/*.yaml
+scripts/gcp/import-landmarks-job.sh            # content/landmarks/*.yaml ＋ content/city.yaml
 scripts/gcp/load-districts-job.sh              # content/districts.yaml
 scripts/gcp/import-daily-event-notes-job.sh    # content/daily_event_notes/*.yaml
 ```
@@ -484,6 +484,10 @@ scripts/gcp/import-daily-event-notes-job.sh    # content/daily_event_notes/*.yam
 順序上 spirits 要在最前面：`brain.characters` 是人格卡與史實層的外鍵目標。
 每一支都吃 `ARGS_SUFFIX=,--dry-run`（只驗證不寫）與 `DRY_RUN=1`（連 gcloud 都
 不呼叫，只印指令）。
+
+`content/city.yaml` 是城市層基調（`brain.city_souls` 那唯一一列），手寫、不從
+地標檔產生。它的 `active` 目前是 false：`prompt_builder` 還沒讀城市層，翻成 true
+的那一次應該就是接上 prompt 的那一次。
 
 `content/landmarks/*.yaml` 不要手改：它由 citysoul-doc 的 `landmark/*.md` 經
 `python -m scripts.landmark_md_to_yaml` 產生，改了會在下次轉檔時被蓋掉。
