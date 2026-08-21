@@ -19,6 +19,7 @@ from app.modules.body.quests import (
     STATUS_COMPLETED,
     STATUS_IN_PROGRESS,
     TAIPEI,
+    complete_on_dialogue,
     evaluate_on_summon,
     quest_id_for_spirit,
     taipei_today,
@@ -431,3 +432,66 @@ def test_same_quest_on_different_days_is_allowed(db_session, player, spirit):
     rows = db_session.query(models.QuestProgress).filter_by(quest_id=quest_id).all()
     assert len(rows) == 2
     assert len({r.progress_id for r in rows}) == 2
+
+# ── 對話即完成（SDD §20.3.4／backend#71）──────────────────────────────
+
+def test_dialogue_completes_todays_quest(db_session, spirit, player):
+    """
+    「當天與這隻靈魂有任一輪對話」就算完成。玩家不必為了交任務多按一次——
+    原本的 `completion_evidence` 本來就不參與判定，那是一個誠實系統裡的空欄位。
+    """
+    pid, _ = player
+    evaluate_on_summon(db_session, player_id=pid, spirit_id=spirit.spirit_id)
+
+    completed = complete_on_dialogue(
+        db_session, player_id=pid, spirit_id=spirit.spirit_id
+    )
+
+    assert completed is True
+    progress = (
+        db_session.query(models.QuestProgress)
+        .filter_by(player_id=pid, quest_id=quest_id_for_spirit(spirit.spirit_id))
+        .first()
+    )
+    assert progress.status == STATUS_COMPLETED
+
+
+def test_dialogue_without_a_summon_completes_nothing(db_session, spirit, player):
+    """
+    任務是在 /summon 時建立的。玩家在 150m 外隔空聊天、還沒走進 50m 召喚時，
+    確實在對話但還沒有任務可以完成——**兩段式維持不變**（SDD §20.3.4）。
+
+    這裡要的是「安靜地什麼都不做」，不是丟例外：隔空對話是正常玩法。
+    """
+    pid, _ = player
+    completed = complete_on_dialogue(
+        db_session, player_id=pid, spirit_id=spirit.spirit_id
+    )
+
+    assert completed is False
+
+
+def test_a_second_dialogue_does_not_complete_twice(db_session, spirit, player):
+    """
+    一天講很多句是正常的。第二次之後回 False，讓呼叫端分得出「這次真的完成了」
+    與「早就完成了」——共鳴值的去重靠 resonance_events 的 UNIQUE，兩者不共用
+    同一個機制，所以這裡要自己說清楚。
+    """
+    pid, _ = player
+    evaluate_on_summon(db_session, player_id=pid, spirit_id=spirit.spirit_id)
+
+    assert complete_on_dialogue(db_session, player_id=pid, spirit_id=spirit.spirit_id) is True
+    assert complete_on_dialogue(db_session, player_id=pid, spirit_id=spirit.spirit_id) is False
+
+
+def test_completion_never_touches_the_brain(db_session, spirit, player):
+    """
+    CONTEXT.md：可驗證微任務由後端確定性規則判定，**不由 LLM 判定**。
+
+    這條測試不注入任何 gemini client——`complete_on_dialogue` 要是哪天開始需要
+    模型判斷內容相關性，它會因為缺參數而爆，而不是安靜地多打一次 API。
+    """
+    pid, _ = player
+    evaluate_on_summon(db_session, player_id=pid, spirit_id=spirit.spirit_id)
+
+    assert complete_on_dialogue(db_session, player_id=pid, spirit_id=spirit.spirit_id) is True

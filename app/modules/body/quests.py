@@ -170,6 +170,56 @@ def spirit_id_for_quest(quest_id: str) -> str:
     return spirit_id
 
 
+def complete_on_dialogue(
+    db: Session,
+    *,
+    player_id: uuid.UUID | str,
+    spirit_id: str,
+    now: datetime | None = None,
+) -> bool:
+    """
+    「當天與這隻靈魂有任一輪對話」＝當日任務完成（SDD §20.3.4／backend#71）。
+
+    回傳這次是否真的把它從進行中改成完成；已完成、或玩家還沒召喚過（沒有進度列）
+    時回 False。
+
+    ## 判定不看對話內容
+
+    要判斷「玩家有沒有真的問到那件事」需要 LLM，而 CONTEXT.md 明訂「可驗證微任務
+    由後端確定性規則判定，**不由 LLM 判定**」。判定一旦進了模型，玩家就無法預期
+    怎樣算完成——那比判定得不夠精確糟得多。
+
+    ## 沒有進度列不是錯誤
+
+    任務是在 `/summon` 時建立的（`evaluate_on_summon`）。玩家在 150m 外隔空聊天、
+    還沒走進 50m 召喚時，就是這個狀況：他確實在對話，但還沒有任務可以完成。
+    **兩段式維持不變**（SDD §20.3.4），所以這裡安靜地什麼都不做。
+
+    ## 跟共鳴值同一個觸發點
+
+    §18.5 的「每日對話 +10」也接在同一個地方。兩者分開寫入的話，同一輪對話會走
+    兩條「完成／入帳」邏輯，去重規則要維護兩份——呼叫端因此把兩件事排在一起。
+    """
+    moment = now or datetime.now(timezone.utc)
+
+    progress = (
+        db.query(QuestProgress)
+        .filter_by(
+            player_id=uuid.UUID(str(player_id)),
+            quest_id=quest_id_for_spirit(spirit_id),
+        )
+        .first()
+    )
+
+    if progress is None or progress.status == STATUS_COMPLETED:
+        return False
+
+    progress.status = STATUS_COMPLETED
+    progress.completed_at = moment
+    db.commit()
+    return True
+
+
 def complete_quest(
     db: Session,
     *,
