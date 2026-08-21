@@ -151,6 +151,9 @@ class CharacterPersona(Base):
     # 虛構授權：神祕感的來源，以及不能宣稱什麼。
     imagination_license = Column(Text, nullable=True)
     quest_themes = Column(ARRAY(Text), nullable=True)
+    # B14 生不出來時，這張卡自己的保底提問（2–3 則，短句，玩家直接點送出）。
+    # NULL 代表還沒寫，呼叫端會退回「用 quest_themes 組句」，再退回通用兩句。
+    guided_question_fallback = Column(ARRAY(Text), nullable=True)
     tone_override = Column(Text, nullable=True)
     # 當日情境無合格輸入或生成失敗時，使用該靈魂自己的人工預寫台詞。
     # NULL 代表尚未填寫，呼叫端才會退回通用保底句。

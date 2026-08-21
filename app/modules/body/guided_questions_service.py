@@ -10,11 +10,22 @@ from sqlalchemy.orm import Session
 from app.modules.body import models
 from app.modules.body.quests import taipei_today
 from app.modules.body.resonance import load_resonance_rules, stage_for_value
-from app.modules.brain.guided_questions import GuidedQuestionInputs, generate_guided_questions
+from app.modules.brain.guided_questions import (
+    PROXIMITY_FAR,
+    PROXIMITY_NEAR,
+    GuidedQuestionInputs,
+    generate_guided_questions,
+)
 from app.modules.brain.loader import load_active_persona
 from app.modules.brain.models import StoryBeat
 
 CACHE_TTL_HOURS = 48
+
+
+def proximity_for_token(*, has_encounter_token: bool) -> str:
+    """50m 在場憑證 → near；只有 150m 感應憑證 → far。"""
+
+    return PROXIMITY_NEAR if has_encounter_token else PROXIMITY_FAR
 
 
 class SpiritNotFoundError(LookupError):
@@ -65,9 +76,17 @@ def get_suggested_questions(
     *,
     place_id: str,
     player_id,
+    proximity: str = PROXIMITY_NEAR,
     now: datetime | None = None,
 ) -> dict:
-    """Return one cached B14 result for the spirit and Taipei calendar day."""
+    """Return one cached B14 result per spirit, Taipei calendar day and proximity.
+
+    遠近兩圈各自生成、各自快取。遠圈是延後生成的——沒有人在 150m 停下來問問題，
+    那個地標當天就不會為遠圈花掉任何一次 LLM 呼叫。
+    """
+
+    if proximity not in (PROXIMITY_FAR, PROXIMITY_NEAR):
+        proximity = PROXIMITY_NEAR
 
     moment = now or datetime.now(timezone.utc)
     event_date = taipei_today(moment)
@@ -77,7 +96,7 @@ def get_suggested_questions(
 
     cached = (
         db.query(models.GuidedQuestionCache)
-        .filter_by(place_id=place_id, event_date=event_date)
+        .filter_by(place_id=place_id, event_date=event_date, proximity=proximity)
         .first()
     )
     if cached is not None:
@@ -93,6 +112,7 @@ def get_suggested_questions(
         ),
         story_beat=_current_story_beat(db, player_id=player_id, spirit=spirit),
         event_date=event_date,
+        proximity=proximity,
     )
     content = generate_guided_questions(client, inputs=inputs, persona=persona)
     payload = {
@@ -102,6 +122,7 @@ def get_suggested_questions(
     row = models.GuidedQuestionCache(
         place_id=place_id,
         event_date=event_date,
+        proximity=proximity,
         content=payload,
         generated_at=moment,
         expires_at=moment + timedelta(hours=CACHE_TTL_HOURS),
@@ -116,7 +137,7 @@ def get_suggested_questions(
         db.rollback()
         existing = (
             db.query(models.GuidedQuestionCache)
-            .filter_by(place_id=place_id, event_date=event_date)
+            .filter_by(place_id=place_id, event_date=event_date, proximity=proximity)
             .one()
         )
         return dict(existing.content)

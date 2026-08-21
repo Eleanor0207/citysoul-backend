@@ -374,12 +374,20 @@ class DailyEventCache(Base):
 
 
 class GuidedQuestionCache(Base):
-    """One B14 result per active spirit and Taipei calendar day."""
+    """One B14 result per active spirit, Taipei calendar day and proximity tier.
+
+    `proximity` 在主鍵裡，因為同一個地標同一天有兩組內容：150m 感應圈（'far'）
+    的提問不能假設玩家看得到建築物，50m 在場（'near'）的可以。少了這一維，先
+    生成的那一組會把另一組擋在門外。
+    """
 
     __tablename__ = "guided_question_cache"
 
     place_id = Column(String(64), ForeignKey("spirits.spirit_id"), primary_key=True)
     event_date = Column(Date, primary_key=True)
+    proximity = Column(
+        String(8), primary_key=True, nullable=False, server_default="near"
+    )
     content = Column(JSONB, nullable=False)
     generated_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

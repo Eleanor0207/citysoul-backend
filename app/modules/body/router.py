@@ -570,6 +570,11 @@ def dialogue(
             gemini,
             place_id=place_id,
             player_id=session_player_id,
+            # 憑證種類就是距離：encounter_token 代表 50m 在場成立，只有
+            # sense_token 代表人還在 150m 感應圈，可能連建築物都還沒看到。
+            proximity=guided_questions_service.proximity_for_token(
+                has_encounter_token=bool(encounter_token)
+            ),
         )
     except Exception:  # noqa: BLE001
         # B14 is an additive convenience field; it must never turn a successful
@@ -906,6 +911,9 @@ def get_suggested_questions_endpoint(
             gemini,
             place_id=place_id,
             player_id=session_player_id,
+            proximity=guided_questions_service.proximity_for_token(
+                has_encounter_token=bool(encounter_token)
+            ),
         )
     except guided_questions_service.SpiritNotFoundError:
         raise HTTPException(status_code=404, detail="spirit not found")

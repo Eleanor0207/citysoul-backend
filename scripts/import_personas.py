@@ -152,12 +152,12 @@ INSERT_PERSONA = text(
         (character_id, version, archetype, speech_style, personality_traits, values,
          taboos, not_this_character, imagination_license, quest_themes, tone_override,
          daily_event_fallback, quota_fallback, llm_failure_fallback, taboo_redirect_style,
-         reviewed_by, reviewed_at, active)
+         guided_question_fallback, reviewed_by, reviewed_at, active)
     VALUES
         (:character_id, :version, :archetype, :speech_style, :personality_traits, :values,
          :taboos, :not_this_character, :imagination_license, :quest_themes, :tone_override,
          :daily_event_fallback, :quota_fallback, :llm_failure_fallback, :taboo_redirect_style,
-         :reviewed_by, now(), true)
+         :guided_question_fallback, :reviewed_by, now(), true)
     """
 )
 
@@ -234,6 +234,7 @@ def main() -> int:
                     "not_this_character": d.get("not_this_character"),
                     "imagination_license": d.get("imagination_license"),
                     "quest_themes": d.get("quest_themes"),
+                    "guided_question_fallback": d.get("guided_question_fallback"),
                     "tone_override": d.get("tone_override"),
                     # Optional by design: content authors add this only after
                     # writing and reviewing a player-visible fallback line.

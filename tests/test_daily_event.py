@@ -17,8 +17,13 @@ from app.modules.body.daily_event_service import (
     get_daily_event,
     refresh_daily_event,
 )
-from app.modules.body.guided_questions_service import get_suggested_questions
+from app.modules.body.guided_questions_service import (
+    get_suggested_questions,
+    proximity_for_token,
+)
 from app.modules.body.encounter_tokens import ENCOUNTER_TOKEN_HEADER, issue_encounter_token
+from app.modules.body.sense_tokens import SENSE_TOKEN_HEADER, issue_sense_token
+from app.modules.brain.guided_questions import PROXIMITY_FAR, PROXIMITY_NEAR
 from app.modules.body.quests import taipei_today
 from app.modules.brain.daily_event import DailyEventInputs
 from app.modules.brain.gemini import FakeGeminiClient
@@ -341,6 +346,109 @@ def test_guided_questions_cache_is_reused_within_a_day(db_session, spirit):
     assert first == second
     assert first_client.call_count == 1
     assert second_client.call_count == 0
+
+
+def test_guided_questions_cache_separates_the_two_proximity_tiers(db_session, spirit):
+    """
+    150m 感應圈與 50m 在場各自快取，鍵是 `place_id + event_date + proximity`。
+
+    少了 proximity 這一維，同一天先進來的那一組會把另一組擋在門外，第二種距離的
+    玩家讀到的是不屬於他那一圈的題目——遠圈的人會被問到眼前的構造細節。
+    """
+    now = datetime(2026, 3, 10, 15, 0, tzinfo=timezone.utc)
+    event_date = taipei_today(now)
+    db_session.add(
+        models.DailyEventCache(
+            place_id=spirit.spirit_id,
+            event_date=event_date,
+            content={"narrative_text": "DAILY_CONTEXT", "is_fallback": False},
+            generated_at=now,
+            expires_at=now + timedelta(days=2),
+        )
+    )
+    db_session.commit()
+    player_id = uuid.uuid4()
+
+    near_client = FakeGeminiClient(response='["NEAR1", "NEAR2"]')
+    far_client = FakeGeminiClient(response='["FAR1", "FAR2"]')
+    near = get_suggested_questions(
+        db_session,
+        near_client,
+        place_id=spirit.spirit_id,
+        player_id=player_id,
+        proximity=PROXIMITY_NEAR,
+        now=now,
+    )
+    far = get_suggested_questions(
+        db_session,
+        far_client,
+        place_id=spirit.spirit_id,
+        player_id=player_id,
+        proximity=PROXIMITY_FAR,
+        now=now,
+    )
+
+    assert near["questions"] == ["NEAR1", "NEAR2"]
+    assert far["questions"] == ["FAR1", "FAR2"]
+    assert far_client.call_count == 1
+    assert "150 公尺外" in far_client.prompts[0]
+    assert "50 公尺內" in near_client.prompts[0]
+
+
+def test_far_tier_is_generated_lazily(db_session, spirit):
+    """沒有人在 150m 停下來問問題，遠圈當天就不花任何一次 LLM 呼叫。"""
+    now = datetime(2026, 3, 10, 15, 0, tzinfo=timezone.utc)
+    event_date = taipei_today(now)
+    db_session.add(
+        models.DailyEventCache(
+            place_id=spirit.spirit_id,
+            event_date=event_date,
+            content={"narrative_text": "DAILY_CONTEXT", "is_fallback": False},
+            generated_at=now,
+            expires_at=now + timedelta(days=2),
+        )
+    )
+    db_session.commit()
+
+    get_suggested_questions(
+        db_session,
+        FakeGeminiClient(response='["NEAR1", "NEAR2"]'),
+        place_id=spirit.spirit_id,
+        player_id=uuid.uuid4(),
+        proximity=PROXIMITY_NEAR,
+        now=now,
+    )
+
+    rows = (
+        db_session.query(models.GuidedQuestionCache)
+        .filter_by(place_id=spirit.spirit_id, event_date=event_date)
+        .all()
+    )
+    assert [row.proximity for row in rows] == [PROXIMITY_NEAR]
+
+
+def test_sense_token_only_request_is_served_the_far_tier(client, spirit):
+    """憑證種類就是距離：只有 sense_token 代表人還在 150m 感應圈。"""
+    player = client.post(
+        "/api/v1/players", json={"device_id": f"guided-far-{uuid.uuid4()}"}
+    ).json()
+    player_id = uuid.UUID(player["player_id"])
+    headers = {
+        "Authorization": f"Bearer {player['session_token']}",
+        SENSE_TOKEN_HEADER: issue_sense_token(player_id, spirit.spirit_id),
+    }
+
+    response = client.get(
+        f"/api/v1/spirits/{spirit.spirit_id}/suggested-questions", headers=headers
+    )
+
+    assert response.status_code == 200
+    assert 2 <= len(response.json()["questions"]) <= 3
+
+
+def test_proximity_for_token_maps_the_two_credentials():
+    assert proximity_for_token(has_encounter_token=True) == PROXIMITY_NEAR
+    assert proximity_for_token(has_encounter_token=False) == PROXIMITY_FAR
 
 
 # ── 404 的分界 ────────────────────────────────────────────────────────
