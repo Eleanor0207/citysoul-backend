@@ -25,6 +25,7 @@ from app.modules.body import (
     guided_questions_service,
     push,
     queries,
+    inventory,
     quests,
     story_progress,
     weather,
@@ -930,6 +931,43 @@ def get_suggested_questions_endpoint(
         raise HTTPException(status_code=404, detail="spirit not found")
 
     return schemas.SuggestedQuestionsResponse(**content)
+
+
+@router.get(
+    "/inventory",
+    response_model=schemas.InventoryResponse,
+    responses={**_UNAUTHORIZED},
+)
+def get_inventory_endpoint(
+    session_player_id: uuid.UUID = Depends(require_session_token),
+    db: Session = Depends(get_db),
+):
+    """
+    玩家持有的道具（待辦 P3 第 21 項）。
+
+    `player_inventory` 在這之前是**只寫不讀**的：走進萬華會發一封信、
+    `story_beats.required_item_ids` 拿它當解鎖條件，但玩家看不到自己有什麼。
+
+    玩家從 session token 解出來，**沒有任何參數可以指定別人**（同 `/profile`）。
+    一件都沒有時回空陣列，不是 404——那是正常的起始狀態。
+
+    有長文的道具會一併帶回 `story_text`，內容來自 `brain.story_strings`，是
+    經人工審核的成品，原樣顯示、不經模型。
+    """
+    items = inventory.list_items(db, session_player_id)
+
+    return schemas.InventoryResponse(
+        items=[
+            schemas.InventoryItemResponse(
+                item_id=item.item_id,
+                item_type=item.item_type,
+                acquired_at=item.acquired_at,
+                source_quest_id=item.source_quest_id,
+                story_text=item.story_text,
+            )
+            for item in items
+        ]
+    )
 
 
 @router.get(

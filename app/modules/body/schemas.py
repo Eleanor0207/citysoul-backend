@@ -195,6 +195,33 @@ class DialogueResponse(BaseModel):
     suggested_questions: list[str] = Field(default_factory=list)
 
 
+class InventoryItemResponse(BaseModel):
+    """
+    玩家持有的一件道具（待辦 P3 第 21 項）。
+
+    `story_text` 為 null 是正常的：徽章、紀念品本來就可能只有 id 沒有長文，
+    客戶端顯示名稱就好。有值時那段文字是**經人工審核的成品**（來自
+    `brain.story_strings`），原樣顯示，不經模型。
+    """
+
+    item_id: str
+    item_type: str
+    acquired_at: datetime
+    source_quest_id: str | None = None
+    story_text: str | None = None
+
+
+class InventoryResponse(BaseModel):
+    """
+    `GET /api/v1/inventory` 的回應。
+
+    一件都沒有時回**空陣列**，不是 404——沒有道具是正常的起始狀態，不是
+    「找不到」（同 `/spirits` 的規則）。
+    """
+
+    items: list[InventoryItemResponse] = Field(default_factory=list)
+
+
 class CurrentWeatherResponse(BaseModel):
     """
     `GET /api/v1/weather/current` 的回應（backend#75／SDD §20.5）。

@@ -273,6 +273,67 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "InventoryItemResponse": {
+        "description": "玩家持有的一件道具（待辦 P3 第 21 項）。\n\n`story_text` 為 null 是正常的：徽章、紀念品本來就可能只有 id 沒有長文，\n客戶端顯示名稱就好。有值時那段文字是**經人工審核的成品**（來自\n`brain.story_strings`），原樣顯示，不經模型。",
+        "properties": {
+          "acquired_at": {
+            "format": "date-time",
+            "title": "Acquired At",
+            "type": "string"
+          },
+          "item_id": {
+            "title": "Item Id",
+            "type": "string"
+          },
+          "item_type": {
+            "title": "Item Type",
+            "type": "string"
+          },
+          "source_quest_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Quest Id"
+          },
+          "story_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Story Text"
+          }
+        },
+        "required": [
+          "item_id",
+          "item_type",
+          "acquired_at"
+        ],
+        "title": "InventoryItemResponse",
+        "type": "object"
+      },
+      "InventoryResponse": {
+        "description": "`GET /api/v1/inventory` 的回應。\n\n一件都沒有時回**空陣列**，不是 404——沒有道具是正常的起始狀態，不是\n「找不到」（同 `/spirits` 的規則）。",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/InventoryItemResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "title": "InventoryResponse",
+        "type": "object"
+      },
       "LandmarkPhotoResponse": {
         "description": "`POST /api/v1/quests/{questId}/landmark-photo` 的回應（S12／#44）。\n\n⚠️ **回應裡沒有任何影像相關的東西**——沒有 URL、沒有雜湊、沒有尺寸。\n照片只在記憶體處理、辨識完立即捨棄（SDD §7.7），回應也不該留下它存在過的\n痕跡。\n\n`resonance_awarded` 為 false 有兩種可能：辨識失敗，或這個地標之前已經收藏過\n（`UNIQUE(player_id, place_id)`，每個地標只加一次 10 點）。兩者對玩家的意義\n不同，但都不是錯誤。",
         "properties": {
@@ -1109,6 +1170,43 @@
           }
         ],
         "summary": "Check District Entry",
+        "tags": [
+          "body"
+        ]
+      }
+    },
+    "/api/v1/inventory": {
+      "get": {
+        "description": "玩家持有的道具（待辦 P3 第 21 項）。\n\n`player_inventory` 在這之前是**只寫不讀**的：走進萬華會發一封信、\n`story_beats.required_item_ids` 拿它當解鎖條件，但玩家看不到自己有什麼。\n\n玩家從 session token 解出來，**沒有任何參數可以指定別人**（同 `/profile`）。\n一件都沒有時回空陣列，不是 404——那是正常的起始狀態。\n\n有長文的道具會一併帶回 `story_text`，內容來自 `brain.story_strings`，是\n經人工審核的成品，原樣顯示、不經模型。",
+        "operationId": "get_inventory_endpoint_api_v1_inventory_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InventoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Session token 無效或未提供"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Inventory Endpoint",
         "tags": [
           "body"
         ]
