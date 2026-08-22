@@ -64,6 +64,14 @@ _EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="gemini")
 FALLBACK_REPLY = "這件事我還沒想清楚。要不要先跟我說說你眼前看到的？"
 
 
+# 「這個參數沒有傳」與「明確傳 None」是兩件事。
+#
+# `thinking_level=None` 的意思是**不要送 thinking_config**——2.5 系列收到會回
+# 400。用 None 當預設值的話這個意圖表達不出來（會被當成「沒傳，去讀設定」），
+# 而設定現在的值是 LOW。2026-08-22 換模型時踩到的正是這個。
+_UNSET = object()
+
+
 class GeminiClient(ABC):
     """
     對話生成的抽象介面。
@@ -73,8 +81,13 @@ class GeminiClient(ABC):
     """
 
     @abstractmethod
-    def generate(self, prompt: str) -> str:
-        """產生回應。失敗時回傳 `FALLBACK_REPLY`，不拋例外。"""
+    def generate(self, prompt: str, *, expect_chinese: bool = False) -> str:
+        """產生回應。失敗時回傳 `FALLBACK_REPLY`，不拋例外。
+
+        `expect_chinese=True` 用在**玩家會直接讀到的敘事**：混進英文時重生一次，
+        第二次仍然混進去就回退。分類器與 JSON 那類呼叫不要開（見
+        `VertexAIGeminiClient._latin_leak`）。
+        """
 
 
 class VertexAIGeminiClient(GeminiClient):
@@ -91,7 +104,7 @@ class VertexAIGeminiClient(GeminiClient):
         model_name: str | None = None,
         max_output_tokens: int | None = None,
         timeout_seconds: float | None = None,
-        thinking_level: str | None = None,
+        thinking_level: str | None | Any = _UNSET,
         client_factory: Callable[[], Any] | None = None,
     ):
         """
@@ -103,7 +116,7 @@ class VertexAIGeminiClient(GeminiClient):
         self._max_output_tokens = max_output_tokens or settings.gemini_max_output_tokens
         self._timeout_seconds = timeout_seconds or settings.gemini_timeout_seconds
         self._thinking_level = (
-            thinking_level if thinking_level is not None else settings.gemini_thinking_level
+            settings.gemini_thinking_level if thinking_level is _UNSET else thinking_level
         )
         self._client_factory = client_factory or self._create_client
         self._client = None
@@ -151,7 +164,51 @@ class VertexAIGeminiClient(GeminiClient):
 
         return genai.types.GenerateContentConfig(**kwargs)
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, *, expect_chinese: bool = False) -> str:
+        """
+        產生一段回應。
+
+        ## 為什麼混進英文要重生，而不是在輸出端砍掉
+
+        prompt 已經明說「整段回話裡不出現任何英文字母」，但那是請求不是保證。
+        實測漏出有兩種：夾一個詞（「stories 說也說不完」），以及**整段翻成英文**
+        （2026-08-22 龍山寺回了一整段 "those pillars… still smelling of wood"）。
+        後者用正規表示式砍不掉——砍完就沒有回應了。
+
+        所以是重生一次，不是修剪。重生保留「模型輸出不被我們改寫」這條線，而
+        修剪會誤傷 MOCA、IMAX 這種地標本身就有的名字。
+
+        ⚠️ 只重生**一次**。第二次仍然漏就回退到人工預寫台詞：再試下去是拿玩家
+        的等待時間與我們的帳單去賭一個機率性的結果。
+        """
+
+        first = self._generate_once(prompt)
+        if not expect_chinese or first == FALLBACK_REPLY:
+            return first
+
+        leaked = self._latin_leak(first)
+        if not leaked:
+            return first
+
+        logger.warning(
+            "回應混進英文單字 %s（模型 %s），重生一次。",
+            leaked,
+            self._model_name,
+        )
+        second = self._generate_once(prompt)
+        if second == FALLBACK_REPLY:
+            return second
+
+        still_leaked = self._latin_leak(second)
+        if not still_leaked:
+            return second
+
+        self.last_latin_leak = still_leaked
+        return self._fall_back(
+            f"連續兩次混進英文 {still_leaked}（模型 {self._model_name}）"
+        )
+
+    def _generate_once(self, prompt: str) -> str:
         self.last_failure_reason = None
         self.last_truncated = False
         self.last_latin_leak = []
@@ -210,7 +267,7 @@ class VertexAIGeminiClient(GeminiClient):
             # 這裡是模型輸出，動得愈少愈好，切句號、補標點那類 heuristic 只會
             # 把生成品質的問題藏起來。
             text = strip_fold_spaces(text)
-            self._warn_if_latin_leaked(text)
+            self.last_latin_leak = self._latin_leak(text)
             return text
 
         except Exception as exc:  # noqa: BLE001
@@ -221,29 +278,19 @@ class VertexAIGeminiClient(GeminiClient):
     # 專有名詞白名單。這些出現在回應裡是正常的——地標本身就叫這個名字。
     _ALLOWED_LATIN = {"moca", "imax", "ar", "vr", "bot", "led"}
 
-    def _warn_if_latin_leaked(self, text: str) -> None:
+    def _latin_leak(self, text: str) -> list[str]:
         """
-        回應裡混進英文單字時留下紀錄。**只記錄，不修改。**
+        這段文字裡不該出現的英文單字。純判斷，不改文字也不記 log。
 
-        prompt 已經明說「整段回話裡不出現任何英文字母」，但那是請求不是保證：
-        實測 40 輪仍有 1 次漏出（松山文創的「machines 轟轟響」）。
-
-        不在這裡用正規表示式砍掉，理由跟截斷偵測一樣——會誤傷 MOCA、IMAX 這種
-        地標本身就有的名字，而且把訊號藏起來之後就沒有人知道漏出率是多少了。
-        這個 log 的正確處置是調整 prompt 或換模型，不是在輸出端修剪。
+        ⚠️ **只對玩家會讀到的敘事有意義**，所以由呼叫端用 `expect_chinese` 開啟。
+        2026-08-22 之前這個檢查對每一次 `generate()` 都跑，於是 B4 分類器回的
+        `safe`、導引提問回的 JSON 鍵名全部被記成「漏出」——那些是正確輸出。
+        後果不只是 log 吵：真正的玩家可見漏出被埋在裡面，漏出率完全量不出來。
         """
-        leaked = [
+        return [
             w for w in re.findall(r"[A-Za-z]{2,}", text)
             if w.lower() not in self._ALLOWED_LATIN
         ]
-        if leaked:
-            self.last_latin_leak = leaked
-            logger.warning(
-                "回應混進英文單字 %s（模型 %s）。prompt 已要求全中文，"
-                "這是機率性殘留——漏出率變高時要調整 prompt 或換模型。",
-                leaked,
-                self._model_name,
-            )
 
     @staticmethod
     def _was_truncated(response) -> bool:
@@ -274,12 +321,17 @@ class FakeGeminiClient(GeminiClient):
     都會用到它——放在 tests/ 會變成跨測試檔案 import，那種相依很快就會亂掉。
     """
 
-    def __init__(self, response: str = "（測試用回應）"):
+    def __init__(self, response: str = "（測試用回應）", responses: list[str] | None = None):
+        """`responses` 依序回傳，用完之後固定回最後一句——測「重生一次」那條路徑。"""
         self.response = response
+        self.responses = list(responses) if responses else None
         self.prompts: list[str] = []
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, *, expect_chinese: bool = False) -> str:
         self.prompts.append(prompt)
+        if self.responses:
+            index = min(len(self.prompts) - 1, len(self.responses) - 1)
+            return self.responses[index]
         return self.response
 
     @property

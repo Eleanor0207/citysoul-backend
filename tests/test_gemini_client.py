@@ -242,15 +242,29 @@ def test_output_cap_defaults_to_the_setting():
     assert model.calls[0]["config"].max_output_tokens == settings.gemini_max_output_tokens
 
 
-def test_thinking_config_is_omitted_by_default():
+def test_thinking_level_follows_the_setting():
     """
-    `thinking_level` 只有 gemini-3.5 系列接受；2.5 系列傳了會直接回
-    `400 INVALID_ARGUMENT`。預設模型是 2.5-flash-lite，所以預設不能傳。
+    `thinking_level` 只有 gemini-3.x 系列接受；2.5 系列傳了會直接回
+    `400 INVALID_ARGUMENT`。所以這個值必須跟 `gemini_model` 綁在一起改，
+    2026-08-22 兩者一起換到 3.5-flash-lite ＋ LOW。
     """
     model = _StubClient()
 
     _client(model).generate("你好")
 
+    sent = model.calls[0]["config"].thinking_config
+    if settings.gemini_thinking_level is None:
+        assert sent is None
+    else:
+        assert sent.thinking_level == settings.gemini_thinking_level
+
+
+def test_thinking_config_is_omitted_when_not_configured():
+    model = _StubClient()
+
+    _client(model, thinking_level=None).generate("你好")
+
+    # thinking_level=None 明確傳入時要覆寫設定值——2.5 系列非這樣不可。
     assert model.calls[0]["config"].thinking_config is None
 
 
@@ -379,3 +393,85 @@ def test_live_vertex_ai_call():
         "拿到 fallback 代表真實呼叫失敗了。"
         "檢查 last_failure_reason 找出原因，不要當成測試通過。"
     )
+
+
+# ── 英文漏出（2026-08-22）────────────────────────────────────────────
+#
+# prompt 已經明說「整段回話裡不出現任何英文字母」，但那是請求不是保證。線上
+# 實測兩種漏法：夾一個詞（「stories 說也說不完」），以及整段翻成英文。
+
+
+class _SequenceModels:
+    """每次呼叫依序回下一段文字，用完之後固定回最後一段。"""
+
+    def __init__(self, texts):
+        self._texts = list(texts)
+        self.calls = []
+
+    def generate_content(self, *, model, contents, config):
+        self.calls.append({"model": model, "contents": contents, "config": config})
+        index = min(len(self.calls) - 1, len(self._texts) - 1)
+        return _StubResponse(self._texts[index])
+
+
+class _SequenceClient:
+    def __init__(self, texts):
+        self.models = _SequenceModels(texts)
+
+    @property
+    def calls(self):
+        return self.models.calls
+
+
+def test_a_leaked_english_word_is_regenerated_once():
+    model = _SequenceClient(["這地方啊，stories 說也說不完。", "這地方啊，故事說也說不完。"])
+
+    result = _client(model).generate("跟我說說這裡", expect_chinese=True)
+
+    assert result == "這地方啊，故事說也說不完。"
+    assert len(model.calls) == 2, "第一次漏出要重生，第二次乾淨就用它。"
+
+
+def test_two_leaks_in_a_row_fall_back_instead_of_a_third_try():
+    # 再試下去是拿玩家的等待時間與帳單去賭一個機率性的結果。
+    model = _SequenceClient(["those pillars, still smelling of wood.", "Now they have been touched."])
+
+    client = _client(model)
+    result = client.generate("跟我說說這裡", expect_chinese=True)
+
+    assert result == FALLBACK_REPLY
+    assert len(model.calls) == 2
+    assert client.last_latin_leak, "回退原因要留得下來，否則漏出率量不出來。"
+
+
+def test_a_clean_reply_is_not_regenerated():
+    model = _SequenceClient(["這地方啊，故事說也說不完。"])
+
+    result = _client(model).generate("跟我說說這裡", expect_chinese=True)
+
+    assert result == "這地方啊，故事說也說不完。"
+    assert len(model.calls) == 1
+
+
+def test_landmark_names_in_latin_are_not_treated_as_a_leak():
+    # MOCA、IMAX 是地標本身的名字，不是模型漏出來的英文。
+    model = _SequenceClient(["MOCA 就在那棟紅磚樓裡。"])
+
+    result = _client(model).generate("那是什麼", expect_chinese=True)
+
+    assert result == "MOCA 就在那棟紅磚樓裡。"
+    assert len(model.calls) == 1
+
+
+def test_classifier_style_calls_are_not_checked_at_all():
+    """B4 分類器回 `safe`、導引提問回 JSON——那些是正確輸出，不是漏出。
+
+    2026-08-22 之前這個檢查對每一次呼叫都跑，正式環境的 log 因此被 `['safe']`
+    洗掉，真正的玩家可見漏出被埋在裡面。
+    """
+    model = _SequenceClient(["safe"])
+
+    result = _client(model).generate("分類這句話")
+
+    assert result == "safe"
+    assert len(model.calls) == 1, "沒開 expect_chinese 就不該重生。"

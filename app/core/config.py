@@ -51,11 +51,32 @@ class Settings(BaseSettings):
     #
     # 要換回 3.5-flash 的話，記得**同時**把 max_output_tokens 調到 1024 以上
     # 並設 thinking_level=LOW，否則會拿到斷在句子中間的回應。
-    gemini_model: str = "gemini-2.5-flash-lite"
+    #
+    # ## 2026-08-22：改用 gemini-3.5-flash-lite
+    #
+    # 起因是玩家回報龍山寺夾了英文（「stories 說也說不完」），順手把整個 flash
+    # 家族重測一次。每個模型 10 輪，真實人格卡＋史實＋邊界（system prompt 2400 字）：
+    #
+    #   模型                     延遲 p50   逾時   截斷    輸出中位字數
+    #   gemini-2.5-flash-lite     1.47s     0/10   0/10    172
+    #   gemini-3.1-flash-lite     2.42s     0/10   0/10    233
+    #   gemini-3.5-flash-lite     2.01s     0/10   1/10    123
+    #   gemini-3.6-flash          8.00s     7/10   1/10    125
+    #   gemini-3.7-flash          4.53s     0/10   0/10    128
+    #
+    # ⚠️ **這次測不出漏出率。** 舊 log 的漏出約 1/40，n=10 時除了 3.6 之外全是
+    # 0/10——那一欄不能拿來當選型理由。玩家可見的英文由 B1 的重生機制擋
+    # （見 `gemini.generate` 的 `expect_chinese`），不是靠選模型。
+    #
+    # gemini-3.6-flash 明確不能用：10 次有 7 次撞到 8 秒逾時，而且會把自己的
+    # 檢查清單（"No English? Yes."）當成回應吐出來。
+    gemini_model: str = "gemini-3.5-flash-lite"
 
-    # 只有 gemini-3.5 系列接受；2.5 系列傳了會直接回 400 INVALID_ARGUMENT。
-    # 預設不傳。
-    gemini_thinking_level: str | None = None
+    # 只有 gemini-3.x 系列接受；2.5 系列傳了會直接回 400 INVALID_ARGUMENT。
+    #
+    # 跟著 `gemini_model` 一起改：現在的預設模型是 3.5-flash-lite，所以這裡要有
+    # 值。**換回 2.5 系列時必須同時改回 None**，否則每一次呼叫都是 400。
+    gemini_thinking_level: str | None = "LOW"
 
     # 模型輸出上限。放在設定而不是只寫在 prompt 裡——靠 prompt 請模型「請簡短回答」
     # 是沒有保證的，而這個值直接決定成本上限（🔴 高風險「AI 對話成本與延遲」）。
@@ -67,7 +88,11 @@ class Settings(BaseSettings):
     # 真正的修正是在 prompt 裡給長度指示（見 prompt_builder 的 `_length_section`）；
     # 這個值調高是那道指示的安全網，不是替代品。兩者一起做之後，典型輸出反而比
     # 以前短——以前是每次都寫到撞牆為止。
-    gemini_max_output_tokens: int = 512
+    #
+    # 512 → 1536（2026-08-22，隨模型換成 3.5-flash-lite）：3.x 系列的 thinking
+    # 會先吃掉一部分預算，實測 1024 時 10 輪仍有 1 次截斷。這是上限不是用量，
+    # 調高不會讓正常回應變貴——但撞到牆就是把已經付費生成的內容丟掉。
+    gemini_max_output_tokens: int = 1536
     gemini_timeout_seconds: float = 8.0
 
     # B2 Prompt 組裝（#12）。SDD §10 標明這兩個數字**待實測調整**，所以它們是

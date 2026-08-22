@@ -472,7 +472,9 @@ def dialogue(
             source = "fallback"
             return FALLBACK_REPLY
 
-        text = gemini.generate(prompt.as_single_text())
+        # expect_chinese：玩家直接讀到的敘事。混進英文時 B1 會自己重生一次
+        # （見 gemini.generate 的說明），第二次仍然漏才回退。
+        text = gemini.generate(prompt.as_single_text(), expect_chinese=True)
         # B1 的契約是「永遠回非空字串，失敗時回 FALLBACK_REPLY」，所以
         # 這裡靠內容而不是例外來判斷是不是回退了。
         source = "fallback" if text == FALLBACK_REPLY else "generated"

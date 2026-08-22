@@ -378,7 +378,7 @@ def test_database_is_written_before_the_brain_is_called(client, spirit, summoned
     observed = {}
 
     class _ObservingClient(FakeGeminiClient):
-        def generate(self, prompt: str) -> str:
+        def generate(self, prompt: str, *, expect_chinese: bool = False) -> str:
             if "observed_once" not in observed:
                 probe = SessionLocal()
                 try:

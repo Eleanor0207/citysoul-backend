@@ -181,7 +181,7 @@ def test_no_exception_escapes_even_if_the_client_is_broken():
     """
 
     class _BrokenClient:
-        def generate(self, prompt):
+        def generate(self, prompt, *, expect_chinese=False):
             return FALLBACK_REPLY
 
     result = generate_unlock_story(

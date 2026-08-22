@@ -64,7 +64,8 @@ def generate_quest_wrapper(
         return _FALLBACK_WRAPPER
 
     text = client.generate(
-        build_quest_wrapper_prompt(spirit_id, quest_id, persona=persona)
+        build_quest_wrapper_prompt(spirit_id, quest_id, persona=persona),
+        expect_chinese=True,
     )
 
     if not text or text == FALLBACK_REPLY:

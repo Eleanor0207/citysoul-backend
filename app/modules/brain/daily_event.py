@@ -202,7 +202,7 @@ def generate_daily_event_content(
 
     # B1 的契約是「永遠回非空字串，失敗時回 FALLBACK_REPLY」，所以靠內容判斷
     # 是否回退，而不是 try/except——B1 不會拋例外給我們。
-    text = client.generate(prompt)
+    text = client.generate(prompt, expect_chinese=True)
 
     if not text or text == FALLBACK_REPLY:
         logger.info("B9 當日情境生成失敗，回退人工預寫台詞（%s %s）", place_id, event_date)

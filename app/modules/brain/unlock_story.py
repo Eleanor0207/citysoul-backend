@@ -141,7 +141,7 @@ def generate_unlock_story(
 
     # B1 的契約是「永遠回非空字串，失敗時回 FALLBACK_REPLY」，所以這裡靠內容
     # 判斷是否回退，而不是 try/except——B1 根本不會拋例外給我們。
-    text = client.generate(prompt)
+    text = client.generate(prompt, expect_chinese=True)
 
     if not text or text == FALLBACK_REPLY:
         logger.info("B11 解鎖敘事生成失敗，回退人工預寫台詞（stage=%s）", stage)
