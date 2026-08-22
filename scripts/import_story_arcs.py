@@ -79,6 +79,26 @@ def _beat_ids_in_trigger(value: Any) -> set[str]:
     return found
 
 
+def _quest_ids_in_trigger(value: Any) -> set[str]:
+    """Extract quest requirements expressed as ``quest_completed`` clauses.
+
+    這些先前被安靜丟棄：匯入器只認得 ``beat_completed`` 與 ``has_item``，所以
+    文件裡「做完任務才推得動」的設計從來沒有進過資料庫。缺口沒有症狀——玩家
+    不做任務也能把主線推完（backend#71／#72，0028）。
+    """
+    found: set[str] = set()
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            if key == "quest_completed" and isinstance(child, str):
+                found.add(child)
+            else:
+                found.update(_quest_ids_in_trigger(child))
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            found.update(_quest_ids_in_trigger(child))
+    return found
+
+
 def _item_ids_in_trigger(value: Any) -> set[str]:
     """Extract item requirements expressed as ``has_item`` trigger clauses."""
 
@@ -245,17 +265,26 @@ def prepare_import(path: pathlib.Path) -> tuple[dict[str, Any], list[dict[str, A
 
     prepared = derive_prerequisites(arc, beats, document.get("items") or [])
     validate_prerequisite_graph(prepared)
-    return dict(arc), prepared
+
+    # ⚠️ `variables:`、`items:`、`info_cards:` 是文件的**頂層** key，跟 `arc:`
+    # 平行，不在 `arc:` 裡面。回傳前掛進來，呼叫端才不必知道這個結構差異。
+    #
+    # （`items:` 已經由 derive_prerequisites 另外收下，這裡不重複。）
+    merged = dict(arc)
+    for key in ("variables", "info_cards"):
+        if document.get(key) is not None:
+            merged[key] = document[key]
+    return merged, prepared
 
 
 UPSERT_ARC = text(
     """
     INSERT INTO brain.story_arcs
         (arc_id, title, district_id, intro_document_title, intro_document_content,
-         intro_document_asset_id, summary, active, reviewed_by)
+         intro_document_asset_id, summary, variables, active, reviewed_by)
     VALUES
         (:arc_id, :title, :district_id, :intro_document_title, :intro_document_content,
-         :intro_document_asset_id, :summary, true, :reviewed_by)
+         :intro_document_asset_id, :summary, CAST(:variables AS JSONB), true, :reviewed_by)
     ON CONFLICT (arc_id) DO UPDATE SET
         title = EXCLUDED.title,
         district_id = EXCLUDED.district_id,
@@ -263,6 +292,7 @@ UPSERT_ARC = text(
         intro_document_content = EXCLUDED.intro_document_content,
         intro_document_asset_id = EXCLUDED.intro_document_asset_id,
         summary = EXCLUDED.summary,
+        variables = EXCLUDED.variables,
         active = true,
         reviewed_by = EXCLUDED.reviewed_by
     """
@@ -273,11 +303,11 @@ UPSERT_BEAT = text(
     INSERT INTO brain.story_beats
         (beat_id, arc_id, character_id, sequence_order, trigger_condition,
          narrative_directive, prerequisite_beat_ids, required_item_ids,
-         contingency_notes, one_time, active, reviewed_by)
+         required_quest_ids, contingency_notes, one_time, active, reviewed_by)
     VALUES
         (:beat_id, :arc_id, :character_id, :sequence_order, :trigger_condition,
          :narrative_directive, :prerequisite_beat_ids, :required_item_ids,
-         :contingency_notes, :one_time, true, :reviewed_by)
+         :required_quest_ids, :contingency_notes, :one_time, true, :reviewed_by)
     ON CONFLICT (beat_id) DO UPDATE SET
         arc_id = EXCLUDED.arc_id,
         character_id = EXCLUDED.character_id,
@@ -286,6 +316,7 @@ UPSERT_BEAT = text(
         narrative_directive = EXCLUDED.narrative_directive,
         prerequisite_beat_ids = EXCLUDED.prerequisite_beat_ids,
         required_item_ids = EXCLUDED.required_item_ids,
+        required_quest_ids = EXCLUDED.required_quest_ids,
         contingency_notes = EXCLUDED.contingency_notes,
         one_time = EXCLUDED.one_time,
         active = true,
@@ -310,6 +341,10 @@ def _beat_row(arc: Mapping[str, Any], prepared: Mapping[str, Any], sequence_orde
     required_items = source.get("requires")
     if required_items is None:
         required_items = source.get("required_item_ids")
+
+    # ⚠️ 任務**不會**變成 prerequisite_beat_ids（見 derive_prerequisites 的說明）。
+    # 它是第三道門，存在自己的欄位。
+    required_quests = sorted(_quest_ids_in_trigger(source.get("trigger")))
     return {
         "beat_id": source["beat_id"],
         "arc_id": arc["arc_id"],
@@ -319,10 +354,47 @@ def _beat_row(arc: Mapping[str, Any], prepared: Mapping[str, Any], sequence_orde
         "narrative_directive": _json(directive),
         "prerequisite_beat_ids": prepared["prerequisite_beat_ids"],
         "required_item_ids": required_items or None,
+        "required_quest_ids": required_quests or None,
         "contingency_notes": source.get("contingency_notes"),
         "one_time": source.get("one_time", True),
         "reviewed_by": source.get("reviewed_by", arc.get("reviewed_by")),
     }
+
+
+UPSERT_INFO_CARD = text(
+    """
+    INSERT INTO brain.story_info_cards
+        (card_id, arc_id, historical_text_key, fiction_text_key, review_status, active)
+    VALUES
+        (:card_id, :arc_id, :historical_text_key, :fiction_text_key, :review_status, true)
+    ON CONFLICT (card_id) DO UPDATE SET
+        arc_id = EXCLUDED.arc_id,
+        historical_text_key = EXCLUDED.historical_text_key,
+        fiction_text_key = EXCLUDED.fiction_text_key,
+        review_status = EXCLUDED.review_status,
+        active = true
+    """
+)
+
+
+def _info_card_rows(arc: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """arc 文件 §12 的 `info_cards:` 區塊。
+
+    先前完全沒有被匯入——文字進了 `story_strings`，卡片本身沒有，所以 beat 的
+    `show_info_card` 指向一個查不到的 id。
+    """
+    rows = []
+    for card in arc.get("info_cards") or []:
+        if not isinstance(card, Mapping) or not card.get("card_id"):
+            raise StoryImportError(f"info_cards 有一則缺 card_id：{card!r}")
+        rows.append({
+            "card_id": card["card_id"],
+            "arc_id": arc["arc_id"],
+            "historical_text_key": card.get("historical_text_key"),
+            "fiction_text_key": card.get("fiction_text_key"),
+            "review_status": card.get("review_status"),
+        })
+    return rows
 
 
 def import_story(engine: Any, path: pathlib.Path) -> tuple[str, int]:
@@ -345,11 +417,52 @@ def import_story(engine: Any, path: pathlib.Path) -> tuple[str, int]:
         "intro_document_asset_id": arc.get("intro_document_asset_id"),
         "summary": arc.get("summary"),
         "reviewed_by": arc.get("reviewed_by"),
+        # 每個劇情變數的合法值。存進來之後寫入端才驗得了客戶端送來的值。
+        "variables": _json(arc.get("variables")) if arc.get("variables") else None,
     }
+    card_rows = _info_card_rows(arc)
     with engine.begin() as conn:
+        # 懸空的 required_quest_ids 跟懸空的 prerequisite_beat_ids 一樣是靜默的
+        # 壞法：那個 beat 永遠解不開，玩家卡住，log 乾淨。前置鏈的環與懸空引用
+        # 在 prepare_import() 就擋掉了，但任務要查資料庫才知道存不存在，所以
+        # 這一道檢查只能在這裡做——寫入之前，同一個交易。
+        known_quests = {
+            row[0] for row in conn.execute(text("SELECT quest_id FROM quests"))
+        }
+        dangling = sorted(
+            f"{row['beat_id']} → {quest_id}"
+            for row in beat_rows
+            for quest_id in (row["required_quest_ids"] or [])
+            if quest_id not in known_quests
+        )
+        if dangling:
+            raise StoryImportError(
+                "required_quest_ids 指向不存在的任務（先跑 import_quests）："
+                + "、".join(dangling)
+            )
+
+        # 卡片指向的 text_key 要真的存在，否則玩家點開卡片是空的。跟懸空的
+        # required_quest_ids 一樣是靜默的壞法，所以在寫入前擋。
+        known_strings = {
+            row[0] for row in conn.execute(text("SELECT text_key FROM brain.story_strings"))
+        }
+        missing = sorted(
+            f"{row['card_id']} → {key}"
+            for row in card_rows
+            for key in (row["historical_text_key"], row["fiction_text_key"])
+            if key and key not in known_strings
+        )
+        if missing:
+            raise StoryImportError(
+                "info_cards 指向不存在的 text_key（先跑 import_story_strings）："
+                + "、".join(missing)
+            )
+
         conn.execute(UPSERT_ARC, arc_row)
         for row in beat_rows:
             conn.execute(UPSERT_BEAT, row)
+        for row in card_rows:
+            conn.execute(UPSERT_INFO_CARD, row)
     return arc["arc_id"], len(beat_rows)
 
 

@@ -30,6 +30,20 @@
         "title": "AvatarAssetResponse",
         "type": "object"
       },
+      "BeatAdvanceRequest": {
+        "description": "`POST /api/v1/story-arcs/{arcId}/beats/{beatId}/advance` 的請求（backend#72）。\n\n`chosen_option_ids` 是玩家在這個節點看／選了哪些選項。後端**只認這個 beat\n自己節點裡的 id**，客戶端送別的東西會被忽略——變數的值來自內容，不是來自\n請求，否則玩家可以自己指定結局。\n\n整個 body 可以省略：多數 beat 沒有選項。",
+        "properties": {
+          "chosen_option_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Chosen Option Ids",
+            "type": "array"
+          }
+        },
+        "title": "BeatAdvanceRequest",
+        "type": "object"
+      },
       "BeatAdvanceResponse": {
         "description": "`POST /api/v1/story-arcs/{arcId}/beats/{beatId}/advance` 的回應（backend#72）。",
         "properties": {
@@ -48,6 +62,20 @@
             "title": "Completed Beat Ids",
             "type": "array"
           },
+          "granted_item_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Granted Item Ids",
+            "type": "array"
+          },
+          "set_variables": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Set Variables",
+            "type": "object"
+          },
           "story_completed": {
             "title": "Story Completed",
             "type": "boolean"
@@ -59,6 +87,56 @@
           "story_completed"
         ],
         "title": "BeatAdvanceResponse",
+        "type": "object"
+      },
+      "BeatScriptResponse": {
+        "description": "`GET /api/v1/story-arcs/{arcId}/beats/{beatId}/script` 的回應（backend#72）。\n\n⚠️ **只回傳玩家已經走到的節點**（已完成，或前置全部滿足）。還鎖著的 beat\n回 403——腳本就是劇情內容本身，能查等於能先看完結局。這跟\n`StoryArcStateResponse.eligible_beat_ids` 不洩漏未解鎖節點是同一條規則。\n\n`nodes` 是空陣列時代表這個 beat 沒有台詞（例如只發道具的節點），**不是\n錯誤**。",
+        "properties": {
+          "beat_id": {
+            "title": "Beat Id",
+            "type": "string"
+          },
+          "character_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Character Id"
+          },
+          "info_cards": {
+            "items": {
+              "$ref": "#/components/schemas/InfoCardResponse"
+            },
+            "title": "Info Cards",
+            "type": "array"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/ScriptNodeResponse"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "spirit_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spirit Id"
+          }
+        },
+        "required": [
+          "beat_id"
+        ],
+        "title": "BeatScriptResponse",
         "type": "object"
       },
       "Body_landmark_photo_api_v1_quests__quest_id__landmark_photo_post": {
@@ -73,6 +151,26 @@
           "photo"
         ],
         "title": "Body_landmark_photo_api_v1_quests__quest_id__landmark_photo_post",
+        "type": "object"
+      },
+      "CompletedBeatResponse": {
+        "description": "一個已完成的 beat 與它的完成時間。",
+        "properties": {
+          "beat_id": {
+            "title": "Beat Id",
+            "type": "string"
+          },
+          "completed_at": {
+            "format": "date-time",
+            "title": "Completed At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "beat_id",
+          "completed_at"
+        ],
+        "title": "CompletedBeatResponse",
         "type": "object"
       },
       "CurrentWeatherResponse": {
@@ -271,6 +369,42 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "InfoCardResponse": {
+        "description": "一張劇情資訊卡（backend#72／0030）。\n\n⚠️ **史實與虛構是兩個欄位，客戶端不該把它們接成一段。** 文件 §1 要求每張卡\n明確區分「史實可考」與「本作故事」——那是這個專案對地標的基本承諾，不是\n排版偏好。",
+        "properties": {
+          "card_id": {
+            "title": "Card Id",
+            "type": "string"
+          },
+          "fiction_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fiction Text"
+          },
+          "historical_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Historical Text"
+          }
+        },
+        "required": [
+          "card_id"
+        ],
+        "title": "InfoCardResponse",
         "type": "object"
       },
       "InventoryItemResponse": {
@@ -619,8 +753,24 @@
             "title": "Attempts Today",
             "type": "integer"
           },
+          "intro": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intro"
+          },
           "quest_id": {
             "title": "Quest Id",
+            "type": "string"
+          },
+          "quest_type": {
+            "default": "daily",
+            "title": "Quest Type",
             "type": "string"
           },
           "spirit_id": {
@@ -634,6 +784,24 @@
             ],
             "title": "Status",
             "type": "string"
+          },
+          "steps": {
+            "items": {
+              "type": "object"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
           }
         },
         "required": [
@@ -720,6 +888,89 @@
           "stage"
         ],
         "title": "ResonanceProgressResponse",
+        "type": "object"
+      },
+      "ScriptNodeResponse": {
+        "description": "一個劇情節點。`type` 是 `line`（台詞）或 `choice`（一組選項）。",
+        "properties": {
+          "exclusive": {
+            "default": false,
+            "title": "Exclusive",
+            "type": "boolean"
+          },
+          "min_viewed_to_proceed": {
+            "default": 1,
+            "title": "Min Viewed To Proceed",
+            "type": "integer"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/ScriptOptionResponse"
+            },
+            "title": "Options",
+            "type": "array"
+          },
+          "speaker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speaker"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "type": {
+            "enum": [
+              "line",
+              "choice"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "ScriptNodeResponse",
+        "type": "object"
+      },
+      "ScriptOptionResponse": {
+        "description": "一個觀察點／選項（backend#72）。",
+        "properties": {
+          "option_id": {
+            "title": "Option Id",
+            "type": "string"
+          },
+          "sets": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Sets",
+            "type": "object"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "option_id",
+          "text"
+        ],
+        "title": "ScriptOptionResponse",
         "type": "object"
       },
       "SenseRequest": {
@@ -873,6 +1124,13 @@
             "title": "Completed Beat Ids",
             "type": "array"
           },
+          "completed_beats": {
+            "items": {
+              "$ref": "#/components/schemas/CompletedBeatResponse"
+            },
+            "title": "Completed Beats",
+            "type": "array"
+          },
           "eligible_beat_ids": {
             "items": {
               "type": "string"
@@ -884,6 +1142,13 @@
             "default": false,
             "title": "Story Completed",
             "type": "boolean"
+          },
+          "variables": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Variables",
+            "type": "object"
           }
         },
         "required": [
@@ -2218,6 +2483,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/BeatAdvanceRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {
@@ -2276,6 +2558,93 @@
           }
         ],
         "summary": "Advance Story Beat",
+        "tags": [
+          "body"
+        ]
+      }
+    },
+    "/api/v1/story-arcs/{arc_id}/beats/{beat_id}/script": {
+      "get": {
+        "description": "一個 beat 的台詞與選項（backend#72）。\n\n在這支之前，`narrative_directive` 裡的節點與 `brain.story_strings` 裡的文字\n**沒有任何出口**——客戶端拿得到 `beat_prologue_letter` 這個 id，拿不到它的\n任何一個字。\n\n## 只回傳玩家已經走到的節點\n\n已完成的 beat 可以重看（玩家本來就讀過了），前置全部滿足的可以讀（他正要\n走這一段）。其餘一律 403。**腳本就是劇情內容本身**，能任意查等於能先把\n結局看完——這跟 `arc_state()` 的 `eligible_beat_ids` 刻意不列出未解鎖節點\n是同一條規則。\n\n## 內容不經 LLM\n\n`story_strings` 是人工撰寫、原樣顯示的成品，跟 `canned_greetings` 同一類。\n這支端點不呼叫任何腦袋模組。",
+        "operationId": "get_beat_script_api_v1_story_arcs__arc_id__beats__beat_id__script_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "arc_id",
+            "required": true,
+            "schema": {
+              "title": "Arc Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "beat_id",
+            "required": true,
+            "schema": {
+              "title": "Beat Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BeatScriptResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Session token 無效或未提供"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "這個 beat 還沒解鎖——腳本就是劇情內容，不能先看"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "劇情主線或 beat 不存在（或已停用）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Beat Script",
         "tags": [
           "body"
         ]

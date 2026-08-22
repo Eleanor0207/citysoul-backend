@@ -103,7 +103,14 @@ def test_encounter_token_cannot_be_used_as_a_session_token(client, path, player)
     assert client.get(path, headers=_auth(forged)).status_code == 401
 
 
-def test_daily_quests_returns_all_four_fields(client, db_session, spirit, player):
+def test_daily_quests_returns_the_full_item_shape(client, db_session, spirit, player):
+    """
+    daily 型任務的目錄欄位是空的——**那是正常狀態，不是缺資料**。
+
+    `{spirit_id}:daily` 是 `quest_id_for_spirit()` 推導出來的，不進 `quests`
+    目錄表（見 `import_quests.py`），所以它沒有標題、引言與步驟可查。story 型
+    任務才有，見 `test_story_quest_flow.py`。
+    """
     pid, sess = player
     _add_progress(db_session, pid, spirit.spirit_id, attempts=1)
 
@@ -115,6 +122,10 @@ def test_daily_quests_returns_all_four_fields(client, db_session, spirit, player
             "spirit_id": spirit.spirit_id,
             "status": "in_progress",
             "attempts_today": 1,
+            "quest_type": "daily",
+            "title": None,
+            "intro": None,
+            "steps": [],
         }
     ]
 

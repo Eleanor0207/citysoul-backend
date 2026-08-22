@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.modules.body.models import QuestProgress, Resonance, Spirit
+from app.modules.body.models import Quest, QuestProgress, Resonance, Spirit
 from app.modules.body.quests import (
     STATUS_COMPLETED,
     STATUS_IN_PROGRESS,
@@ -50,7 +50,7 @@ def _player_uuid(player_id) -> uuid_module.UUID:
     return uuid_module.UUID(str(player_id))
 
 
-def quest_view(progress: QuestProgress, *, today) -> dict:
+def quest_view(progress: QuestProgress, *, today, catalogue=None) -> dict:
     """
     把一列 `quest_progress` 轉成回應用的形狀。
 
@@ -62,29 +62,43 @@ def quest_view(progress: QuestProgress, *, today) -> dict:
     `attempts_date` 不是今天 → 對外呈現 0。真正的歸零由下一次 `/summon` 寫入。
     查詢端點不該有副作用。
 
-    ## spirit_id 從 quest_id 反推
+    ## spirit_id 有兩個來源
 
-    ⚠️ `quest_progress` **沒有 `spirit_id` 欄位**，主鍵是
-    `(player_id, quest_id)`。目前靠 `quest_id_for_spirit()` 的命名慣例
-    （`{spirit_id}:daily`）反推。等真的有任務目錄表時，**這一行是唯一要改的
-    地方**——所以它刻意集中在這裡，而不是散在三支端點裡各寫一次。
+    `quest_progress` **沒有 `spirit_id` 欄位**，主鍵是 `(player_id, quest_id)`。
+
+    1. **目錄表**（`quests`）——story 型任務查得到，順帶拿到標題、引言與步驟
+    2. **命名慣例**（`{spirit_id}:daily`）——daily 型任務是推導出來的，不進目錄表
+
+    先查目錄、查不到才反推命名慣例。兩者都失敗時退回 quest_id 本身，讓列表
+    不會因為一筆看不懂的資料整個壞掉。
+
+    `catalogue` 是呼叫端先撈好的 `quest_id -> Quest`，避免一列一次查詢。
     """
     is_today = progress.attempts_date == today
     attempts_today = progress.attempts_today if is_today else 0
 
     status = STATUS_COMPLETED if progress.status == STATUS_COMPLETED else STATUS_IN_PROGRESS
 
-    try:
-        spirit_id = spirit_id_for_quest(progress.quest_id)
-    except Exception:  # noqa: BLE001
-        # 命名慣例以外的 quest_id（例如日後的任務目錄表）不該讓整個列表壞掉。
-        spirit_id = progress.quest_id
+    entry = (catalogue or {}).get(progress.quest_id)
+
+    if entry is not None and entry.spirit_id:
+        spirit_id = entry.spirit_id
+    else:
+        try:
+            spirit_id = spirit_id_for_quest(progress.quest_id)
+        except Exception:  # noqa: BLE001
+            # 既不在目錄、也不合命名慣例的 quest_id 不該讓整個列表壞掉。
+            spirit_id = progress.quest_id
 
     return {
         "quest_id": progress.quest_id,
         "spirit_id": spirit_id,
         "status": status,
         "attempts_today": attempts_today,
+        "quest_type": entry.quest_type if entry is not None else "daily",
+        "title": entry.title if entry is not None else None,
+        "intro": entry.intro if entry is not None else None,
+        "steps": list(entry.steps or []) if entry is not None else [],
     }
 
 
@@ -98,7 +112,17 @@ def daily_quests(db: Session, *, player_id, now: datetime | None = None) -> list
         .order_by(QuestProgress.quest_id)
         .all()
     )
-    return [quest_view(row, today=today) for row in rows]
+    if not rows:
+        return []
+
+    # 一次撈完目錄，不要一列一次查詢。daily 型任務不在目錄裡，查不到是正常的。
+    catalogue = {
+        quest.quest_id: quest
+        for quest in db.query(Quest)
+        .filter(Quest.quest_id.in_([row.quest_id for row in rows]))
+        .all()
+    }
+    return [quest_view(row, today=today, catalogue=catalogue) for row in rows]
 
 
 def _resonance_value_for(db: Session, player_id, spirit_id: str) -> int:

@@ -501,6 +501,9 @@ class Quest(Base):
     steps = Column(JSONB, nullable=False, server_default="[]")
     reward_type = Column(Text, nullable=True)  # 'resonance' / 'item'
     reward_value = Column(JSONB, nullable=True)
+    # 玩家逐字讀到的任務說明（0029）。跟 `canned_greetings.response_text` 同一類，
+    # **不經 LLM**。NULL 代表這個任務沒有引言，不是缺資料。
+    intro = Column(Text, nullable=True)
     is_active = Column(Boolean, nullable=False, server_default="true", default=True)
 
     __table_args__ = (
@@ -565,6 +568,36 @@ class DialogueTurn(Base):
         CheckConstraint("role IN ('player', 'spirit')", name="ck_dialogue_turns_role"),
         Index("idx_dialogue_player_spirit_time", "player_id", "spirit_id", "created_at"),
     )
+
+
+class PlayersStoryVariable(Base):
+    """玩家在一條 arc 上的劇情變數（0030）。
+
+    萬華 arc 文件 §7.1 的三個變數——`story_focus`（信件開場看了哪個位置）、
+    `reveal_lens`（剝皮寮揭露時怎麼理解）、`ending_mark`（結局把畫記給誰）——
+    決定個人化年代簿那一頁的措辭。
+
+    ## 主鍵就是 set_once
+
+    `(player_id, arc_id, variable)` 讓一個變數在一條 arc 上只能有一個值。寫入端
+    用 `ON CONFLICT DO NOTHING`，**第一次寫進去的就是最終值**——文件 §2.3 明訂
+    「`story_focus` 由第一個看的位置寫入，之後回看不覆蓋」。那條規則因此由
+    資料庫保證，不是靠呼叫端記得。
+
+    `set_by_beat_id` 只是稽核資訊，判定永遠看 `value` 本身。
+    """
+
+    __tablename__ = "players_story_variables"
+
+    player_id = Column(
+        UUID(as_uuid=True), ForeignKey("players.player_id"), primary_key=True
+    )
+    # 值關聯 → brain.story_arcs，不建跨 schema 外鍵。
+    arc_id = Column(String(64), primary_key=True)
+    variable = Column(String(64), primary_key=True)
+    value = Column(Text, nullable=False)
+    set_by_beat_id = Column(Text, nullable=True)
+    set_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
 class PlayersStoryProgress(Base):

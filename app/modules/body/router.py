@@ -28,6 +28,7 @@ from app.modules.body import (
     inventory,
     quests,
     story_progress,
+    story_script,
     weather,
 )
 from app.modules.body.quests import evaluate_on_summon
@@ -60,7 +61,7 @@ from app.modules.brain.landmark_recognition import (
     VertexAILandmarkRecognizer,
     recognize_landmark,
 )
-from app.modules.brain.models import StoryArc
+from app.modules.brain.models import StoryArc, StoryBeat
 from app.modules.brain.greetings import match_canned_greeting
 from app.modules.brain.loader import load_active_persona
 from app.modules.brain.prompt_builder import build_prompt
@@ -722,7 +723,9 @@ def complete_quest_endpoint(
     檢查 purpose，是兩套憑證本來就換不過來。
     """
     try:
-        spirit_id = quests.spirit_id_for_quest(quest_id)
+        # 目錄表優先：story 任務的 id（`q_...`）不合 `{spirit_id}:daily` 的命名
+        # 慣例，只用慣例反推的話這支端點會把它們全部 404 掉。
+        spirit_id = quests.resolve_spirit_id(db, quest_id)
     except quests.QuestNotFoundError:
         # 亂打的 quest_id 是可預期的輸入，不是伺服器故障。
         raise HTTPException(status_code=404, detail="quest not found")
@@ -826,7 +829,98 @@ def get_story_arc_state(
     except story_progress.ArcNotFoundError:
         raise HTTPException(status_code=404, detail="story arc not found")
 
-    return schemas.StoryArcStateResponse(**state)
+    return schemas.StoryArcStateResponse(
+        **state,
+        variables=story_progress.story_variables(
+            db, player_id=session_player_id, arc_id=arc_id
+        ),
+    )
+
+
+@router.get(
+    "/story-arcs/{arc_id}/beats/{beat_id}/script",
+    response_model=schemas.BeatScriptResponse,
+    responses={
+        **_UNAUTHORIZED,
+        **_ARC_NOT_FOUND,
+        **_forbidden("這個 beat 還沒解鎖——腳本就是劇情內容，不能先看"),
+    },
+)
+def get_beat_script(
+    arc_id: str,
+    beat_id: str,
+    session_player_id: uuid.UUID = Depends(require_session_token),
+    db: Session = Depends(get_db),
+):
+    """
+    一個 beat 的台詞與選項（backend#72）。
+
+    在這支之前，`narrative_directive` 裡的節點與 `brain.story_strings` 裡的文字
+    **沒有任何出口**——客戶端拿得到 `beat_prologue_letter` 這個 id，拿不到它的
+    任何一個字。
+
+    ## 只回傳玩家已經走到的節點
+
+    已完成的 beat 可以重看（玩家本來就讀過了），前置全部滿足的可以讀（他正要
+    走這一段）。其餘一律 403。**腳本就是劇情內容本身**，能任意查等於能先把
+    結局看完——這跟 `arc_state()` 的 `eligible_beat_ids` 刻意不列出未解鎖節點
+    是同一條規則。
+
+    ## 內容不經 LLM
+
+    `story_strings` 是人工撰寫、原樣顯示的成品，跟 `canned_greetings` 同一類。
+    這支端點不呼叫任何腦袋模組。
+    """
+    beat = (
+        db.query(StoryBeat).filter_by(beat_id=beat_id, active=True).first()
+    )
+    if beat is None or beat.arc_id != arc_id:
+        raise HTTPException(status_code=404, detail="story beat not found")
+
+    try:
+        state = story_progress.arc_state(
+            db, player_id=session_player_id, arc_id=arc_id
+        )
+    except story_progress.ArcNotFoundError:
+        raise HTTPException(status_code=404, detail="story arc not found")
+
+    if beat_id not in set(state["completed_beat_ids"]) | set(
+        state["eligible_beat_ids"]
+    ):
+        raise HTTPException(status_code=403, detail="story beat is locked")
+
+    script = story_script.build_script(db, beat)
+    return schemas.BeatScriptResponse(
+        beat_id=script.beat_id,
+        character_id=script.character_id,
+        spirit_id=script.spirit_id,
+        nodes=[
+            schemas.ScriptNodeResponse(
+                type=node.type,
+                speaker=node.speaker,
+                text=node.text,
+                options=[
+                    schemas.ScriptOptionResponse(
+                        option_id=option.option_id,
+                        text=option.text,
+                        sets=option.sets,
+                    )
+                    for option in node.options
+                ],
+                min_viewed_to_proceed=node.min_viewed_to_proceed,
+                exclusive=node.exclusive,
+            )
+            for node in script.nodes
+        ],
+        info_cards=[
+            schemas.InfoCardResponse(
+                card_id=card.card_id,
+                historical_text=card.historical_text,
+                fiction_text=card.fiction_text,
+            )
+            for card in script.info_cards
+        ],
+    )
 
 
 @router.post(
@@ -837,6 +931,7 @@ def get_story_arc_state(
 def advance_story_beat(
     arc_id: str,
     beat_id: str,
+    payload: schemas.BeatAdvanceRequest | None = None,
     session_player_id: uuid.UUID = Depends(require_session_token),
     db: Session = Depends(get_db),
 ):
@@ -855,18 +950,36 @@ def advance_story_beat(
     """
     try:
         result = story_progress.advance_beat(
-            db, player_id=session_player_id, arc_id=arc_id, beat_id=beat_id
+            db,
+            player_id=session_player_id,
+            arc_id=arc_id,
+            beat_id=beat_id,
+            chosen_option_ids=payload.chosen_option_ids if payload else [],
         )
     except story_progress.BeatNotFoundError:
         raise HTTPException(status_code=404, detail="story beat not found")
     except story_progress.BeatNotUnlockedError:
         raise HTTPException(status_code=403, detail="prerequisite beats not completed")
+    except story_progress.RequiredQuestIncompleteError as unfinished:
+        # 這一種是**玩家還有事情要做**，不是走錯順序、也不是資料壞掉。客戶端
+        # 要能據此把玩家導回任務，所以 detail 帶出是哪個任務。
+        raise HTTPException(
+            status_code=403, detail=f"required quest not completed: {unfinished}"
+        )
+    except story_progress.RequiredItemMissingError as missing:
+        # 跟前置未完成分開回報：玩家看到的補救方式不同，而且道具缺漏多半代表
+        # 上一節的發放沒有生效，混在同一個 detail 裡就查不出是哪一種。
+        raise HTTPException(
+            status_code=403, detail=f"required item not held: {missing}"
+        )
 
     return schemas.BeatAdvanceResponse(
         beat_id=result.beat_id,
         already_completed=result.already_completed,
         story_completed=result.story_completed,
         completed_beat_ids=result.completed_beat_ids,
+        granted_item_ids=result.granted_item_ids,
+        set_variables=result.set_variables,
     )
 
 

@@ -421,6 +421,34 @@ class StoryArc(Base):
     # unlike persona and district content, it does not gate activation.
     active = Column(Boolean, nullable=False, server_default="true", default=True)
     reviewed_by = Column(Text, nullable=True)
+    # 每個劇情變數的合法值，例如 `{"story_focus": ["person", "history", "home"]}`
+    # （0030）。寫入端據此驗證客戶端送來的值——沒有它就是送什麼存什麼，而錯字
+    # 要等到結局那一頁措辭不對才會發現。
+    variables = Column(JSONB, nullable=True)
+
+
+class StoryInfoCard(Base):
+    """劇情資訊卡（0030）。
+
+    `show_info_card` 指令指向的東西。在這之前卡片定義**從來沒有進資料庫**——
+    文字早就在 `story_strings` 裡，但指令指向一個查不到的 id。
+
+    ## 史實與虛構分成兩欄
+
+    文件 §1 要求每張卡明確區分「史實可考」與「本作故事」。合成一段文字之後，
+    那條界線就只剩下排版慣例——而它是這個專案對地標的基本承諾之一。
+    """
+
+    __tablename__ = "story_info_cards"
+    __table_args__ = {"schema": "brain"}
+
+    card_id = Column(String(64), primary_key=True)
+    arc_id = Column(String(64), ForeignKey("brain.story_arcs.arc_id"), nullable=True)
+    # 值關聯 → brain.story_strings.text_key。
+    historical_text_key = Column(Text, nullable=True)
+    fiction_text_key = Column(Text, nullable=True)
+    review_status = Column(Text, nullable=True)
+    active = Column(Boolean, nullable=False, server_default="true", default=True)
 
 
 class StoryString(Base):
@@ -474,6 +502,12 @@ class StoryBeat(Base):
     prerequisite_beat_ids = Column(ARRAY(Text), nullable=True)
     # 值關聯 → public.player_inventory.item_id。
     required_item_ids = Column(ARRAY(Text), nullable=True)
+    # 值關聯 → public.quests.quest_id（0028）。推進前必須已完成的任務。
+    #
+    # ⚠️ 三道門都是 TEXT[]，語意刻意一致：前置 beat、必要道具、必要任務。
+    # 跟另外兩欄一樣，Postgres 擋不住懸空的元素——打錯字的 quest_id 會變成
+    # 一個玩家永遠解不開的節點，而且沒有任何症狀。只能由匯入器檢查。
+    required_quest_ids = Column(ARRAY(Text), nullable=True)
     contingency_notes = Column(Text, nullable=True)
     one_time = Column(Boolean, nullable=False, server_default="true", default=True)
     # Story content is active on import for the MVP.  reviewed_by is audit-only;

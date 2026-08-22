@@ -109,6 +109,11 @@ EXPECTED_RESPONSE_CODES = {
     ("post", "/api/v1/story-arcs/{arc_id}/beats/{beat_id}/advance"): {
         "200", "401", "403", "404", "422",
     },
+    # script 的 403 是「這個 beat 還沒解鎖」——腳本就是劇情內容本身，能任意查
+    # 等於能先把結局看完，所以它跟 advance 一樣需要一道門，只是理由不同。
+    ("get", "/api/v1/story-arcs/{arc_id}/beats/{beat_id}/script"): {
+        "200", "401", "403", "404", "422",
+    },
     ("get", "/health"): {"200"},
 }
 

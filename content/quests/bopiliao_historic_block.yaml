@@ -1,0 +1,37 @@
+# 街的線條（q_bopiliao_street_lines）——萬華主線任務
+#
+# ⚠️ **觀察點內容為 MVP 展示用途自行擬定，未經實地勘查。**
+#
+# 文件 §10.3 要求觀察點先寫進正式內容、不要求玩家找不存在的物件。這裡的
+# 三個（或兩個）觀察點是照街區既有的公共特徵擬的，**沒有經過現場核對**，
+# 所以 `review_status` 是 DRAFT。實地勘查（CL#25）之後要逐一核對、改寫或
+# 替換成已審核的示意文案，再把 review_status 改成人名。
+#
+# 匯入：`python -m scripts.import_quests --dry-run`
+
+spirit_id: bopiliao_historic_block
+review_status: DRAFT
+
+quests:
+  - quest_id: q_bopiliao_street_lines
+    title: 街的線條
+    quest_type: story
+    # 完成這個任務之後才推得動的劇情節點（brain.story_beats）。
+    story_beat_id: beat_bopiliao_reveal
+    intro: >-
+      剝皮寮保留了不同年代的街屋。把畫裡的線條和眼前的街對起來。
+    # 可選的景象拍照。**不是完成條件**（文件 §13）——不拍也能交件。
+    optional_photo_evidence: bp_street_facade_photo
+    steps:
+      - step_id: bp_arcade
+        title: 亭仔腳的柱列
+        hint: >-
+          沿著公共騎樓看過去，柱子的間距與高度不是每一根都一樣。
+      - step_id: bp_eaves
+        title: 屋簷的高低
+        hint: >-
+          相鄰兩棟街屋的屋簷不在同一條線上，找出落差最明顯的一處。
+      - step_id: bp_facade_seam
+        title: 立面的拼接
+        hint: >-
+          同一面街上，不同年代立面相接的那道縫。

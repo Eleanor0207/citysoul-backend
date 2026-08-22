@@ -23,10 +23,12 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.modules.body.encounter_tokens import ENCOUNTER_TOKEN_EXPIRE_SECONDS
-from app.modules.body.models import QuestProgress
+from app.modules.body.models import Quest, QuestProgress
 
 # SDD 第7節決策8：所有「每日一次」「隔天重置」統一以 Asia/Taipei 午夜為基準。
 TAIPEI = ZoneInfo("Asia/Taipei")
@@ -85,10 +87,19 @@ def evaluate_on_summon(
     - 跨日時把 `attempts_today` 歸零
     - 上一張憑證過期而任務未完成時，清除 `current_token_issued_at`
     - 任務未完成時，開始／延續一次嘗試（寫入 `current_token_issued_at`）
+    - **開啟這個地標的 story 型任務**（見 `open_story_quests`）
+
+    ## 回傳的仍然是當日任務
+
+    story 型任務不進回傳值：`/summon` 的回應形狀是「這次召喚的當日任務怎麼了」，
+    多塞一個清單進去會讓兩種任務在同一個欄位裡混著。玩家要看 story 任務走
+    `GET /quests/daily`，那支本來就回傳玩家的全部任務。
     """
     now = now or datetime.now(timezone.utc)
     today = taipei_today(now)
     quest_id = quest_id_for_spirit(spirit_id)
+
+    open_story_quests(db, player_id=player_id, spirit_id=spirit_id, today=today)
 
     progress = (
         db.query(QuestProgress).filter_by(player_id=uuid.UUID(str(player_id)), quest_id=quest_id).first()
@@ -115,6 +126,76 @@ def evaluate_on_summon(
 
     db.commit()
     return QuestState(quest_id, progress.status, progress.attempts_today)
+
+
+def open_story_quests(
+    db: Session,
+    *,
+    player_id: uuid.UUID | str,
+    spirit_id: str,
+    today: date,
+) -> list[str]:
+    """替這個地標的 story 型任務開進度列，回傳這次新開的任務 id。
+
+    ## 為什麼在召喚時開，而不是在玩家建立時全部開
+
+    任務要玩家**到過現場**才成立（CONTEXT.md 的「在場」）。一次把九個地標的
+    story 任務都塞進任務列表，玩家打開就看到一整頁還沒去過的地方——那是待辦
+    清單，不是遊戲。
+
+    ## `issued_date` 是 NULL
+
+    story 任務不是每日重置的：它一輩子只完成一次。`quest_progress` 的兩個
+    partial unique index 就是照這個分的——`issued_date IS NULL` 的一次性任務
+    唯一於 `(player_id, quest_id)`（0003）。重複召喚因此不會長出第二列。
+
+    ## 已完成的任務不會被重開
+
+    `on_conflict_do_nothing` 讓這支函式對「玩家已經做完了」是無感的——它只負責
+    「還沒有進度列的話開一列」，不碰既有的狀態。
+    """
+    rows = (
+        db.query(Quest.quest_id)
+        .filter(
+            Quest.spirit_id == spirit_id,
+            Quest.quest_type == "story",
+            Quest.is_active.is_(True),
+        )
+        .order_by(Quest.quest_id)
+        .all()
+    )
+    if not rows:
+        return []
+
+    opened: list[str] = []
+    for (quest_id,) in rows:
+        statement = (
+            pg_insert(QuestProgress)
+            .values(
+                player_id=uuid.UUID(str(player_id)),
+                quest_id=quest_id,
+                issued_date=None,
+                status=STATUS_IN_PROGRESS,
+                progress_value=0,
+                attempts_today=0,
+                attempts_date=today,
+            )
+            # ⚠️ `uq_quest_progress_onetime` 是**部分索引**（`WHERE issued_date
+            # IS NULL`），所以 ON CONFLICT 必須帶同一個條件才推論得到它——少了
+            # `index_where` 會是 InvalidColumnReference，不是安靜地不去重。
+            .on_conflict_do_nothing(
+                index_elements=["player_id", "quest_id"],
+                index_where=text("issued_date IS NULL"),
+            )
+            .returning(QuestProgress.progress_id)
+        )
+        if db.execute(statement).scalar_one_or_none() is not None:
+            opened.append(quest_id)
+
+    if opened:
+        db.commit()
+
+    return opened
 
 
 def _reset_attempts_if_new_day(progress: QuestProgress, *, today: date) -> None:
@@ -168,6 +249,27 @@ def spirit_id_for_quest(quest_id: str) -> str:
         raise QuestNotFoundError(f"無法解析的 quest_id：{quest_id!r}")
 
     return spirit_id
+
+
+def resolve_spirit_id(db: Session, quest_id: str) -> str:
+    """任務屬於哪個地標。先查目錄表，查不到才回頭用命名慣例。
+
+    ⚠️ 兩種 quest_id 的來源不同，**只認其中一種會 404 掉另一種**：
+
+    - `{spirit_id}:daily` —— `quest_id_for_spirit()` 推導的，不進目錄表
+    - `q_longshan_repair_trace` —— 目錄表裡人工撰寫的 story 任務
+
+    `spirit_id_for_quest()` 只認得前者。story 任務的 id 不含 `:daily`，所以
+    在目錄表有資料之後，任何只用命名慣例的呼叫端都會把它當成「查無此任務」。
+    """
+    row = (
+        db.query(Quest.spirit_id)
+        .filter(Quest.quest_id == quest_id, Quest.is_active.is_(True))
+        .first()
+    )
+    if row is not None and row[0]:
+        return row[0]
+    return spirit_id_for_quest(quest_id)
 
 
 def complete_on_dialogue(

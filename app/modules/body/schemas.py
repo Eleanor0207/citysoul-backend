@@ -368,6 +368,13 @@ class QuestCompleteResponse(BaseModel):
     newly_unlocked_stages: list[int] = Field(default_factory=list)
 
 
+class CompletedBeatResponse(BaseModel):
+    """一個已完成的 beat 與它的完成時間。"""
+
+    beat_id: str
+    completed_at: datetime
+
+
 class StoryArcStateResponse(BaseModel):
     """
     `GET /api/v1/story-arcs/{arcId}/state` 的回應（backend#72）。
@@ -381,8 +388,30 @@ class StoryArcStateResponse(BaseModel):
 
     arc_id: str
     completed_beat_ids: list[str] = Field(default_factory=list)
+    # 每個已完成 beat 的完成時間（`players_story_progress.triggered_at`）。
+    #
+    # 同一個 beat 只能記一次（主鍵 `(player_id, beat_id)`），所以那個時間就是
+    # 完成時間。終點 beat 的時間＝玩家走完這條主線的時間。
+    completed_beats: list[CompletedBeatResponse] = Field(default_factory=list)
+    # 玩家在這條 arc 上已經定下來的劇情變數（`story_focus` 等）。決定結局那一頁
+    # 的措辭；一旦寫入就不會再變。
+    variables: dict[str, str] = Field(default_factory=dict)
     eligible_beat_ids: list[str] = Field(default_factory=list)
     story_completed: bool = False
+
+
+class BeatAdvanceRequest(BaseModel):
+    """
+    `POST /api/v1/story-arcs/{arcId}/beats/{beatId}/advance` 的請求（backend#72）。
+
+    `chosen_option_ids` 是玩家在這個節點看／選了哪些選項。後端**只認這個 beat
+    自己節點裡的 id**，客戶端送別的東西會被忽略——變數的值來自內容，不是來自
+    請求，否則玩家可以自己指定結局。
+
+    整個 body 可以省略：多數 beat 沒有選項。
+    """
+
+    chosen_option_ids: list[str] = Field(default_factory=list)
 
 
 class BeatAdvanceResponse(BaseModel):
@@ -392,6 +421,74 @@ class BeatAdvanceResponse(BaseModel):
     already_completed: bool
     story_completed: bool
     completed_beat_ids: list[str] = Field(default_factory=list)
+    # 這次推進發出去的道具。**重複提交時是空的**——道具只發一次，所以客戶端
+    # 不能靠這個欄位判斷「玩家現在有什麼」，那要問 `GET /inventory`。
+    granted_item_ids: list[str] = Field(default_factory=list)
+    # 這次寫進去的劇情變數。**set_once**——已經有值時是空的，那不是錯誤。
+    set_variables: dict[str, str] = Field(default_factory=dict)
+
+
+class ScriptOptionResponse(BaseModel):
+    """一個觀察點／選項（backend#72）。"""
+
+    option_id: str
+    # 人工撰寫、**原樣顯示**的文字，不經 LLM（來自 `brain.story_strings`）。
+    text: str
+    # 選這個會寫進哪個劇情變數，例如 `{"story_focus": "person"}`。
+    #
+    # 推進這個 beat 時，把選到的 `option_id` 放進 advance 的請求，後端就會
+    # 依這裡的對應寫進 `players_story_variables`（0030）。**set_once**：一條
+    # arc 上同一個變數只寫得進去一次，之後回看不覆蓋（文件 §2.3）。
+    sets: dict[str, str] = Field(default_factory=dict)
+
+
+class ScriptNodeResponse(BaseModel):
+    """一個劇情節點。`type` 是 `line`（台詞）或 `choice`（一組選項）。"""
+
+    type: Literal["line", "choice"]
+    # line 專用。`speaker` 可能是「年代簿」「信」這種非角色的敘事者。
+    speaker: str | None = None
+    text: str | None = None
+    # choice 專用。
+    options: list[ScriptOptionResponse] = Field(default_factory=list)
+    # 看過幾個選項才能繼續（文件 §2.3：不強制看完）。
+    min_viewed_to_proceed: int = 1
+    # False 代表可以多選、已看過的仍可回看。
+    exclusive: bool = False
+
+
+class InfoCardResponse(BaseModel):
+    """一張劇情資訊卡（backend#72／0030）。
+
+    ⚠️ **史實與虛構是兩個欄位，客戶端不該把它們接成一段。** 文件 §1 要求每張卡
+    明確區分「史實可考」與「本作故事」——那是這個專案對地標的基本承諾，不是
+    排版偏好。
+    """
+
+    card_id: str
+    historical_text: str | None = None
+    fiction_text: str | None = None
+
+
+class BeatScriptResponse(BaseModel):
+    """
+    `GET /api/v1/story-arcs/{arcId}/beats/{beatId}/script` 的回應（backend#72）。
+
+    ⚠️ **只回傳玩家已經走到的節點**（已完成，或前置全部滿足）。還鎖著的 beat
+    回 403——腳本就是劇情內容本身，能查等於能先看完結局。這跟
+    `StoryArcStateResponse.eligible_beat_ids` 不洩漏未解鎖節點是同一條規則。
+
+    `nodes` 是空陣列時代表這個 beat 沒有台詞（例如只發道具的節點），**不是
+    錯誤**。
+    """
+
+    beat_id: str
+    # 腦袋那邊的角色身分；沒有角色的節點（序章、結局）是 null。
+    character_id: str | None = None
+    # 哪一個召喚點在說話。客戶端要的是這個，不是 `character_id`。
+    spirit_id: str | None = None
+    nodes: list[ScriptNodeResponse] = Field(default_factory=list)
+    info_cards: list[InfoCardResponse] = Field(default_factory=list)
 
 
 class DailyEventResponse(BaseModel):
@@ -448,6 +545,13 @@ class QuestListItem(BaseModel):
     spirit_id: str
     status: QuestStatus
     attempts_today: int
+    # 'daily' 是推導出來的任務，沒有目錄資料；'story' 是有人寫過內容的主線任務。
+    quest_type: str = "daily"
+    # 以下三個只有目錄裡的任務才有。daily 型任務是 None／空陣列，**不是缺資料**
+    # ——它沒有可編輯的內容，標題由客戶端自己決定怎麼稱呼。
+    title: str | None = None
+    intro: str | None = None
+    steps: list[dict] = Field(default_factory=list)
 
 
 class QuestsDailyResponse(BaseModel):
