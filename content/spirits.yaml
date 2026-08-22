@@ -60,12 +60,20 @@ spirits:
     latitude: 25.037398
     longitude: 121.499732
 
-  # 召喚點 key 是 ximen_red_house（在 wanhua 那份近景文件裡）。舊值 25.042100 / 121.506800，差 52 m。
+  # ⚠️ 2026-08-22：改回 25.042100 / 121.506800，**推翻**先前依 wanhua 近景文件
+  # 做的那次校正（曾改成 25.042138 / 121.506282，兩者差 52 m）。
+  #
+  # 理由：這個點就在**紅樓大門**。召喚半徑只有 50 m，而 52 m 的偏移足以讓一個
+  # 站在大門口的玩家召喚不到——那是這條主線第二站的入口。近景文件的召喚點是
+  # 從圖面推的，這一個是實際的門口位置，以後者為準。
+  #
+  # 要再改之前先確認新座標到大門的距離小於 50 m，否則就是把同一個問題換個方向
+  # 再犯一次。
   - spirit_id: ximen_red_house
     display_name: 西門紅樓
     character_id: red_house_collector
-    latitude: 25.042138
-    longitude: 121.506282
+    latitude: 25.042100
+    longitude: 121.506800
 
   # 召喚點 key 是 bopiliao，跟 spirit_id 不同名。舊值 25.036900 / 121.499300，差 299 m。
   - spirit_id: bopiliao_historic_block
