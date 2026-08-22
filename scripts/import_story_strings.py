@@ -39,6 +39,71 @@ _PROLOGUE_LOOKS = {
     "信紙的摺痕": "wanhua.prologue.look.crease",
     "畫面一角": "wanhua.prologue.look.corner",
 }
+# 選項**標籤**（玩家選之前看到的字），來自 §11.1 的 `[可看的位置]` 區塊。
+#
+# ⚠️ 標籤與敘述是兩件事：`wanhua.prologue.look.figure` 是看了之後年代簿說的話，
+# `.label` 才是清單上那一行。先前只抽敘述，客戶端因此把答案當成選項畫出來——
+# 三處的內容在玩家選擇之前就全部攤開，「看向哪裡」這個動作失去意義。
+_PROLOGUE_LOOK_LABELS = {
+    "她的側影": "wanhua.prologue.look.figure.label",
+    "信紙的摺痕": "wanhua.prologue.look.crease.label",
+    "畫面一角": "wanhua.prologue.look.corner.label",
+}
+
+# 終章三個結局標記。左邊是玩家選項的字面，右邊是 (標籤 key, 回應 key)。
+_FINALE_MARKS = {
+    "給那條街。": (
+        "wanhua.finale.mark.street.label",
+        "wanhua.finale.mark.street",
+    ),
+    "給那些沒有留下名字的人。": (
+        "wanhua.finale.mark.people.label",
+        "wanhua.finale.mark.people",
+    ),
+    "給還在找回家路的人。": (
+        "wanhua.finale.mark.home.label",
+        "wanhua.finale.mark.home",
+    ),
+}
+
+# §11.2／§11.3／§11.4 三章的設定。
+#
+# 三章結構相同：一段 ```text 開場、一組 `[玩家選項]` 標籤、一張「選項｜回應」
+# 表格。所以抽取用通用函式，這裡只放各章不一樣的部分。
+#
+# `options` 依**表格出現的順序**對應 id，跟 §12 的 options 順序一致。順序錯開
+# 的話台詞會接到別的選項上，而且不會有任何錯誤——只有玩家會發現靈魂答非所問。
+_CHAPTERS = (
+    {
+        "section": ("### 11.2", "### 11.3"),
+        "prefix": "wanhua.longshan",
+        "speaker": "龍山寺",
+        "gate_options": ("ask_letter", "ask_person", "ask_place"),
+        # 線索對話：開場、依 story_focus 的補句、收尾。
+        "clue_conditions": (
+            ("story_focus=person", "clue.focus.person"),
+            ("story_focus=history", "clue.focus.history"),
+            ("story_focus=home", "clue.focus.home"),
+        ),
+    },
+    {
+        "section": ("### 11.3", "### 11.4"),
+        "prefix": "wanhua.redhouse",
+        "speaker": "紅樓",
+        "gate_options": ("ask_why", "ask_where", "ask_past"),
+        # 中間那段不是紅樓說的，是畫背面的殘字。
+        "clue_fragment_speaker": "畫背殘句",
+    },
+    {
+        "section": ("### 11.4", "### 11.5"),
+        "prefix": "wanhua.bopiliao",
+        "speaker": "剝皮寮",
+        "gate_options": ("ask_portrait", "ask_return", "ask_street"),
+        # 揭露對話自己也有一組選項，寫入 reveal_lens。
+        "reveal_options": ("lens_place", "lens_return", "lens_memory"),
+    },
+)
+
 _CARD_SECTIONS = {
     "4": ("wanhua.card.longshan.historical", "wanhua.card.longshan.fiction"),
     "5": ("wanhua.card.redhouse.historical", "wanhua.card.redhouse.fiction"),
@@ -112,6 +177,195 @@ def _extract_prologue_looks(raw: str) -> dict[str, str]:
     return result
 
 
+def _extract_prologue_look_labels(raw: str) -> dict[str, str]:
+    """`[可看的位置]` 那三行——玩家在選之前看到的字。"""
+
+    section = _section(raw, "### 11.1", "### 11.2")
+    result: dict[str, str] = {}
+    for label, text_key in _PROLOGUE_LOOK_LABELS.items():
+        if not re.search(r"(?m)^\u00b7\s*" + re.escape(label) + r"\s*$", section):
+            raise StoryStringImportError(
+                f"story source is missing the §11.1 look-point label for {text_key}"
+            )
+        result[text_key] = label
+    return result
+
+
+def _narrator_blocks(section: str, speaker: str) -> list[str]:
+    """一節裡所有 ```text 圍籬中，指定說話者說的每一段。
+
+    ⚠️ **一個圍籬可以有好幾個說話者。** §11.3 的線索對話就是三段放在同一個
+    圍籬裡（紅樓 → 畫背殘句 → 紅樓）。早期版本假設「一個圍籬 ＝ 一個說話者」，
+    會把整個圍籬當成第一段的內容——而且不報錯，只是台詞黏在一起。
+    """
+
+    blocks: list[str] = []
+    for fence in re.findall(r"(?ms)```text\s*\n(?P<body>.*?)\n```", section):
+        current: str | None = None
+        buffer: list[str] = []
+
+        def flush() -> None:
+            if current == speaker and buffer:
+                blocks.append("\n".join(buffer))
+
+        for line in fence.splitlines():
+            stripped = line.strip()
+            header = re.fullmatch(r"\[(?P<name>[^\]]+)\]", stripped)
+            if header:
+                flush()
+                current = header.group("name")
+                buffer = []
+                continue
+            if stripped:
+                buffer.append(stripped)
+        flush()
+    return blocks
+
+
+def _extract_prologue_merge(raw: str) -> str:
+    """§11.1 的「匯流文字」——看過一處之後收束的那一句。
+
+    先前是 `jump: prologue_merge`，而 prologue_merge 從來沒有被寫成節點；
+    文字倒是一直都在這裡。
+    """
+
+    section = _section(raw, "### 11.1", "### 11.2")
+    blocks = _narrator_blocks(section, "系統／年代簿")
+    if len(blocks) < 2:
+        raise StoryStringImportError("story source is missing the §11.1 匯流文字")
+    return blocks[-1]
+
+
+def _extract_finale(raw: str) -> dict[str, str]:
+    """§11.5 終章：開場、三個結局標記的標籤與回應、收尾。
+
+    這一整節的文字早就寫好了，但從來沒有進 §12 的 `beats:` 資料——結局因此是
+    一個沒有任何台詞、也不可能寫入 ending_mark 的空節點。
+    """
+
+    section = _section(raw, "### 11.5", "## 12.")
+    blocks = _narrator_blocks(section, "年代簿")
+    if len(blocks) != 2:
+        raise StoryStringImportError(
+            "story source's §11.5 should have exactly two [年代簿] blocks, "
+            f"found {len(blocks)}"
+        )
+
+    result = {
+        "wanhua.finale.open": blocks[0],
+        "wanhua.finale.close": blocks[1],
+    }
+
+    for choice, (label_key, reply_key) in _FINALE_MARKS.items():
+        match = re.search(
+            r"(?m)^\|\s*" + re.escape(choice) + r"\s*\|\s*(?P<reply>[^|]+?)\s*\|",
+            section,
+        )
+        if not match:
+            raise StoryStringImportError(
+                f"story source is missing the §11.5 ending reply for {reply_key}"
+            )
+        result[label_key] = choice
+        result[reply_key] = match.group("reply").strip()
+    return result
+
+
+def _option_labels(section: str) -> list[str]:
+    """`[玩家選項]` 區塊裡的編號清單，依出現順序。"""
+
+    match = re.search(r"(?ms)^\[玩家選項\]\s*\n(?P<body>(?:\d+\..*\n?)+)", section)
+    if not match:
+        raise StoryStringImportError("chapter is missing its [玩家選項] block")
+    return [
+        line.split(".", 1)[1].strip()
+        for line in match.group("body").splitlines()
+        if line.strip() and "." in line
+    ]
+
+
+def _table_reply(section: str, label: str) -> str:
+    """「選項｜回應｜…」表格裡，該選項那一列的回應欄。"""
+
+    match = re.search(
+        r"(?m)^\|\s*" + re.escape(label) + r"\s*\|\s*(?P<reply>[^|]+?)\s*\|",
+        section,
+    )
+    if not match:
+        raise StoryStringImportError(f"chapter is missing the reply for {label!r}")
+    return match.group("reply").strip()
+
+
+def _chapter_texts(raw: str, chapter: dict) -> dict[str, str]:
+    """一章的所有台詞：初次對話、線索對話，含選項標籤與回應。"""
+
+    section = _section(raw, *chapter["section"])
+    prefix = chapter["prefix"]
+    speaker_blocks = _narrator_blocks(section, chapter["speaker"])
+    if len(speaker_blocks) < 2:
+        raise StoryStringImportError(
+            f"{prefix}: expected at least two [{chapter['speaker']}] blocks, "
+            f"found {len(speaker_blocks)}"
+        )
+
+    result = {
+        f"{prefix}.gate.open": speaker_blocks[0],
+        f"{prefix}.clue.open": speaker_blocks[1],
+    }
+
+    labels = _option_labels(section)
+    gate_ids = chapter["gate_options"]
+    reveal_ids = chapter.get("reveal_options") or ()
+    expected = len(gate_ids) + len(reveal_ids)
+    if len(labels) != expected:
+        raise StoryStringImportError(
+            f"{prefix}: expected {expected} player options, found {len(labels)}"
+        )
+
+    for option_id, label in zip(gate_ids, labels[: len(gate_ids)]):
+        result[f"{prefix}.gate.{option_id}.label"] = label
+        result[f"{prefix}.gate.{option_id}"] = _table_reply(section, label)
+
+    for option_id, label in zip(reveal_ids, labels[len(gate_ids):]):
+        result[f"{prefix}.reveal.{option_id}.label"] = label
+        result[f"{prefix}.reveal.{option_id}"] = _table_reply(section, label)
+
+    if reveal_ids:
+        # 揭露章的第二個區塊就是揭露開場，沒有另外的收尾。
+        result[f"{prefix}.reveal.open"] = result.pop(f"{prefix}.clue.open")
+
+    for condition, suffix in chapter.get("clue_conditions") or ():
+        variable, _, value = condition.partition("=")
+        match = re.search(
+            r"(?m)^\|\s*`" + re.escape(variable) + r"=" + re.escape(value)
+            + r"`\s*\|\s*(?P<text>[^|]+?)\s*\|",
+            section,
+        )
+        if not match:
+            raise StoryStringImportError(
+                f"{prefix}: missing the conditional line for {condition}"
+            )
+        result[f"{prefix}.{suffix}"] = match.group("text").strip()
+
+    fragment_speaker = chapter.get("clue_fragment_speaker")
+    if fragment_speaker:
+        fragments = _narrator_blocks(section, fragment_speaker)
+        if not fragments:
+            raise StoryStringImportError(
+                f"{prefix}: missing the [{fragment_speaker}] block"
+            )
+        result[f"{prefix}.clue.fragment"] = fragments[0]
+
+    # 線索對話的收尾：說話者的第三個區塊（揭露章沒有）。
+    if not reveal_ids:
+        if len(speaker_blocks) < 3:
+            raise StoryStringImportError(
+                f"{prefix}: missing the closing [{chapter['speaker']}] block"
+            )
+        result[f"{prefix}.clue.close"] = speaker_blocks[2]
+
+    return result
+
+
 def _extract_card_texts(raw: str) -> dict[str, str]:
     result: dict[str, str] = {}
     for section_number, keys in _CARD_SECTIONS.items():
@@ -135,6 +389,11 @@ def parse_story_strings(raw: str) -> tuple[dict[str, str], str]:
         "wanhua.prologue.letter_body": _extract_prologue_letter_body(raw),
     }
     texts.update(_extract_prologue_looks(raw))
+    texts.update(_extract_prologue_look_labels(raw))
+    texts["wanhua.prologue.merge"] = _extract_prologue_merge(raw)
+    texts.update(_extract_finale(raw))
+    for chapter in _CHAPTERS:
+        texts.update(_chapter_texts(raw, chapter))
     texts.update(_extract_card_texts(raw))
     return texts, intro_title
 
@@ -149,8 +408,17 @@ def collect_text_key_references(
     def visit(value: Any) -> None:
         if isinstance(value, Mapping):
             for key, child in value.items():
-                if key == "text_key" and isinstance(child, str):
+                # `label_text_key` 是選項標籤（玩家選之前看到的字），跟
+                # `text_key`（選之後的敘述）一樣是真的被引用的字串。漏掉它的話
+                # 孤兒檢查會把所有標籤判成沒人用而整批拒收。
+                if key in {"text_key", "label_text_key"} and isinstance(child, str):
                     references.add(child)
+                # conditional_line 的 cases：值就是 text_key，鍵是變數的值
+                # （person／history／home）。漏掉的話那三句補句會被判成孤兒。
+                elif key == "cases" and isinstance(child, Mapping):
+                    references.update(
+                        value for value in child.values() if isinstance(value, str)
+                    )
                 else:
                     visit(child)
         elif isinstance(value, list):

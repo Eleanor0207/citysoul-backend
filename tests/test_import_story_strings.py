@@ -9,7 +9,17 @@ import pytest
 from scripts import import_story_strings
 
 
-def test_source_seed_has_the_eleven_referenced_keys() -> None:
+def test_source_seed_keys_all_have_a_reference() -> None:
+    """每一條字串都被 beats 引用，每一個引用也都有字串。
+
+    2026-08-22：11 → 23 → 59。三批：
+
+    1. 選項**標籤**（`.label`）——玩家選之前看到的字。先前只有敘述，客戶端
+       因此把答案當成選項畫出來，三個答案在選擇之前就攤開
+    2. 序章匯流句與終章全部（§11.5 的文字早就寫好，從來沒進 beats:）
+    3. §11.2／§11.3／§11.4 三章的初次對話與線索對話，含依 story_focus 變化的
+       補句與寫入 reveal_lens 的三個選項
+    """
     raw = import_story_strings.DEFAULT_STORY_FILE.read_text(encoding="utf-8")
     texts, title = import_story_strings.parse_story_strings(raw)
 
@@ -17,9 +27,31 @@ def test_source_seed_has_the_eleven_referenced_keys() -> None:
         import_story_strings.DEFAULT_STORY_FILE
     )
     assert import_story_strings.collect_text_key_references(document) == set(texts)
-    assert len(texts) == 11
+    assert len(texts) == 59
     assert title == "留給街的信"
     assert texts["wanhua.prologue.look.figure"].startswith("水痕帶走了臉")
+    # 標籤與敘述是兩件事，不能對調。
+    assert texts["wanhua.prologue.look.figure.label"] == "她的側影"
+    # 終章三個結局標記都要有標籤與回應。
+    for mark in ("street", "people", "home"):
+        assert texts[f"wanhua.finale.mark.{mark}.label"]
+        assert texts[f"wanhua.finale.mark.{mark}"]
+    assert texts["wanhua.finale.open"].startswith("這封信仍然沒有署名")
+
+    # 三章的初次對話與線索對話。
+    for prefix in ("longshan", "redhouse", "bopiliao"):
+        assert texts[f"wanhua.{prefix}.gate.open"]
+    # story_focus 的三句補句——序章那個選擇第一次真的產生差異。
+    for focus in ("person", "history", "home"):
+        assert texts[f"wanhua.longshan.clue.focus.{focus}"]
+    # reveal_lens 的三個選項。
+    for lens in ("place", "return", "memory"):
+        assert texts[f"wanhua.bopiliao.reveal.lens_{lens}.label"]
+
+    # 史實：地震、古地名，都是地標自己的歷史，不與阿明相連（§1.1）。
+    assert "一八一五" in texts["wanhua.longshan.gate.ask_place"]
+    assert "土炭市" in texts["wanhua.bopiliao.gate.ask_street"]
+    assert "新起街市場" in texts["wanhua.redhouse.gate.ask_past"]
     # 信件全文，不是年代簿旁白——見附錄 C。
     assert texts["wanhua.prologue.letter_body"].startswith("我畫了她很多次")
 
