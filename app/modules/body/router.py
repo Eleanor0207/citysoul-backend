@@ -889,7 +889,13 @@ def get_beat_script(
     ):
         raise HTTPException(status_code=403, detail="story beat is locked")
 
-    script = story_script.build_script(db, beat)
+    script = story_script.build_script(
+        db,
+        beat,
+        variables=story_progress.story_variables(
+            db, player_id=session_player_id, arc_id=arc_id
+        ),
+    )
     return schemas.BeatScriptResponse(
         beat_id=script.beat_id,
         character_id=script.character_id,
@@ -903,6 +909,7 @@ def get_beat_script(
                     schemas.ScriptOptionResponse(
                         option_id=option.option_id,
                         text=option.text,
+                        reply=option.reply,
                         sets=option.sets,
                     )
                     for option in node.options

@@ -954,6 +954,17 @@
             "title": "Option Id",
             "type": "string"
           },
+          "reply": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reply"
+          },
           "sets": {
             "additionalProperties": {
               "type": "string"

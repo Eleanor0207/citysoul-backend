@@ -56,11 +56,20 @@ def test_the_real_prologue_resolves_to_readable_text(db_session, client, player)
     lines = [node for node in script.nodes if node.type == "line"]
     choices = [node for node in script.nodes if node.type == "choice"]
 
-    # 兩句台詞（年代簿的場景描述 ＋ 信的內文），一組三個觀察點。
-    assert [line.speaker for line in lines] == ["年代簿", "信"]
+    # 兩句台詞（年代簿的場景描述 ＋ 信的內文）、一組三個觀察點，最後一句匯流。
+    assert [line.speaker for line in lines] == ["年代簿", "信", "年代簿"]
     assert all(line.text for line in lines)
     assert len(choices) == 1
     assert len(choices[0].options) == 3
+
+    # ⚠️ 標籤是「她的側影」這種短句，不是敘述本身。搞混的話三個答案在玩家
+    # 選擇之前就全部攤開（2026-08-22 修正）。
+    assert sorted(option.text for option in choices[0].options) == [
+        "信紙的摺痕", "她的側影", "畫面一角",
+    ]
+    # 敘述變成選之後的回應。
+    for option in choices[0].options:
+        assert option.reply and len(option.reply) > len(option.text)
 
     # 三個觀察點各自寫進不同的 story_focus——那是結局分歧的來源。
     assert sorted(

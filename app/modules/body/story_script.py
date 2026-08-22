@@ -51,7 +51,11 @@ class ScriptOption:
     """一個觀察點／選項。"""
 
     option_id: str
+    # 玩家**選之前**看到的字（`[可看的位置]` 那一行）。
     text: str
+    # 選之後年代簿說的話。None 代表這個選項沒有回應——舊資料只有一段文字時
+    # 會落到這裡，見 build_script()。
+    reply: str | None = None
     # 選這個會寫進哪個劇情變數，例如 `{"story_focus": "person"}`。
     #
     # ⚠️ 目前**沒有任何地方記錄玩家選了什麼**——那是另一件事（story_focus /
@@ -127,14 +131,28 @@ def _collect_keys(nodes: list) -> set[str]:
             continue
         if node.get("text_key"):
             keys.add(node["text_key"])
+        for value in (node.get("cases") or {}).values():
+            if isinstance(value, str):
+                keys.add(value)
         for option in node.get("options") or []:
-            if isinstance(option, dict) and option.get("text_key"):
-                keys.add(option["text_key"])
+            if not isinstance(option, dict):
+                continue
+            for field in ("text_key", "label_text_key"):
+                if option.get(field):
+                    keys.add(option[field])
     return keys
 
 
-def build_script(db: Session, beat: StoryBeat) -> BeatScript:
-    """把一個 beat 解析成可播放的腳本。"""
+def build_script(
+    db: Session, beat: StoryBeat, variables: dict | None = None
+) -> BeatScript:
+    """把一個 beat 解析成可播放的腳本。
+
+    `variables` 是這個玩家在這條 arc 上已經定下來的劇情變數，用來挑
+    `conditional_line` 要說哪一句。省略時那種節點一律跳過——純解析內容的
+    呼叫端（例如測試與匯入驗證）不必先有一個玩家。
+    """
+    variables = variables or {}
     directive = _directive(beat)
     raw_nodes = [n for n in (directive.get("nodes") or []) if isinstance(n, dict)]
     texts = _strings(db, _collect_keys(raw_nodes))
@@ -165,14 +183,34 @@ def build_script(db: Session, beat: StoryBeat) -> BeatScript:
                 if not isinstance(raw_option, dict):
                     incomplete = True
                     continue
-                text = texts.get(raw_option.get("text_key") or "")
-                if text is None:
-                    incomplete = True
-                    break
+                # ⚠️ 標籤與回應是兩件事：label_text_key 是玩家**選之前**看到的
+                # 字，text_key 是**選之後**的敘述。只送 text_key 的話，客戶端會
+                # 把敘述當成選項畫出來——三個答案在選擇之前就全部攤開，「選哪
+                # 一個」這個動作完全失去意義。
+                #
+                # 沒有 label_text_key 的舊資料退回單段文字（text 是它，沒有
+                # 回應），這樣既有的 beat 不會因為這次擴充而消失。
+                label_key = raw_option.get("label_text_key")
+                reply_key = raw_option.get("text_key")
+
+                if label_key:
+                    label = texts.get(label_key)
+                    reply = texts.get(reply_key or "")
+                    if label is None or (reply_key and reply is None):
+                        incomplete = True
+                        break
+                else:
+                    label = texts.get(reply_key or "")
+                    reply = None
+                    if label is None:
+                        incomplete = True
+                        break
+
                 options.append(
                     ScriptOption(
                         option_id=raw_option.get("id") or "",
-                        text=text,
+                        text=label,
+                        reply=reply,
                         sets=dict(raw_option.get("set_once") or {}),
                     )
                 )
@@ -191,6 +229,26 @@ def build_script(db: Session, beat: StoryBeat) -> BeatScript:
                     min_viewed_to_proceed=raw.get("min_viewed_to_proceed", 1),
                     exclusive=bool(raw.get("exclusive", False)),
                 )
+            )
+            continue
+
+        if node_type == "conditional_line":
+            # 依玩家的劇情變數挑一句。變數還沒有值（例如序章一處都沒看就
+            # 往下走）時**整個節點跳過**——不硬選一句，也不給空白台詞。
+            variable = raw.get("variable")
+            chosen = variables.get(variable)
+            text_key = (raw.get("cases") or {}).get(chosen)
+            if not text_key:
+                continue
+            text = texts.get(text_key)
+            if text is None:
+                logger.warning(
+                    "beat %s: conditional_line 的 text_key %r 查不到",
+                    beat.beat_id, text_key,
+                )
+                continue
+            nodes.append(
+                ScriptNode(type="line", speaker=raw.get("speaker"), text=text)
             )
             continue
 

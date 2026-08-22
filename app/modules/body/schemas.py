@@ -432,8 +432,13 @@ class ScriptOptionResponse(BaseModel):
     """一個觀察點／選項（backend#72）。"""
 
     option_id: str
-    # 人工撰寫、**原樣顯示**的文字，不經 LLM（來自 `brain.story_strings`）。
+    # 玩家**選之前**看到的字，例如「她的側影」。人工撰寫、原樣顯示，不經 LLM。
     text: str
+    # 選之後年代簿說的話。null 代表這個選項沒有回應。
+    #
+    # ⚠️ 客戶端**不要**在選單上顯示 reply——那是選擇的結果，先攤開來就等於
+    # 把三個答案都給了玩家，「看向哪裡」這個動作會失去意義。
+    reply: str | None = None
     # 選這個會寫進哪個劇情變數，例如 `{"story_focus": "person"}`。
     #
     # 推進這個 beat 時，把選到的 `option_id` 放進 advance 的請求，後端就會
