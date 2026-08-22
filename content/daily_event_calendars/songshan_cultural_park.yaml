@@ -1,0 +1,12 @@
+# 松山文創園區 的節慶日曆與官方活動（backend#71／SDD §20.1）。
+#
+# 這份檔案的內容會進 `brain.daily_event_calendars`，是 B9 當日情境的輸入之一。
+# 匯入：`python -m scripts.import_daily_event_calendars --dry-run`
+#
+# 空的 events 是正常狀態——多數地標多數時候沒有活動，當日情境會走輪播池。
+# 寫法見 `_template.yaml.example`。
+
+place_id: songshan_cultural_park
+reviewed_by: Jessie_Lee
+
+events: []

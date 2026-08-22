@@ -1,0 +1,64 @@
+# 節慶日曆與官方活動的寫法（backend#71）。
+#
+# ⚠️ 副檔名是 .example，所以匯入器的 *.yaml 掃描抓不到這一份。要新增地標時
+# 複製它、改名成 <spirit_id>.yaml。
+#
+# `place_id` 必須跟 `content/spirits.yaml` 的 **`spirit_id`** 一致（那份檔案沒有
+# 叫 `place_id` 的欄位，兩邊是同一組字串、不同欄位名）。打錯字不會報錯——那則
+# 活動只會掛到一個不存在的地標上，然後永遠不會被讀到。
+
+place_id: longshan_temple
+reviewed_by: Jessie_Lee
+
+events:
+  # ── 一次性活動：Demo、封測、特展 ────────────────────────────────
+  # 填 start_date / end_date（YYYY-MM-DD）。最常用的就是這種。
+  - title: 封測體驗場
+    start_date: 2026-08-29
+    end_date: 2026-08-31
+
+  # 只有一天的活動：start_date 與 end_date 填同一天。
+  - title: 成果發表 Demo
+    start_date: 2026-08-31
+    end_date: 2026-08-31
+
+  # ── 每年重複的國曆節日 ──────────────────────────────────────────
+  # event_type 填 festival。日期用 "MM-DD"，不帶年份。
+  - title: 行憲紀念日
+    event_type: festival
+    gregorian:
+      start: "12-25"
+      end: "12-25"
+
+  # ── 每年重複的農曆節日 ──────────────────────────────────────────
+  - title: 中秋節
+    event_type: festival
+    lunar:
+      start: "08-15"
+      end: "08-15"
+
+  # 跨好幾天的農曆節日：end 填最後一天。
+  - title: 農曆春節
+    event_type: festival
+    lunar:
+      start: "01-01"
+      end: "01-05"
+
+  # ── 農曆某月的最後一天（除夕那種，日期每年不同）────────────────
+  # 填農曆月份數字即可，匯入器會處理大小月。
+  - title: 除夕
+    event_type: festival
+    lunar_month_end: 12
+
+# ## 幾條規則
+#
+# - **event_type 預設是 `official_event`**，所以辦活動時不用填。節慶才要寫
+#   `event_type: festival`。兩者在 B9 的 prompt 裡的位置不同。
+# - **日期規則四選一**：`start_date`/`end_date`、`gregorian`、`lunar`、
+#   `lunar_month_end`。同一則裡填兩種會被擋下來。
+# - **重跑不會長出重複**。去重的鍵是「地標 ＋ event_type ＋ title ＋ 日期規則的
+#   起點」，所以改結束日期會就地更新，改標題則會被當成另一則。
+# - **刪掉一則要用 `--prune`**。從檔案裡移除只會讓它不再被更新，不會自動刪除
+#   資料庫裡那一列——這跟輪播池的 `--prune` 是同一個理由。
+# - **抓取器寫的列不受影響**。排程抓來的公告 `reviewed_by` 是 `official_feed`，
+#   這支腳本連 `--prune` 都不會碰它們。
