@@ -168,6 +168,30 @@ def _extract_prologue_letter_body(raw: str) -> str:
     return "\n".join(lines)
 
 
+def _extract_painting_body(raw: str) -> str:
+    """The §2.2 description of 〈回家的畫〉 — the text shown for the item itself.
+
+    Item bodies are not spoken lines: nothing in `beats:` references this key,
+    and adding a node for it would insert a paragraph into the played script
+    that no one wrote as dialogue.  See `_ITEM_BODY_KEYS`.
+    """
+
+    section = _section(raw, "### 2.2", "### 2.3")
+    paragraphs = [
+        block.strip()
+        for block in re.split(r"\n\s*\n", section)
+        if block.strip() and not block.strip().startswith("#")
+    ]
+    if not paragraphs:
+        raise StoryStringImportError(
+            "story source is missing the §2.2 painting description"
+        )
+
+    # 去掉 Markdown 的粗體記號。這段文字的讀者是背包畫面，不是 Markdown
+    # 算繪器——原樣送出去玩家看到的會是「**〈回家的畫〉**」連星號一起。
+    return paragraphs[0].replace("**", "")
+
+
 def _extract_prologue_looks(raw: str) -> dict[str, str]:
     section = _section(raw, "## 2.", "## 3.")
     result: dict[str, str] = {}
@@ -394,6 +418,7 @@ def parse_story_strings(raw: str) -> tuple[dict[str, str], str]:
     texts = {
         "wanhua.prologue.open": opening,
         "wanhua.prologue.letter_body": _extract_prologue_letter_body(raw),
+        "wanhua.item.homeward_painting": _extract_painting_body(raw),
     }
     texts.update(_extract_prologue_looks(raw))
     texts.update(_extract_prologue_look_labels(raw))
@@ -456,13 +481,26 @@ def collect_text_key_references(
     return references
 
 
+# 道具正文：`GET /inventory` 顯示用，**沒有任何 beat 節點會引用它**。
+#
+# 兩way 覆蓋檢查的用意是抓「打錯的 text_key」與「寫了沒人用的台詞」，而道具正文
+# 兩者都不是——它是既有的已審文字（§2.2），只是它的讀者是背包，不是劇本播放器。
+#
+# ⚠️ 例外只給道具正文。要為別的東西加進來之前先問：那段文字有沒有可能其實
+# 是漏接的節點？孤兒檢查擋下的正是那種東西。
+#
+# 信的正文不在這裡：`wanhua.prologue.letter_body` 真的有一個 `speaker: 信` 的
+# 節點在念它（§11.1），它同時是台詞也是道具正文。
+_ITEM_BODY_KEYS = frozenset({"wanhua.item.homeward_painting"})
+
+
 def validate_text_key_coverage(
     references: set[str], texts: Mapping[str, str]
 ) -> None:
     """Require exact two-way coverage between script references and seed rows."""
 
     missing = sorted(references - set(texts))
-    orphaned = sorted(set(texts) - references)
+    orphaned = sorted(set(texts) - references - _ITEM_BODY_KEYS)
     problems = []
     if missing:
         problems.append("missing text_key(s): " + ", ".join(missing))

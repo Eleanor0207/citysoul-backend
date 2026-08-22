@@ -16,6 +16,8 @@ from app.modules.brain.models import StoryString
 
 _LETTER = "item_wanhua_letter"
 _LETTER_KEY = "wanhua.prologue.letter_body"
+_PAINTING = "item_homeward_painting"
+_PAINTING_KEY = "wanhua.item.homeward_painting"
 
 
 @pytest.fixture
@@ -81,6 +83,22 @@ def test_an_item_comes_back_with_its_reviewed_story_text(client, db_session, pla
     assert item["item_id"] == _LETTER
     assert item["item_type"] == "story_document"
     assert item["story_text"] == letter.text
+
+
+def test_the_painting_also_carries_its_reviewed_description(client, db_session, player):
+    # 畫跟信一樣有正文（§2.2 的畫作描述），只是沒有任何 beat 在念它——所以它的
+    # 字串是匯入端的孤兒例外，不是漏接的節點。
+    pid, token = player
+    _grant(db_session, pid, _PAINTING, item_type="story_key_item")
+
+    painting = db_session.query(StoryString).filter_by(text_key=_PAINTING_KEY).first()
+    if painting is None:
+        pytest.skip("這個資料庫還沒匯入 wanhua 故事字串")
+
+    item = _ask(client, token).json()["items"][0]
+
+    assert item["item_id"] == _PAINTING
+    assert item["story_text"] == painting.text
 
 
 def test_an_item_without_a_text_mapping_is_not_an_error(client, db_session, player):

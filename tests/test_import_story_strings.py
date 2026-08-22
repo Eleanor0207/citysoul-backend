@@ -26,8 +26,12 @@ def test_source_seed_keys_all_have_a_reference() -> None:
     document = import_story_strings.load_story_document(
         import_story_strings.DEFAULT_STORY_FILE
     )
-    assert import_story_strings.collect_text_key_references(document) == set(texts)
-    assert len(texts) == 59
+    # 道具正文沒有節點在念它，孤兒檢查對它另有例外（見 `_ITEM_BODY_KEYS`）。
+    assert (
+        import_story_strings.collect_text_key_references(document)
+        == set(texts) - import_story_strings._ITEM_BODY_KEYS
+    )
+    assert len(texts) == 60
     assert title == "留給街的信"
     assert texts["wanhua.prologue.look.figure"].startswith("水痕帶走了臉")
     # 標籤與敘述是兩件事，不能對調。
@@ -54,6 +58,27 @@ def test_source_seed_keys_all_have_a_reference() -> None:
     assert "新起街市場" in texts["wanhua.redhouse.gate.ask_past"]
     # 信件全文，不是年代簿旁白——見附錄 C。
     assert texts["wanhua.prologue.letter_body"].startswith("我畫了她很多次")
+
+    # 畫的正文（§2.2）。它是道具正文，不是任何人的台詞——`GET /inventory` 顯示用。
+    painting = texts["wanhua.item.homeward_painting"]
+    assert painting.startswith("一名側身人物站在畫面中央")
+    assert "〈回家的畫〉" in painting
+    assert "**" not in painting, "粗體記號要在匯入時去掉，背包不是 Markdown 算繪器。"
+
+
+def test_item_body_keys_are_the_only_orphans_allowed() -> None:
+    """例外只給道具正文；其他沒人引用的字串仍然要被擋下來。"""
+
+    import_story_strings.validate_text_key_coverage(
+        {"known.key"},
+        {"known.key": "已審文字", "wanhua.item.homeward_painting": "畫作描述"},
+    )
+
+    with pytest.raises(import_story_strings.StoryStringImportError, match="orphan"):
+        import_story_strings.validate_text_key_coverage(
+            {"known.key"},
+            {"known.key": "已審文字", "wanhua.item.something_else": "不應存在"},
+        )
 
 
 def test_dangling_text_key_is_rejected_before_any_write(

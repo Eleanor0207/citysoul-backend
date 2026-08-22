@@ -37,6 +37,9 @@ from app.modules.brain.models import StoryString
 # 要一起改。少了這裡只會讓玩家看到一個沒有內容的項目，不會有任何錯誤浮上來。
 _ITEM_TEXT_KEYS = {
     "item_wanhua_letter": "wanhua.prologue.letter_body",
+    # 畫的正文是 §2.2 的畫作描述。它跟信不一樣，**沒有任何 beat 在念它**——
+    # 匯入端因此把它列進 `_ITEM_BODY_KEYS` 的孤兒例外（見那裡的說明）。
+    "item_homeward_painting": "wanhua.item.homeward_painting",
 }
 
 
