@@ -28,12 +28,19 @@ from sqlalchemy import create_engine, text
 from app.core.config import settings
 
 
-DEFAULT_STORY_FILE = (
-    pathlib.Path(__file__).resolve().parent.parent.parent
-    / "citysoul-doc"
-    / "story"
-    / "wanhua_district_storyline_aming_landmark_photo_v1.md"
-)
+# 劇本正本在隔壁的 citysoul-doc；`content/story/` 是給容器讀的副本。
+#
+# ⚠️ **優先讀正本，讀不到才用副本。** 反過來的話，Lead 改了 doc、忘了同步，
+# 本機匯入會安靜地匯進舊內容——而那種錯誤沒有症狀，只是劇情停在上一版。
+#
+# 容器裡沒有隔壁 repo（Cloud Run 的 Job 用 backend 的映像檔），所以那邊一定
+# 落到副本。兩份的一致性由 tests/test_story_source_sync.py 擋。
+_STORY_FILENAME = "wanhua_district_storyline_aming_landmark_photo_v1.md"
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+_STORY_SOURCE = _REPO_ROOT.parent / "citysoul-doc" / "story" / _STORY_FILENAME
+_STORY_VENDORED = _REPO_ROOT / "content" / "story" / _STORY_FILENAME
+
+DEFAULT_STORY_FILE = _STORY_SOURCE if _STORY_SOURCE.is_file() else _STORY_VENDORED
 
 _YAML_BLOCK = re.compile(r"(?ms)^```yaml\s*\n(.*?)^```\s*$")
 
