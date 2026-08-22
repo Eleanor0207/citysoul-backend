@@ -459,10 +459,42 @@ def import_story(engine: Any, path: pathlib.Path) -> tuple[str, int]:
             )
 
         conn.execute(UPSERT_ARC, arc_row)
+
+        # 🔒 先把既有序號推到負數區間再 upsert。
+        #
+        # uq_story_beats_sequence 是 (arc_id, character_id, sequence_order) 唯一。
+        # 某個角色一旦多出一個 beat，同一批裡的既有 beat 就要往後挪，而 upsert
+        # 是一列一列做的——新的 1 會撞到還沒被挪走的舊 1，整批失敗。
+        conn.execute(
+            text(
+                "UPDATE brain.story_beats SET sequence_order = -sequence_order - 1 "
+                "WHERE arc_id = :arc_id AND sequence_order >= 0"
+            ),
+            {"arc_id": arc["arc_id"]},
+        )
+
         for row in beat_rows:
             conn.execute(UPSERT_BEAT, row)
         for row in card_rows:
             conn.execute(UPSERT_INFO_CARD, row)
+
+        # 還留在負數區間的，是資料庫有、但文件已經不再定義的 beat。玩家可能
+        # 卡在那個節點上，而它不會出現在任何一次匯入的輸出裡。
+        stranded = sorted(
+            row[0]
+            for row in conn.execute(
+                text(
+                    "SELECT beat_id FROM brain.story_beats "
+                    "WHERE arc_id = :arc_id AND sequence_order < 0"
+                ),
+                {"arc_id": arc["arc_id"]},
+            )
+        )
+        if stranded:
+            raise StoryImportError(
+                "資料庫裡有文件已經不再定義的 beat（整批未寫入）："
+                + "、".join(stranded)
+            )
     return arc["arc_id"], len(beat_rows)
 
 
