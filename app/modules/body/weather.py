@@ -96,6 +96,10 @@ class GoogleWeatherProvider(WeatherProvider):
     風速、紫外線指數等等——**刻意不取**，多帶的欄位會變成之後有人「順手用一下」
     的來源，而 §20.5.2 定義的這條 bar 只顯示溫度與天氣狀況。
 
+    **空氣品質也是刻意不取，不是漏做。** #75 原本的規格寫「溫度 ＋ 空氣品質」，
+    2026-08-22 定案不納入（§20.5.4）：空品在 Google Maps Platform 是另一支 API
+    （Air Quality API），要另外開通、計費與快取，換到的只是這條 bar 上多一個詞。
+
     `languageCode` 送 zh-TW：描述文字是直接顯示給玩家的，不經翻譯也不經模型。
     """
 
