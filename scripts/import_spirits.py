@@ -75,6 +75,23 @@ UPSERT_SPIRIT = text(
 )
 
 
+# 嗓音（0031）。`ON CONFLICT DO UPDATE` 而不是 DO NOTHING：調音是反覆的，
+# 每次匯入都要以 YAML 為準覆蓋掉資料庫裡的舊值。
+UPSERT_VOICE = text(
+    """
+    INSERT INTO brain.character_voices
+        (character_id, voice_name, speaking_rate, pitch, updated_at)
+    VALUES
+        (:character_id, :voice_name, :speaking_rate, :pitch, now())
+    ON CONFLICT (character_id) DO UPDATE SET
+        voice_name    = EXCLUDED.voice_name,
+        speaking_rate = EXCLUDED.speaking_rate,
+        pitch         = EXCLUDED.pitch,
+        updated_at    = now()
+    """
+)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
@@ -98,6 +115,19 @@ def main() -> int:
                 " 先跑 scripts.import_landmarks"
             )
 
+        # 嗓音參數的範圍先在這裡擋一次。資料庫也有 CHECK（migration 0031），
+        # 但那要等到寫入才報，而 --dry-run 不會寫入——那正是最該看到錯誤的時候。
+        voice = e.get("voice")
+        if voice is not None:
+            if not voice.get("name"):
+                errors.append(f"{e['spirit_id']}：voice 少了 name")
+            rate = float(voice.get("speaking_rate", 1.0))
+            pitch = float(voice.get("pitch", 0.0))
+            if not 0.25 <= rate <= 4.0:
+                errors.append(f"{e['spirit_id']}：speaking_rate {rate} 超出 0.25–4.0")
+            if not -20.0 <= pitch <= 20.0:
+                errors.append(f"{e['spirit_id']}：pitch {pitch} 超出 -20.0–20.0")
+
     if errors:
         for x in errors:
             print(f"✗ {x}")
@@ -106,7 +136,16 @@ def main() -> int:
     for e in entries:
         gate = "  [B4 安全閘]" if e.get("safety_gate") else ""
         off = "  [停用]" if not e.get("is_active", True) else ""
-        print(f"  {e['spirit_id']:36s} {e['display_name']:12s} → {e['character_id']}{gate}{off}")
+        v = e.get("voice")
+        voice_note = (
+            f"  [voice] {v['name']} rate={v.get('speaking_rate', 1.0)} "
+            f"pitch={v.get('pitch', 0.0):+}"
+            if v else "  [voice] 未配音"
+        )
+        print(
+            f"  {e['spirit_id']:36s} {e['display_name']:12s} → "
+            f"{e['character_id']}{gate}{off}{voice_note}"
+        )
 
     if args.dry_run:
         print("\n--dry-run：沒有寫入資料庫")
@@ -118,6 +157,19 @@ def main() -> int:
                 UPSERT_CHARACTER,
                 {"character_id": e["character_id"], "landmark_id": e["spirit_id"]},
             )
+            # 沒寫 voice: 的靈魂**不補預設值列**。「還沒配音」與「配成預設值」
+            # 是兩件事，後者看起來像有人決定過。
+            voice = e.get("voice")
+            if voice is not None:
+                conn.execute(
+                    UPSERT_VOICE,
+                    {
+                        "character_id": e["character_id"],
+                        "voice_name": voice["name"],
+                        "speaking_rate": float(voice.get("speaking_rate", 1.0)),
+                        "pitch": float(voice.get("pitch", 0.0)),
+                    },
+                )
             conn.execute(
                 UPSERT_SPIRIT,
                 {
@@ -137,7 +189,8 @@ def main() -> int:
     with engine.connect() as conn:
         n_s = conn.execute(text("SELECT count(*) FROM spirits")).scalar()
         n_c = conn.execute(text("SELECT count(*) FROM brain.characters")).scalar()
-    print(f"\nspirits {n_s} 列，brain.characters {n_c} 列")
+        n_v = conn.execute(text("SELECT count(*) FROM brain.character_voices")).scalar()
+    print(f"\nspirits {n_s} 列，brain.characters {n_c} 列，brain.character_voices {n_v} 列")
     print("⚠️ 座標未經實地勘查，見 content/spirits.yaml")
     return 0
 

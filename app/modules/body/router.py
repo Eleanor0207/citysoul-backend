@@ -68,6 +68,7 @@ from app.modules.brain.prompt_builder import build_prompt
 from app.modules.brain.quest_narrative import generate_quest_wrapper
 from app.modules.brain.unlock_story import generate_unlock_stories
 from app.modules.brain.tts import GcsAudioStorage, GoogleCloudTTSClient, TTSClient
+from app.modules.brain import voices
 
 # 未命中快速問候時的人工預寫台詞。
 #
@@ -580,7 +581,9 @@ def dialogue(
     # ── B10 語音 ─────────────────────────────────────────────────────
     #
     # 失敗回 None，對話降級成純文字。SDD §8.5：模型失敗不視為錯誤。
-    audio = tts.synthesize(reply_text)
+    # 嗓音跟著靈魂走（0031）：中年男性的龍山寺與少女造型的天文館不該是同一個
+    # 聲音。查不到配音就回 None，退回全域預設——那是這行改動之前的行為。
+    audio = tts.synthesize(reply_text, voice=voices.for_spirit(db, place_id))
 
     # ── B7 短期記憶 ──────────────────────────────────────────────────
     #

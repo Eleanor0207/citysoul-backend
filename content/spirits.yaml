@@ -31,6 +31,35 @@
 # 只給風險高的開：玩家問天文館「文物該不該還給對岸」的機率，跟問故宮差了一個
 # 量級。全開等於為了三個地標讓十個一起變慢。沒寫就是 false。
 #
+# ## voice：每隻靈魂的嗓音（0031）
+#
+# 匯入 `brain.character_voices`。沒寫 `voice:` 的靈魂**不會被寫入**——「還沒配音」
+# 與「配成預設值」是兩件事，後者看起來像有人決定過。查不到的靈魂在執行期退回
+# `settings.tts_voice_name`（目前是 None，等於讓 Google 自己挑）。
+#
+# ### 性別的來源是 3D 模型，不是人格卡
+#
+# 人格卡一律用「祂」——那是刻意的，人設寫的是**地方**不是人。所以性別唯一的依據
+# 是美術做出來的模型（`citysoul-client/.../Characters/*.fbx`）。
+# 2026-08-23 逐一算圖判定：3 男（龍山寺、松菸、當代館）、6 女。
+#
+# ### 只有 3 個講者，其餘靠 rate/pitch 拉開
+#
+# `cmn-TW` 只有 6 個嗓音 = 3 個講者 × 2 種品質，可辨識音色是 **1 女（A）2 男（B、C）**，
+# 沒有任何 Chirp3-HD。九隻靈魂配不滿，所以同一把嗓音要靠語速與音高做變體。
+#
+# ⚠️ **這只能拉開，不能真的變成九個人。** 同一個講者的音色底子還在，連著聽仍聽得出
+# 是同一把。要真正區分只有換語系（`cmn-CN` 有 38 個嗓音）或換供應商——那是產品決定。
+#
+# `pitch` 超過 ±4 半音會有明顯電子感，所以除了當代館以外一律壓在 ±3 內。
+#
+# ### ⚠️ 當代館用女聲，不是筆誤
+#
+# 當代館定案是**小男孩**風格，而 `cmn-TW` 沒有兒童嗓音——B 與 C 都是成年男性。
+# 把成年男聲 pitch 拉高不會變成小男孩，只會變成「體型比較小的成年男人」，
+# 共鳴腔的質感不會跟著變。動畫與遊戲配男童的慣例本來就是用女聲，所以這裡是
+# `Wavenet-A` +4 半音。
+#
 # ## character_id 的命名
 #
 # `{地名}_{英文角色定位詞}`，地名取短的那一段，不重複整個 spirit_id
@@ -59,6 +88,11 @@ spirits:
     character_id: longshan_watcher
     latitude: 25.037398
     longitude: 121.499732
+    voice:
+      name: cmn-TW-Wavenet-C
+      speaking_rate: 0.88
+      pitch: -2.0
+      # 中年男性，灰白髮鬍。三百年的守望者，「不疾不徐、講到年代久遠會放慢」
 
   # ⚠️ 2026-08-22：改回 25.042100 / 121.506800，**推翻**先前依 wanhua 近景文件
   # 做的那次校正（曾改成 25.042138 / 121.506282，兩者差 52 m）。
@@ -74,6 +108,11 @@ spirits:
     character_id: red_house_collector
     latitude: 25.042100
     longitude: 121.506800
+    voice:
+      name: cmn-TW-Wavenet-A
+      speaking_rate: 1.04
+      pitch: 1.5
+      # 女性，紅色印花短洋裝。看過太多場戲，語調輕快
 
   # 召喚點 key 是 bopiliao，跟 spirit_id 不同名。舊值 25.036900 / 121.499300，差 299 m。
   - spirit_id: bopiliao_historic_block
@@ -81,6 +120,11 @@ spirits:
     character_id: bopiliao_keeper
     latitude: 25.036846
     longitude: 121.502268
+    voice:
+      name: cmn-TW-Wavenet-A
+      speaking_rate: 1.06
+      pitch: 2.5
+      # 女性，長髮髮帶短褲。街區的年輕記憶
 
   # 召喚點 key 是 new_cultural_movement_museum，跟 spirit_id 不同名。
   # 舊值 25.057000 / 121.513300，差 301 m。
@@ -90,6 +134,11 @@ spirits:
     character_id: new_culture_witness
     latitude: 25.059103
     longitude: 121.515167
+    voice:
+      name: cmn-TW-Wavenet-A
+      speaking_rate: 0.94
+      pitch: -1.5
+      # 女性，斗篷式長裙。見證者，語調偏正式
 
   # 舊值 25.102300 / 121.548500，差 89 m。
   - spirit_id: national_palace_museum
@@ -98,6 +147,11 @@ spirits:
     character_id: palace_custodian
     latitude: 25.101574
     longitude: 121.548862
+    voice:
+      name: cmn-TW-Wavenet-A
+      speaking_rate: 0.9
+      pitch: -2.5
+      # 女性，青花瓷旗袍。在庫房裡等過幾十年，最沉穩
 
   # 舊值 25.095400 / 121.518500，差 66 m。
   - spirit_id: taipei_astronomical_museum
@@ -105,6 +159,11 @@ spirits:
     character_id: astronomy_observer
     latitude: 25.095990
     longitude: 121.518524
+    voice:
+      name: cmn-TW-Wavenet-A
+      speaking_rate: 1.1
+      pitch: 3.0
+      # 女性，藍色短髮。最年輕、最亮
 
   # 舊值 25.072500 / 121.524800，差 54 m。
   - spirit_id: taipei_fine_arts_museum
@@ -112,6 +171,11 @@ spirits:
     character_id: fine_arts_curator
     latitude: 25.072030
     longitude: 121.524661
+    voice:
+      name: cmn-TW-Wavenet-A
+      speaking_rate: 0.98
+      pitch: 0.0
+      # 女性，包頭寬褲。策展人，女聲的基準
 
   # 舊值 25.051000 / 121.519500，差 59 m。
   - spirit_id: moca_taipei
@@ -119,6 +183,11 @@ spirits:
     character_id: moca_experimenter
     latitude: 25.050781
     longitude: 121.518965
+    voice:
+      name: cmn-TW-Wavenet-A
+      speaking_rate: 1.08
+      pitch: 4.0
+      # 男童，短髮襯衫短褲。⚠️ 用女聲不是筆誤，見下方說明
 
   # 舊值 25.043900 / 121.560600，差 28 m（原本就在半徑內，一併對齊）。
   - spirit_id: songshan_cultural_park
@@ -126,3 +195,8 @@ spirits:
     character_id: songshan_worker
     latitude: 25.043723
     longitude: 121.560797
+    voice:
+      name: cmn-TW-Wavenet-B
+      speaking_rate: 1.0
+      pitch: 0.0
+      # 年輕男性，軍綠外套牛仔褲。男聲的基準

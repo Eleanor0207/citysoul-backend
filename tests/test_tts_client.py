@@ -17,6 +17,7 @@ from app.modules.brain.tts import (
     InMemoryAudioStorage,
     TTSClient,
     TTSResult,
+    VoiceProfile,
 )
 
 
@@ -458,3 +459,78 @@ def test_real_synthesis_against_google_cloud_tts():
 
     assert result is not None, f"合成失敗：{client.last_failure_reason}"
     assert result.audio_url
+
+
+# ── VoiceProfile：每隻靈魂一把嗓音（0031）───────────────────────────────
+
+
+def test_voice_profile_reaches_the_sdk():
+    """
+    🔒 嗓音、語速、音高三者都要真的傳到 SDK。
+
+    這是整條路徑最容易安靜壞掉的地方：少傳 `pitch` 不會有任何錯誤訊息，
+    只是九隻靈魂又變回同一個聲音，而那要靠耳朵才聽得出來。
+    """
+    client, _storage, stub = _client()
+
+    client.synthesize(
+        "你好",
+        voice=VoiceProfile(name="cmn-TW-Wavenet-C", speaking_rate=0.88, pitch=-2.0),
+    )
+
+    call = stub.calls[0]
+    assert call["voice"].name == "cmn-TW-Wavenet-C"
+    assert call["audio_config"].speaking_rate == pytest.approx(0.88)
+    assert call["audio_config"].pitch == pytest.approx(-2.0)
+
+
+def test_voice_profile_overrides_the_constructor_default():
+    """
+    profile 優先於建構時的嗓音。
+
+    整個行程共用一個 client 實例（`router.get_tts_client`），而嗓音是每隻靈魂
+    各自的——建構時那一個只能是「沒有指定時的退路」，不能贏過呼叫端。
+    """
+    stub = _StubTTSClient()
+    client = GoogleCloudTTSClient(
+        InMemoryAudioStorage(),
+        voice_name="cmn-TW-Wavenet-A",
+        client_factory=lambda: stub,
+    )
+
+    client.synthesize("你好", voice=VoiceProfile(name="cmn-TW-Wavenet-B"))
+
+    assert stub.calls[0]["voice"].name == "cmn-TW-Wavenet-B"
+
+
+def test_no_voice_keeps_the_old_behaviour():
+    """
+    🔒 回歸保護：不給 profile 時的行為與加這個參數之前完全一致。
+
+    也就是沿用建構時的嗓音，而且**不送** speaking_rate／pitch——送預設值看起來
+    無害，但那會讓「沒有人指定過」與「有人指定成 1.0」在 API 呼叫上長得一樣。
+    """
+    stub = _StubTTSClient()
+    client = GoogleCloudTTSClient(
+        InMemoryAudioStorage(),
+        voice_name="cmn-TW-Wavenet-A",
+        client_factory=lambda: stub,
+    )
+
+    client.synthesize("你好")
+
+    call = stub.calls[0]
+    assert call["voice"].name == "cmn-TW-Wavenet-A"
+    assert call["audio_config"].speaking_rate == 0.0
+    assert call["audio_config"].pitch == 0.0
+
+
+def test_fake_client_records_the_voice():
+    """FakeTTSClient 要記下嗓音，否則端點測試無法斷言「這隻用了哪一把」。"""
+    fake = FakeTTSClient()
+    profile = VoiceProfile(name="cmn-TW-Wavenet-B", pitch=1.5)
+
+    fake.synthesize("你好", voice=profile)
+    fake.synthesize("再見")
+
+    assert fake.voices == [profile, None]

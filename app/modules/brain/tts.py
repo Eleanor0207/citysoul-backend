@@ -37,6 +37,8 @@ from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import wait as futures_wait
 
+from dataclasses import dataclass
+
 from pydantic import BaseModel
 
 from app.core.config import settings
@@ -58,6 +60,30 @@ class TTSResult(BaseModel):
     audio_url: str
 
 
+@dataclass(frozen=True)
+class VoiceProfile:
+    """
+    一隻靈魂的嗓音設定。正本在 `brain.character_voices`，由
+    `content/spirits.yaml` 的 `voice:` 區塊匯入。
+
+    ## 為什麼帶 rate 與 pitch，而不是只有嗓音名稱
+
+    `cmn-TW` 只有 **3 個講者**（1 女 2 男，各有 Standard／Wavenet 兩種品質），
+    而靈魂有九隻。名稱不夠分，只能靠語速與音高在同一把嗓音上做出可辨識的變體。
+
+    ⚠️ 這**只能拉開，不能真的變成九個人**：同一個講者的音色底子還在，
+    連著聽仍聽得出是同一把嗓音。要真正區分只有換語系（`cmn-CN` 有 38 個嗓音）
+    或換供應商——那是產品決定。
+
+    不帶 `language_code`：實測 `zh-TW` 搭 `cmn-TW-*` 的嗓音名稱 Google 接受，
+    多一個欄位只是多一個要對齊的地方。
+    """
+
+    name: str
+    speaking_rate: float = 1.0
+    pitch: float = 0.0
+
+
 class AudioStorage(ABC):
     """把合成好的音檔放到客戶端拿得到的地方，回傳 URL。"""
 
@@ -72,8 +98,13 @@ class TTSClient(ABC):
     """
 
     @abstractmethod
-    def synthesize(self, text: str) -> TTSResult | None:
-        """合成語音。失敗時回傳 `None`，不拋例外。"""
+    def synthesize(self, text: str, *, voice: VoiceProfile | None = None) -> TTSResult | None:
+        """
+        合成語音。失敗時回傳 `None`，不拋例外。
+
+        `voice` 是 keyword-only 且可以省略：省略時退回實作自己的預設嗓音，
+        也就是加這個參數之前的行為。既有呼叫端因此不必跟著改。
+        """
 
 
 class GoogleCloudTTSClient(TTSClient):
@@ -112,7 +143,7 @@ class GoogleCloudTTSClient(TTSClient):
             self._client = self._client_factory()
         return self._client
 
-    def synthesize(self, text: str) -> TTSResult | None:
+    def synthesize(self, text: str, *, voice: VoiceProfile | None = None) -> TTSResult | None:
         self.last_failure_reason = None
 
         if not text or not text.strip():
@@ -124,17 +155,26 @@ class GoogleCloudTTSClient(TTSClient):
 
             client = self._ensure_client()
 
+            # 這一次的嗓音：呼叫端給的 profile 優先，其次是建構時的預設
+            # （`settings.tts_voice_name`），都沒有就讓 Google 依語言自己挑。
+            #
+            # 建構時的那一個不再是唯一來源，因為整個行程共用一個 client 實例
+            # （`router.get_tts_client`），嗓音卻是**每隻靈魂各自**的。
             voice_kwargs = {"language_code": self._language_code}
-            if self._voice_name:
+            audio_kwargs = {"audio_encoding": texttospeech.AudioEncoding.MP3}
+
+            if voice is not None:
+                voice_kwargs["name"] = voice.name
+                audio_kwargs["speaking_rate"] = voice.speaking_rate
+                audio_kwargs["pitch"] = voice.pitch
+            elif self._voice_name:
                 voice_kwargs["name"] = self._voice_name
 
             future = _EXECUTOR.submit(
                 client.synthesize_speech,
                 input=texttospeech.SynthesisInput(text=text),
                 voice=texttospeech.VoiceSelectionParams(**voice_kwargs),
-                audio_config=texttospeech.AudioConfig(
-                    audio_encoding=texttospeech.AudioEncoding.MP3
-                ),
+                audio_config=texttospeech.AudioConfig(**audio_kwargs),
             )
 
             # 與 gemini.py 同樣不用 future.result(timeout=)：那會讓 SDK 自己拋的
@@ -301,9 +341,13 @@ class FakeTTSClient(TTSClient):
     def __init__(self, result: TTSResult | None = TTSResult(audio_url="https://example.test/audio/abc.mp3")):
         self.result = result
         self.texts: list[str] = []
+        # 收到的嗓音，跟 texts 逐一對應。測試要斷言「這隻靈魂用的是哪一把嗓音」
+        # 時看這個——沒有它就只能改成攔截 Google SDK，那要多一層假物件。
+        self.voices: list[VoiceProfile | None] = []
 
-    def synthesize(self, text: str) -> TTSResult | None:
+    def synthesize(self, text: str, *, voice: VoiceProfile | None = None) -> TTSResult | None:
         self.texts.append(text)
+        self.voices.append(voice)
         return self.result
 
     @property

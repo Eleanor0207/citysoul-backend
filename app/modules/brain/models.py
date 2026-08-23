@@ -17,6 +17,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Float,
     ForeignKeyConstraint,
     Index,
     Integer,
@@ -178,6 +179,38 @@ class CharacterPersona(Base):
             unique=True,
             postgresql_where=text("active"),
         ),
+        {"schema": "brain"},
+    )
+
+
+class CharacterVoice(Base):
+    """
+    角色的 TTS 嗓音（0031）。
+
+    **一個角色一列，不版本化。** 跟 `CharacterPersona` 分開存的理由寫在
+    migration 0031 裡：pitch 是靠耳朵反覆試的參數，綁進版本化＋人工審核的
+    人格卡會讓調音變成一次內容審查。
+
+    這張表**允許缺列**：查不到就退回 `settings.tts_voice_name`。「還沒配音」
+    與「配成預設值」是兩件事，匯入器不會替沒寫 `voice:` 的靈魂補預設值列。
+
+    ⚠️ 兩個 CHECK 是 Google API 的合法範圍。超範圍的值會讓 TTS 在執行期
+    安靜失敗（降級成純文字），擋在寫入時才看得見。
+    """
+
+    __tablename__ = "character_voices"
+
+    character_id = Column(
+        String(64), ForeignKey("brain.characters.character_id"), primary_key=True
+    )
+    voice_name = Column(Text, nullable=False)
+    speaking_rate = Column(Float, nullable=False, server_default="1.0")
+    pitch = Column(Float, nullable=False, server_default="0.0")
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("speaking_rate BETWEEN 0.25 AND 4.0", name="ck_character_voices_rate"),
+        CheckConstraint("pitch BETWEEN -20.0 AND 20.0", name="ck_character_voices_pitch"),
         {"schema": "brain"},
     )
 
