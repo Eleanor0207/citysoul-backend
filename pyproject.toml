@@ -31,6 +31,11 @@ dependencies = [
     # roles/firebasecloudmessaging.admin，不下載 service account 金鑰
     # （組織政策本來就擋掉金鑰下載，見 backend#68 留言）。
     "firebase-admin>=6.9.0",
+    # 法律文件頁（/legal）。隱私權政策與服務條款的正本是 content/legal/*.md，
+    # 在啟動時渲染成 HTML 一次。裝這個套件是為了讓「正本只有一份」——
+    # 另一條路是提交一份手寫 HTML，那樣兩份文件遲早會不一致，
+    # 而不一致的隱私權政策是法律問題，不是排版問題。
+    "markdown>=3.7",
 ]
 
 [dependency-groups]

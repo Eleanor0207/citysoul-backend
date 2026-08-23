@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.modules.body.quota import QuotaExceededError
 from app.modules.body.router import router as body_router
+from app.modules.legal.router import router as legal_router
 
 app = FastAPI(title="城市靈魂 AR — Backend", version="0.1.0-sprint1")
 
@@ -54,6 +55,10 @@ if settings.app_env == "local":
     )
 
 app.include_router(body_router)
+
+# 隱私權政策與服務條款。給人看的 HTML，不是 API——所以整組 include_in_schema=False，
+# 也不掛在 /api/v1 底下（見 app/modules/legal/router.py 的模組註解）。
+app.include_router(legal_router)
 
 if settings.dev_console_enabled:
     # 開發測試主控台。整組 `include_in_schema=False`，所以它不會進
