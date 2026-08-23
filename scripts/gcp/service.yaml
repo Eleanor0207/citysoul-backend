@@ -45,7 +45,7 @@ spec:
           #   gcloud artifacts docker images describe \
           #     asia-east1-docker.pkg.dev/citysoul/citysoul/backend:latest \
           #     --format='value(image_summary.digest)'
-          image: asia-east1-docker.pkg.dev/citysoul/citysoul/backend@sha256:60c396db263566e979a48e65a5a7bc6365f822e8ff61d517d6f221875719c254
+          image: asia-east1-docker.pkg.dev/citysoul/citysoul/backend@sha256:8d7d16360791efb293277c2be85e3bd745cbfc390f2a181f3a41d63a6041e4c1
           ports:
             - name: http1
               containerPort: 8080
