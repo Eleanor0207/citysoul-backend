@@ -541,6 +541,11 @@ class StoryBeat(Base):
     # 跟另外兩欄一樣，Postgres 擋不住懸空的元素——打錯字的 quest_id 會變成
     # 一個玩家永遠解不開的節點，而且沒有任何症狀。只能由匯入器檢查。
     required_quest_ids = Column(ARRAY(Text), nullable=True)
+    # 這個 beat 能不能靠「與該靈魂對話」推進（0032）。
+    #
+    # 三個 gate beat 是 true。章節 beat 一律 false：它們要玩家在年代簿讀完劇本、
+    # 做完選擇才推進，而那些選擇會寫進 players_story_variables——自動推進會跳過。
+    advance_on_dialogue = Column(Boolean, nullable=False, server_default="false", default=False)
     contingency_notes = Column(Text, nullable=True)
     one_time = Column(Boolean, nullable=False, server_default="true", default=True)
     # Story content is active on import for the MVP.  reviewed_by is audit-only;

@@ -743,6 +743,8 @@ beats:
 
   - beat_id: beat_longshan_gate
     character_id: longshan_watcher
+    # 走到這個地標、跟這隻靈魂講到話就推進（0032）。
+    advance_on_dialogue: true
     trigger:
       all:
         - beat_completed: beat_prologue_letter
@@ -770,6 +772,8 @@ beats:
 
   - beat_id: beat_redhouse_gate
     character_id: red_house_collector
+    # 走到這個地標、跟這隻靈魂講到話就推進（0032）。
+    advance_on_dialogue: true
     trigger:
       all:
         - beat_completed: beat_longshan_clue
@@ -797,6 +801,8 @@ beats:
 
   - beat_id: beat_bopiliao_gate
     character_id: bopiliao_keeper
+    # 走到這個地標、跟這隻靈魂講到話就推進（0032）。
+    advance_on_dialogue: true
     trigger:
       all:
         - beat_completed: beat_redhouse_clue

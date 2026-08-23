@@ -314,6 +314,103 @@ def advance_beat(
     )
 
 
+def advance_gates_on_dialogue(
+    db: Session,
+    *,
+    player_id: uuid.UUID | str,
+    spirit_id: str,
+    now: datetime | None = None,
+) -> list[str]:
+    """
+    玩家跟這隻靈魂講到話 → 推進該靈魂身上**標了 `advance_on_dialogue` 的 beat**。
+    回傳這次真的推進的 beat_id。
+
+    ## 為什麼需要這一支
+
+    劇本寫的 gate 觸發條件是「持有某道具，首次與某靈魂對話」，但
+    `trigger_condition` 那一欄**沒有任何程式在讀**（只有匯入器在寫），而客戶端
+    只有年代簿會推進 beat、年代簿又只認五個章節——三個 gate 不在其中。
+
+    結果是序章之後整條主線走不到：第一章的前置是 `beat_longshan_gate`，
+    沒有任何介面能推進它，三個 gate 各卡在下一章前面。
+
+    ## ⚠️ 這是過渡方案，會跳過 gate 的劇本
+
+    三個 gate 各自有開場白與一個三選一的提問，那些內容需要畫面才播得出來，
+    後端沒有畫面。客戶端補上「到靈魂面前播 gate 劇本」之後，這一支要改成
+    只在客戶端沒播時兜底，或直接移除。
+
+    跳過是安全的：查證過 gate 的選項**不寫任何劇情變數**——三個 `set_once`
+    （`story_focus`／`reveal_lens`／`ending_mark`）分別在序章、第三章與終章。
+    跳過只損失當下的台詞，不影響結局分歧。
+
+    ## 條件不足就安靜跳過
+
+    跟 `quests.complete_on_dialogue()` 同一個失敗風格：這是對話流程的副作用，
+    不是玩家請求的東西。前置沒到、道具沒拿、beat 不存在——都只是「這次沒有東西
+    可以推進」，不該讓整支對話端點失敗。
+    """
+    moment = now or datetime.now(timezone.utc)
+    player_uuid = uuid.UUID(str(player_id))
+
+    # 靈魂 → 角色。beat 掛的是 character_id，不是 spirit_id。
+    character_id = (
+        db.query(Spirit.character_id).filter_by(spirit_id=spirit_id).scalar()
+    )
+    if not character_id:
+        return []
+
+    candidates = (
+        db.query(StoryBeat)
+        .filter_by(character_id=character_id, active=True, advance_on_dialogue=True)
+        .order_by(StoryBeat.sequence_order)
+        .all()
+    )
+    if not candidates:
+        return []
+
+    completed = _completed_beat_ids(db, player_uuid)
+    held_items = _held_item_ids(db, player_uuid)
+    completed_quests = _completed_quest_ids(db, player_uuid)
+
+    advanced: list[str] = []
+    for beat in candidates:
+        if beat.beat_id in completed:
+            continue
+        if not unlockable(beat, completed, held_items, completed_quests):
+            continue
+
+        try:
+            result = advance_beat(
+                db,
+                player_id=player_uuid,
+                arc_id=beat.arc_id,
+                beat_id=beat.beat_id,
+                now=moment,
+            )
+        except (
+            BeatNotFoundError,
+            BeatNotUnlockedError,
+            RequiredItemMissingError,
+            RequiredQuestIncompleteError,
+        ) as error:
+            # unlockable() 過了卻推不動，代表兩邊的判斷有落差——那是要修的事，
+            # 但不是這次對話該失敗的理由。
+            logger.warning(
+                "gate beat %s 推進失敗（玩家 %s）：%s", beat.beat_id, player_uuid, error
+            )
+            continue
+
+        if not result.already_completed:
+            advanced.append(beat.beat_id)
+            # 推進之後前置條件變了，下一個 gate 可能因此開啟（同一隻靈魂身上
+            # 有兩個 gate 的情況目前沒有，但這樣寫不必假設）。
+            completed.add(beat.beat_id)
+            held_items = _held_item_ids(db, player_uuid)
+
+    return advanced
+
+
 def _completed_beat_ids(db: Session, player_id: uuid.UUID) -> set[str]:
     rows = db.query(PlayersStoryProgress.beat_id).filter_by(player_id=player_id).all()
     return {row[0] for row in rows}

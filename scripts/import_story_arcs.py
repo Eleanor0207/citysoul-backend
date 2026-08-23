@@ -310,11 +310,13 @@ UPSERT_BEAT = text(
     INSERT INTO brain.story_beats
         (beat_id, arc_id, character_id, sequence_order, trigger_condition,
          narrative_directive, prerequisite_beat_ids, required_item_ids,
-         required_quest_ids, contingency_notes, one_time, active, reviewed_by)
+         required_quest_ids, contingency_notes, one_time, advance_on_dialogue,
+         active, reviewed_by)
     VALUES
         (:beat_id, :arc_id, :character_id, :sequence_order, :trigger_condition,
          :narrative_directive, :prerequisite_beat_ids, :required_item_ids,
-         :required_quest_ids, :contingency_notes, :one_time, true, :reviewed_by)
+         :required_quest_ids, :contingency_notes, :one_time, :advance_on_dialogue,
+         true, :reviewed_by)
     ON CONFLICT (beat_id) DO UPDATE SET
         arc_id = EXCLUDED.arc_id,
         character_id = EXCLUDED.character_id,
@@ -326,6 +328,7 @@ UPSERT_BEAT = text(
         required_quest_ids = EXCLUDED.required_quest_ids,
         contingency_notes = EXCLUDED.contingency_notes,
         one_time = EXCLUDED.one_time,
+        advance_on_dialogue = EXCLUDED.advance_on_dialogue,
         active = true,
         reviewed_by = EXCLUDED.reviewed_by,
         updated_at = now()
@@ -364,6 +367,9 @@ def _beat_row(arc: Mapping[str, Any], prepared: Mapping[str, Any], sequence_orde
         "required_quest_ids": required_quests or None,
         "contingency_notes": source.get("contingency_notes"),
         "one_time": source.get("one_time", True),
+        # 0032：只有 gate beat 明寫 true。沒寫就是 false——章節 beat 要玩家
+        # 在年代簿讀完並做完選擇才推進。
+        "advance_on_dialogue": bool(source.get("advance_on_dialogue", False)),
         "reviewed_by": source.get("reviewed_by", arc.get("reviewed_by")),
     }
 

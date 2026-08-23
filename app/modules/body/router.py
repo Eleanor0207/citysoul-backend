@@ -578,6 +578,19 @@ def dialogue(
             db, player_id=session_player_id, spirit_id=place_id
         )
 
+        # ── 主線 gate：跟這隻靈魂講到話就推進（0032）────────────────────
+        #
+        # 同一個觸發點的第三件事。劇本寫的 gate 觸發條件本來就是「持有某道具，
+        # 首次與某靈魂對話」，只是 trigger_condition 那一欄沒有任何程式在讀，
+        # 而客戶端只有年代簿會推進 beat——三個 gate 因此永遠推不動，
+        # 序章之後整條主線走不到。
+        #
+        # ⚠️ 過渡方案：gate 各自有開場白與一個三選一的提問，那需要畫面才播得
+        # 出來。客戶端補上之後這一段要改成兜底或移除（見該函式的說明）。
+        story_progress.advance_gates_on_dialogue(
+            db, player_id=session_player_id, spirit_id=place_id
+        )
+
     # ── B10 語音 ─────────────────────────────────────────────────────
     #
     # 失敗回 None，對話降級成純文字。SDD §8.5：模型失敗不視為錯誤。
