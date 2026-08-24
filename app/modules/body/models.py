@@ -541,6 +541,34 @@ class PlayerInventory(Base):
     )
 
 
+class PlayerQuestStep(Base):
+    """
+    玩家在劇情任務上做完的步驟（0033）。
+
+    **一列一步。** 三步做完兩步是哪兩步，`quest_progress.progress_value` 那個
+    整數答不出來——而對話要指示「還差哪一步」，就必須知道是哪一步。
+
+    步驟是集合語意（做過就做過，不會退回），所以重複提交靠主鍵去重，
+    不是先查再寫。
+
+    ⚠️ `step_id` **沒有外鍵**：步驟定義在 `quests.steps` 這個 JSONB 欄位裡，
+    沒有可以指的表。有效性由寫入端檢查（該任務的 steps 裡查不到就 404）。
+    """
+
+    __tablename__ = "player_quest_steps"
+
+    player_id = Column(
+        UUID(as_uuid=True), ForeignKey("players.player_id"), primary_key=True
+    )
+    quest_id = Column(String(64), primary_key=True)
+    step_id = Column(String(64), primary_key=True)
+    completed_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_player_quest_steps_lookup", "player_id", "quest_id"),
+    )
+
+
 class DialogueTurn(Base):
     """
     對話日誌（0013）。也是 B6 長期記憶排程萃取的資料來源。

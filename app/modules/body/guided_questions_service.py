@@ -90,7 +90,7 @@ def get_suggested_questions(
 
     moment = now or datetime.now(timezone.utc)
     event_date = taipei_today(moment)
-    spirit = db.query(models.Spirit).filter_by(spirit_id=place_id).first()
+    spirit = db.get(models.Spirit, place_id)
     if spirit is None or not spirit.is_active:
         raise SpiritNotFoundError(place_id)
 

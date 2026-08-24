@@ -89,6 +89,11 @@ EXPECTED_RESPONSE_CODES = {
     ("get", "/api/v1/spirits/{place_id}/daily-event"): {"200", "404", "422"},
     # #34：只收 encounter token，所以沒有獨立的 sense 錯誤碼。
     ("post", "/api/v1/quests/{quest_id}/complete"): {"200", "401", "403", "404", "422"},
+    # 0033：逐項觀察點。跟整個任務完成同一組錯誤碼，理由也一樣——步驟寫的是
+    # 「抬頭看正殿屋脊」這種在現場才做得到的事，所以只收 encounter token。
+    # 404 多涵蓋一種情況：這個任務沒有這個 step_id。
+    ("post", "/api/v1/quests/{quest_id}/steps/{step_id}/complete"):
+        {"200", "401", "403", "404", "422"},
     # #44：配額擋在辨識之前，所以有 429。同樣只收 encounter token。
     ("post", "/api/v1/quests/{quest_id}/landmark-photo"): {"200", "401", "403", "404", "422", "429"},
     # ── S8 查詢端點（#33／#35／#36／#37）──

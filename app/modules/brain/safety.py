@@ -199,7 +199,10 @@ class GeminiSafetyChecker(SafetyChecker):
     """
 
     def __init__(self, client: GeminiClient):
-        self._client = client
+        # 分類變體：同一個模型，關掉 thinking、輸出上限壓到一個標籤。B4 串在
+        # 生成之前，這一段是玩家在等的時間（實測開閘的靈魂每輪多一次完整生成
+        # 的延遲）。fake 的 `for_classification()` 回自己，測試不受影響。
+        self._client = client.for_classification()
         self.last_failure_reason: str | None = None
 
     def check(self, user_input: str) -> SafetyResult:

@@ -22,7 +22,9 @@ def character_id_for_spirit(db: Session, spirit_id: str) -> str | None:
     是兩次查詢而不是一個 join——身體的表與腦袋的表不在同一個關聯圖上，
     這是刻意的成本。
     """
-    spirit = db.query(Spirit).filter_by(spirit_id=spirit_id).first()
+    # `Session.get` 走主鍵，命中 identity map——同一次請求裡 spirits 這一列
+    # 被查六次（對話端點實測），改成 get 之後只有第一次真的打資料庫。
+    spirit = db.get(Spirit, spirit_id)
     return spirit.character_id if spirit is not None else None
 
 
@@ -67,7 +69,7 @@ def load_landmark_soul(db: Session, spirit_id: str) -> LandmarkSoul | None:
     （人格卡先寫好、研究還沒匯入）與有史實沒人格（研究匯入了、人格還沒過審）
     都是實際會發生的狀態，呼叫端要能分別處理，不能假設兩者同進同出。
     """
-    spirit = db.query(Spirit).filter_by(spirit_id=spirit_id).first()
+    spirit = db.get(Spirit, spirit_id)
     if spirit is None or not spirit.landmark_id:
         return None
 

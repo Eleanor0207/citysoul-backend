@@ -475,3 +475,104 @@ def test_classifier_style_calls_are_not_checked_at_all():
 
     assert result == "safe"
     assert len(model.calls) == 1, "沒開 expect_chinese 就不該重生。"
+
+
+# ── 簡體漏出 ─────────────────────────────────────────────────────────
+#
+# 比混進英文嚴重：客戶端字型（NotoSansTC-VF.ttf）只收 20,745 個繁中字元，
+# 簡體字**一個都畫不出來**，玩家看到的是方框而不是看得懂的錯字。
+
+
+def test_a_leaked_simplified_character_is_regenerated_once():
+    # 2026-08-23 實測漏出：「總还有點風」。
+    model = _SequenceClient(["這太陽啊，總还有點風。", "這太陽啊，總還有點風。"])
+
+    result = _client(model).generate("今天好熱", expect_chinese=True)
+
+    assert result == "這太陽啊，總還有點風。"
+    assert len(model.calls) == 2
+
+
+def test_two_simplified_leaks_in_a_row_fall_back():
+    model = _SequenceClient(["这条街还是老样子。", "这里从来没变过。"])
+
+    client = _client(model)
+    result = client.generate("這裡怎麼樣", expect_chinese=True)
+
+    assert result == FALLBACK_REPLY
+    assert client.last_simplified_leak, "回退原因要留得下來，否則漏出率量不出來。"
+
+
+def test_traditional_text_is_never_flagged():
+    """🔒 零誤判。誤判的代價是每一句都重生一次，成本與延遲都加倍。"""
+    model = _SequenceClient(["這條街還是老樣子，這個從來沒變過。"])
+
+    result = _client(model).generate("這裡怎麼樣", expect_chinese=True)
+
+    assert len(model.calls) == 1
+    assert result == "這條街還是老樣子，這個從來沒變過。"
+
+
+def test_characters_that_are_correct_in_taiwan_are_not_flagged():
+    """
+    🔒 `台`（台北）、`范`（范姓）、`松`（松山）、`制`（制度）看起來像簡體，
+    在台灣是正字。擋了它們等於每次講到台北都要重生一次。
+    """
+    model = _SequenceClient(["台北的范先生住在松山，制度上沒問題。"])
+
+    result = _client(model).generate("誰", expect_chinese=True)
+
+    assert len(model.calls) == 1
+    assert result == "台北的范先生住在松山，制度上沒問題。"
+
+
+def test_the_blocklist_matches_the_client_font():
+    """
+    🔒 清單是從客戶端字型的 cmap 推出來的，不是憑印象列的。
+
+    這一條在擋「有人為了少重生幾次，把還在漏的字從清單裡拿掉」——判斷基準是
+    「字型畫不畫得出來」，不是「我覺得這個字還好」。
+    """
+    from app.modules.brain.gemini import VertexAIGeminiClient
+
+    for ch in "还说这时过来":
+        assert ch in VertexAIGeminiClient._SIMPLIFIED_HAN
+
+
+def test_classification_variant_drops_thinking_and_caps_output():
+    """
+    🔒 B4 的分類呼叫不帶 thinking，輸出上限只夠一個標籤。
+
+    對話用的設定（thinking LOW、1536 token）是為了寫三四段敘事調的。B4 串在
+    生成**之前**，那些預算在這裡換不到準確度，只換到玩家多等的一段時間。
+    """
+    from app.modules.brain.gemini import VertexAIGeminiClient
+
+    client = VertexAIGeminiClient(client_factory=lambda: object())
+    variant = client.for_classification()
+
+    assert variant is not client
+    assert variant._thinking_level is None
+    assert variant._max_output_tokens == VertexAIGeminiClient._CLASSIFICATION_MAX_TOKENS
+    assert variant._model_name == client._model_name
+    # 同一個實例重複取用不會每次重建。
+    assert client.for_classification() is variant
+
+
+def test_safety_checker_uses_the_classification_variant():
+    """🔒 B4 真的用了那個變體——少了這條，變體會安靜地沒被接上。"""
+    from app.modules.brain.gemini import FakeGeminiClient
+    from app.modules.brain.safety import GeminiSafetyChecker
+
+    class _Spy(FakeGeminiClient):
+        def __init__(self):
+            super().__init__(response="safe")
+            self.variant_requested = 0
+
+        def for_classification(self):
+            self.variant_requested += 1
+            return self
+
+    spy = _Spy()
+    GeminiSafetyChecker(spy)
+    assert spy.variant_requested == 1

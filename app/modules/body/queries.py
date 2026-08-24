@@ -27,11 +27,18 @@
 from __future__ import annotations
 
 import uuid as uuid_module
+from collections import defaultdict
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.modules.body.models import Quest, QuestProgress, Resonance, Spirit
+from app.modules.body.models import (
+    PlayerQuestStep,
+    Quest,
+    QuestProgress,
+    Resonance,
+    Spirit,
+)
 from app.modules.body.quests import (
     STATUS_COMPLETED,
     STATUS_IN_PROGRESS,
@@ -50,7 +57,9 @@ def _player_uuid(player_id) -> uuid_module.UUID:
     return uuid_module.UUID(str(player_id))
 
 
-def quest_view(progress: QuestProgress, *, today, catalogue=None) -> dict:
+def quest_view(
+    progress: QuestProgress, *, today, catalogue=None, completed_step_ids=None
+) -> dict:
     """
     把一列 `quest_progress` 轉成回應用的形狀。
 
@@ -99,6 +108,8 @@ def quest_view(progress: QuestProgress, *, today, catalogue=None) -> dict:
         "title": entry.title if entry is not None else None,
         "intro": entry.intro if entry is not None else None,
         "steps": list(entry.steps or []) if entry is not None else [],
+        # 由呼叫端一次撈完傳進來。查詢一列一次會變成 N+1，而 daily 型任務根本沒有步驟。
+        "completed_step_ids": sorted(completed_step_ids or ()),
     }
 
 
@@ -116,13 +127,36 @@ def daily_quests(db: Session, *, player_id, now: datetime | None = None) -> list
         return []
 
     # 一次撈完目錄，不要一列一次查詢。daily 型任務不在目錄裡，查不到是正常的。
+    quest_ids = [row.quest_id for row in rows]
     catalogue = {
         quest.quest_id: quest
-        for quest in db.query(Quest)
-        .filter(Quest.quest_id.in_([row.quest_id for row in rows]))
-        .all()
+        for quest in db.query(Quest).filter(Quest.quest_id.in_(quest_ids)).all()
     }
-    return [quest_view(row, today=today, catalogue=catalogue) for row in rows]
+    # 步驟進度也一次撈完，理由同上：一列一次查詢會變成 N+1。
+    # daily 型任務沒有步驟，這張表裡不會有它們的列。
+    step_rows = (
+        db.query(PlayerQuestStep.quest_id, PlayerQuestStep.step_id)
+        .filter(
+            PlayerQuestStep.player_id == _player_uuid(player_id),
+            # 只撈這次要回傳的任務——不過濾的話，這張列表的成本會隨玩家的
+            # 一生劇情進度成長。
+            PlayerQuestStep.quest_id.in_(quest_ids),
+        )
+        .all()
+    )
+    done_by_quest: dict[str, set[str]] = defaultdict(set)
+    for quest_id, step_id in step_rows:
+        done_by_quest[quest_id].add(step_id)
+
+    return [
+        quest_view(
+            row,
+            today=today,
+            catalogue=catalogue,
+            completed_step_ids=done_by_quest.get(row.quest_id),
+        )
+        for row in rows
+    ]
 
 
 def _resonance_value_for(db: Session, player_id, spirit_id: str) -> int:
@@ -143,7 +177,7 @@ def resonance_progress(db: Session, *, player_id, spirit_id: str) -> dict:
 
     「還沒開始」回 0 而不是 404：前端要能直接畫一條 0/10 的進度條。
     """
-    spirit = db.query(Spirit).filter_by(spirit_id=spirit_id).first()
+    spirit = db.get(Spirit, spirit_id)
     if spirit is None or not spirit.is_active:
         raise SpiritNotFoundError(spirit_id)
 

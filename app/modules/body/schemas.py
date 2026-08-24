@@ -557,6 +557,24 @@ class QuestListItem(BaseModel):
     title: str | None = None
     intro: str | None = None
     steps: list[dict] = Field(default_factory=list)
+    # 這個玩家做完的步驟 id。daily 型任務沒有步驟，永遠是空陣列。
+    completed_step_ids: list[str] = Field(default_factory=list)
+
+
+class QuestStepCompleteResponse(BaseModel):
+    """`POST /api/v1/quests/{quest_id}/steps/{step_id}/complete` 的回應。"""
+
+    quest_id: str
+    step_id: str
+    # 這次是不是真的新增。重複提交時是 false——客戶端據此決定要不要播完成動畫。
+    newly_completed: bool
+    # 這一步做完之後，整個任務是不是因此完成。
+    quest_completed: bool
+    completed_step_ids: list[str] = Field(default_factory=list)
+    # 還沒做到的步驟（完整的 step 物件，含 title 與 hint），照目錄順序。
+    pending_steps: list[dict] = Field(default_factory=list)
+    # 任務因此完成時，靈魂口吻的包裝台詞。生成失敗或還沒完成時是 None。
+    quest_wrapper_text: str | None = None
 
 
 class QuestsDailyResponse(BaseModel):

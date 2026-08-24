@@ -21,6 +21,7 @@ from app.core.config import settings
 from app.core.redis_client import append_session_turn
 from app.modules.body.geo import haversine_distance_m
 from app.modules.body import (
+    canned_audio,
     daily_event_service,
     guided_questions_service,
     push,
@@ -420,7 +421,7 @@ def dialogue(
     if holder_id != session_player_id:
         raise HTTPException(status_code=403, detail="token holder mismatch")
 
-    spirit = db.query(models.Spirit).filter_by(spirit_id=place_id).first()
+    spirit = db.get(models.Spirit, place_id)
     if spirit is None or not spirit.is_active:
         raise HTTPException(status_code=404, detail="spirit not found")
 
@@ -578,25 +579,37 @@ def dialogue(
             db, player_id=session_player_id, spirit_id=place_id
         )
 
-        # ── 主線 gate：跟這隻靈魂講到話就推進（0032）────────────────────
+        # ── 主線 gate 不在這裡推進 ──────────────────────────────────────
         #
-        # 同一個觸發點的第三件事。劇本寫的 gate 觸發條件本來就是「持有某道具，
-        # 首次與某靈魂對話」，只是 trigger_condition 那一欄沒有任何程式在讀，
-        # 而客戶端只有年代簿會推進 beat——三個 gate 因此永遠推不動，
-        # 序章之後整條主線走不到。
+        # 2026-08-23 曾經在這裡自動推進 gate beat（0032 的過渡處置），因為當時
+        # 客戶端沒有任何介面播得動它們，序章之後整條主線走不到。
         #
-        # ⚠️ 過渡方案：gate 各自有開場白與一個三選一的提問，那需要畫面才播得
-        # 出來。客戶端補上之後這一段要改成兜底或移除（見該函式的說明）。
-        story_progress.advance_gates_on_dialogue(
-            db, player_id=session_player_id, spirit_id=place_id
-        )
+        # 2026-08-24 客戶端補上了：玩家跟靈魂講到話時，年代簿的劇本播放器會播
+        # 那段開場戲，播完自己呼叫 `/advance`（TaskController.TryPlayGateAsync）。
+        #
+        # ⚠️ **兩者不能同時存在**：這裡先推掉的話，客戶端問到的 arc state 裡
+        # 那個 beat 已經不在 eligible_beat_ids，戲就永遠播不到了。
+        #
+        # `brain.story_beats.advance_on_dialogue` 保留著——它記錄的是「這個 beat
+        # 由對話觸發」這件事實，而那仍然是真的，只是改由客戶端執行。
 
     # ── B10 語音 ─────────────────────────────────────────────────────
     #
     # 失敗回 None，對話降級成純文字。SDD §8.5：模型失敗不視為錯誤。
     # 嗓音跟著靈魂走（0031）：中年男性的龍山寺與少女造型的天文館不該是同一個
     # 聲音。查不到配音就回 None，退回全域預設——那是這行改動之前的行為。
-    audio = tts.synthesize(reply_text, voice=voices.for_spirit(db, place_id))
+    #
+    # 預寫台詞（B12 招呼、保底句、B4 婉拒）是**固定字串**，同一隻靈魂唸出來
+    # 逐字相同——那些走快取，不必每次重新合成（2026-08-24 量測：合成佔一輪
+    # 對話的 34%，而且是串在生成之後的）。生成出來的台詞每次都不一樣，
+    # 快取永遠不會命中，直接合成。
+    voice = voices.for_spirit(db, place_id)
+    if source == "generated":
+        audio = tts.synthesize(reply_text, voice=voice)
+    else:
+        audio = canned_audio.synthesize_canned(
+            tts, reply_text, spirit_id=place_id, voice=voice
+        )
 
     # ── B7 短期記憶 ──────────────────────────────────────────────────
     #
@@ -696,6 +709,117 @@ def get_spirit(place_id: str, db: Session = Depends(get_db)):
 
     return schemas.SpiritResponse.from_spirit(
         spirit, persona=load_active_persona(db, spirit.spirit_id)
+    )
+
+
+@router.post(
+    "/quests/{quest_id}/steps/{step_id}/complete",
+    response_model=schemas.QuestStepCompleteResponse,
+    responses={
+        **_UNAUTHORIZED,
+        **_forbidden("Encounter token 屬於別的靈魂，或兩張憑證不屬於同一個玩家"),
+        404: {
+            "model": schemas.ErrorResponse,
+            "description": "任務不存在、玩家還沒有這筆進度，或這個任務沒有這個步驟",
+        },
+    },
+)
+def complete_quest_step_endpoint(
+    quest_id: str,
+    step_id: str,
+    session_player_id: uuid.UUID = Depends(require_session_token),
+    encounter_token: str | None = Header(default=None, alias=ENCOUNTER_TOKEN_HEADER),
+    db: Session = Depends(get_db),
+    gemini: GeminiClient = Depends(get_gemini_client),
+):
+    """
+    劇情任務的單一步驟完成（0033）。
+
+    ## 為什麼需要這支
+
+    劇情任務的 `steps` 一直只是顯示用的文字——沒有任何地方存「哪一步做完了」，
+    也沒有任何介面能完成它們。而唯一能完成整個任務的 `/quests/{id}/complete`
+    在 2026-08-22 換 UI 之後失去了呼叫端（舊的 uGUI `QuestPanelController`
+    還在但沒有入口）。結果是劇情任務永遠停在 `in_progress`，主線第一章因此
+    卡死——它的第三道門正是這個任務。
+
+    ## 判定是玩家自陳
+
+    CONTEXT.md 明訂「可驗證微任務由後端確定性規則判定，**不由 LLM 判定**」。
+    這裡的規則是「玩家說他看到了」。沒有自動驗證是已知的弱點，換掉它不需要改
+    資料結構（見 `quests.complete_step` 的說明）。
+
+    ## 只收 Encounter Token
+
+    理由同 `/quests/{id}/complete`：步驟寫的是「抬頭看正殿屋脊」這種**在現場
+    才做得到**的事。Sense Token 代表「你在 150m 內」，那不夠。
+
+    ## 全部做完就一併完成任務
+
+    玩家不必再按一次「完成任務」——有步驟又有完成鈕等於「做完了沒」有兩個定義。
+    任務因此完成時，這一支同時發放共鳴值與包裝台詞，跟 `/complete` 同一組規則。
+    """
+    try:
+        spirit_id = quests.resolve_spirit_id(db, quest_id)
+    except quests.QuestNotFoundError:
+        raise HTTPException(status_code=404, detail="quest not found")
+
+    holder_id = require_encounter_token(spirit_id, encounter_token)
+    if holder_id != session_player_id:
+        raise HTTPException(status_code=403, detail="token holder mismatch")
+
+    try:
+        completion = quests.complete_step(
+            db, player_id=session_player_id, quest_id=quest_id, step_id=step_id
+        )
+    except quests.StepNotFoundError:
+        raise HTTPException(status_code=404, detail="step not found")
+    except quests.QuestNotFoundError:
+        raise HTTPException(status_code=404, detail="quest not found")
+
+    # ── 身體的表寫完了 ────────────────────────────────────────────────
+    #
+    # 🔒 v2.1 §6.4：先寫完自己的表、再呼叫腦袋。下面的生成失敗一律不影響進度。
+    wrapper_text = None
+    if completion.quest_completed:
+        # 共鳴入帳與 `/complete` 走同一組規則與同一個 source_id，所以玩家不會
+        # 因為「走步驟」或「走整個任務」而拿到不同的分數，重複也去重得掉。
+        apply_resonance(
+            db,
+            player_id=session_player_id,
+            spirit_id=spirit_id,
+            source_type=SOURCE_QUEST,
+            source_id=quest_id,
+            amount=load_resonance_rules(db).amount_quest,
+        )
+
+        # 只在真的完成的那一次呼叫腦袋。步驟端點一個任務會被呼叫好幾次，
+        # 每次都生成等於白花好幾倍的成本。
+        try:
+            wrapper_text = generate_quest_wrapper(
+                gemini,
+                spirit_id=spirit_id,
+                quest_id=quest_id,
+                persona=load_active_persona(db, spirit_id),
+            )
+        except Exception as exc:  # noqa: BLE001
+            # 包裝失敗不能讓進度看起來像消失了（理由同 /complete 那一段）。
+            logger.warning(
+                "任務包裝生成失敗，任務仍已完成並入帳（%s）：%s: %s",
+                quest_id,
+                type(exc).__name__,
+                exc,
+            )
+
+    return schemas.QuestStepCompleteResponse(
+        quest_id=quest_id,
+        step_id=step_id,
+        newly_completed=completion.newly_added,
+        quest_completed=completion.quest_completed,
+        # 步驟集合由 complete_step 一併回傳，不再為了組回應多查三次。
+        completed_step_ids=sorted(completion.completed_step_ids),
+        pending_steps=completion.pending_steps,
+        quest_wrapper_text=wrapper_text,
     )
 
 

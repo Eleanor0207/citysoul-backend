@@ -20,6 +20,7 @@ S4．可驗證微任務生命週期狀態機（SDD 第7.4節）。
 不同就把 `attempts_today` 歸零。同樣不需要排程 job 在午夜清表。
 """
 import uuid
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -28,7 +29,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.modules.body.encounter_tokens import ENCOUNTER_TOKEN_EXPIRE_SECONDS
-from app.modules.body.models import Quest, QuestProgress
+from app.modules.body.models import PlayerQuestStep, Quest, QuestProgress
 
 # SDD 第7節決策8：所有「每日一次」「隔天重置」統一以 Asia/Taipei 午夜為基準。
 TAIPEI = ZoneInfo("Asia/Taipei")
@@ -367,3 +368,122 @@ def complete_quest(
     db.refresh(progress)
 
     return progress
+
+
+class StepNotFoundError(LookupError):
+    """這個任務的 `steps` 裡沒有這個 step_id。"""
+
+
+def quest_steps(db: Session, quest_id: str) -> list[dict]:
+    """任務目錄裡定義的步驟。daily 型任務沒有目錄資料，回空陣列。"""
+    quest = db.query(Quest).filter_by(quest_id=quest_id).first()
+    if quest is None:
+        return []
+    return [s for s in (quest.steps or []) if isinstance(s, dict)]
+
+
+def completed_step_ids(db: Session, *, player_id: uuid.UUID | str, quest_id: str) -> set[str]:
+    """這個玩家在這個任務上做完的步驟。"""
+    rows = (
+        db.query(PlayerQuestStep.step_id)
+        .filter_by(player_id=uuid.UUID(str(player_id)), quest_id=quest_id)
+        .all()
+    )
+    return {row[0] for row in rows}
+
+
+def pending_steps(db: Session, *, player_id: uuid.UUID | str, quest_id: str) -> list[dict]:
+    """還沒做到的步驟，照目錄順序。全部做完時回空陣列。"""
+    done = completed_step_ids(db, player_id=player_id, quest_id=quest_id)
+    return [s for s in quest_steps(db, quest_id) if s.get("step_id") not in done]
+
+
+@dataclass(frozen=True)
+class StepCompletion:
+    """`complete_step` 的結果。步驟集合一併回傳，呼叫端不必再查一次。"""
+
+    newly_added: bool
+    quest_completed: bool
+    completed_step_ids: set[str]
+    pending_steps: list[dict]
+
+
+def complete_step(
+    db: Session,
+    *,
+    player_id: uuid.UUID | str,
+    quest_id: str,
+    step_id: str,
+    now: datetime | None = None,
+) -> StepCompletion:
+    """
+    記下玩家做到了某一步。回傳 `StepCompletion`。
+
+    ## 判定是玩家自陳，不是 LLM
+
+    CONTEXT.md 明訂「可驗證微任務由後端確定性規則判定，**不由 LLM 判定**」。
+    這裡的規則就是「玩家說他看到了」——沒有自動驗證。
+
+    那確實很弱，但另外兩條路現在都不成立：GPS 只能判斷「在附近」，分不出同一個
+    地標上的三個步驟；照片辨識要為每一步準備辨識目標，而 `optional_photo_evidence`
+    整個任務只有一個。**驗證是可以之後換掉的那一層，資料結構不用跟著變。**
+
+    ## 全部做完就自動完成任務
+
+    不讓玩家再按一次「完成任務」：有步驟又有完成鈕等於「做完了沒」有兩個定義。
+    最後一步落地之後，同一次呼叫把任務標成完成。
+
+    ## 重複提交不是錯誤
+
+    步驟是集合語意，做過就做過。主鍵去重，`newly_added` 告訴呼叫端「這次有沒有
+    真的新增」——共鳴值與包裝台詞只該在真的新增時發生。
+    """
+    moment = now or datetime.now(timezone.utc)
+    player_uuid = uuid.UUID(str(player_id))
+
+    catalogue = quest_steps(db, quest_id)
+    defined = {s.get("step_id") for s in catalogue}
+    if step_id not in defined:
+        raise StepNotFoundError(f"{quest_id} 沒有步驟 {step_id}")
+
+    progress = (
+        db.query(QuestProgress)
+        .filter_by(player_id=player_uuid, quest_id=quest_id)
+        .first()
+    )
+    if progress is None:
+        # 跟 complete_quest 同一個理由：任務是在 /summon 時建立的。
+        raise QuestNotFoundError(f"玩家沒有 {quest_id} 的任務進度")
+
+    statement = (
+        pg_insert(PlayerQuestStep)
+        .values(
+            player_id=player_uuid,
+            quest_id=quest_id,
+            step_id=step_id,
+            completed_at=moment,
+        )
+        .on_conflict_do_nothing(index_elements=["player_id", "quest_id", "step_id"])
+        .returning(PlayerQuestStep.step_id)
+    )
+    newly_added = db.execute(statement).scalar_one_or_none() is not None
+
+    # 🔒 步驟先落地，才判斷任務有沒有做完——順序顛倒的話，最後一步會在自己
+    # 還沒寫進去的情況下被算成「還沒做完」。這一列已經在本交易裡，後面讀得到。
+    done = completed_step_ids(db, player_id=player_uuid, quest_id=quest_id)
+    quest_completed = (
+        progress.status != STATUS_COMPLETED and defined.issubset(done)
+    )
+    if quest_completed:
+        progress.status = STATUS_COMPLETED
+        progress.completed_at = moment
+
+    # 步驟與任務狀態同一次 commit：中間斷線不會留下「步驟全做完但任務仍在進行」。
+    db.commit()
+
+    return StepCompletion(
+        newly_added=newly_added,
+        quest_completed=quest_completed,
+        completed_step_ids=done,
+        pending_steps=[s for s in catalogue if s.get("step_id") not in done],
+    )

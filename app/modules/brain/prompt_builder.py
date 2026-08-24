@@ -81,6 +81,7 @@ drop。實際對應：
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -88,6 +89,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.redis_client import get_session
+from app.modules.body.models import Quest, QuestProgress
 from app.modules.brain.historical_boundary import factual_boundary_for_persona
 from app.modules.brain.loader import (
     load_active_district,
@@ -352,6 +354,59 @@ def build_system_instruction(persona, landmark=None, district=None) -> str:
     return "\n\n".join(sections)
 
 
+# 同一個任務期間，最多在幾輪對話裡提到它。超過就不再塞指示（見 _guidance_exhausted）。
+GUIDANCE_TURN_LIMIT = 3
+
+
+def quest_guidance_section(quest: dict | None) -> str | None:
+    """
+    玩家身上進行中的劇情任務，寫成「你要怎麼提起它」而不是一張任務清單。
+
+    ## 🔒 這段文字會影響玩家看到的回話，屬於文案
+
+    寫法刻意避開系統詞彙：不出現「任務」「步驟」「完成」「進度」。玩家在遊戲裡
+    收到的應該是一個角色請他去看某樣東西，不是待辦事項——人格卡說龍山寺是
+    「溫和、不疾不徐、不掉書袋」，那樣的角色不會唸條目。
+
+    ## 只給還沒做到的那一件
+
+    給整份清單，模型會一次全部倒出來，玩家收到三段指示然後一件都記不住。
+    一次一件，做完了下一次對話才提下一件。
+
+    ## 不強迫每一句都提
+
+    指示寫成「如果話題走得過去就提起」。玩家問的可能是完全無關的事，硬把話題
+    轉回去會讓角色變成任務發布機——那比玩家晚一輪才知道要看什麼糟糕得多。
+
+    `quest` 是 `{"title": ..., "step": {"title": ..., "hint": ...}}`；
+    沒有進行中的任務時傳 None，這一段整段不出現。
+    """
+    if not quest:
+        return None
+
+    step = quest.get("step") or {}
+    hint = (step.get("hint") or "").strip()
+    step_title = (step.get("title") or "").strip()
+    if not hint and not step_title:
+        return None
+
+    lines = ["【你想讓這位玩家去看的東西】"]
+    lines.append(
+        f"你希望他注意到：{step_title}" if step_title else "你希望他注意一樣東西。"
+    )
+    if hint:
+        lines.append(f"那是這樣的：{hint}")
+
+    lines.append(
+        "如果這一輪的話題剛好接得過去，才順口提一句，像是想起什麼一樣。"
+        "**多數時候不必提**——玩家說的事跟這個沒關係時就純粹回應他，不要硬轉，"
+        "也不要每次都繞回同一件事。他已經聽過就換個說法，或者乾脆不提。"
+        "**不要說出「任務」「步驟」「完成」這類字眼，也不要條列。**"
+    )
+
+    return "\n".join(lines)
+
+
 def _format_turn(turn) -> str | None:
     """
     短期記憶的一輪。Redis 裡存的是 `{"role": ..., "text": ...}`。
@@ -376,6 +431,7 @@ def build_user_turn(
     daily_context: str | None = None,
     long_term_memories: Sequence[str] = (),
     recent_turns: Sequence[dict] = (),
+    active_quest: dict | None = None,
 ) -> str:
     """
     當日情境 → 長期記憶 → 短期記憶 → 本次輸入。
@@ -397,9 +453,107 @@ def build_user_turn(
     if formatted:
         sections.append("【剛才的對話】\n" + "\n".join(formatted))
 
+    guidance = quest_guidance_section(active_quest)
+    if guidance:
+        # 放在玩家這句話**之前**：它是背景意圖，不是對這句話的回應要求。
+        # 放在後面模型會把它當成最新指令，每一輪都硬轉話題。
+        sections.append(guidance)
+
     sections.append(f"【玩家現在說】\n{user_input}")
 
     return "\n\n".join(sections)
+
+
+def active_quest_for(db: Session, *, player_id, spirit_id: str) -> dict | None:
+    """
+    這位玩家在這隻靈魂身上**進行中的劇情任務的下一步**。
+
+    沒有進行中的劇情任務、或步驟全做完了，都回 None——那時對話不該再提。
+
+    ## 為什麼在這裡查而不是由呼叫端傳
+
+    `build_prompt` 已經在查人格、史實、基調與記憶了，任務是同一類「組裝這次
+    對話需要的東西」。讓呼叫端多傳一個參數，等於每個呼叫端都要自己記得查，
+    而漏傳的症狀是「靈魂突然不再提任務」——那不會有人立刻發現。
+
+    只回**第一個**還沒做到的步驟。理由見 `quest_guidance_section`。
+    """
+    # 延後 import：quests 屬於 body 層，模組頂端 import 會讓 brain → body 的
+    # 相依變成 import 時就成立的環（body 的 router 已經 import 了這個模組）。
+    from app.modules.body import quests
+
+    rows = (
+        db.query(QuestProgress.quest_id, Quest.title)
+        .join(Quest, Quest.quest_id == QuestProgress.quest_id)
+        .filter(
+            QuestProgress.player_id == uuid.UUID(str(player_id)),
+            QuestProgress.status == quests.STATUS_IN_PROGRESS,
+            Quest.spirit_id == spirit_id,
+            Quest.quest_type == "story",
+            Quest.is_active.is_(True),
+        )
+        .order_by(Quest.quest_id)
+        .all()
+    )
+
+    for quest_id, title in rows:
+        # 先問上限：提完了就不必為了丟掉的結果去查步驟。
+        if _guidance_exhausted(db, player_id=player_id, spirit_id=spirit_id, quest_id=quest_id):
+            continue
+
+        pending = quests.pending_steps(db, player_id=player_id, quest_id=quest_id)
+        if not pending:
+            continue
+
+        return {"quest_id": quest_id, "title": title, "step": pending[0]}
+
+    return None
+
+
+def _guidance_exhausted(db: Session, *, player_id, spirit_id: str, quest_id: str) -> bool:
+    """
+    這隻靈魂已經提過夠多次了嗎？
+
+    ## 為什麼需要硬性上限
+
+    指示裡寫的是「話題走得過去再提」，但實測（2026-08-23，龍山寺 v5）模型把它
+    讀成「每一輪都要提」：玩家講工作累、講天氣熱，回話還是繞回屋簷，四輪全中，
+    而且措辭幾乎一樣。那正是我們想避開的「任務發布機」，只是包裝得好聽一點。
+
+    靠措辭讓模型自律沒有用——那是請求不是保證，跟英文混入要重生是同一類問題。
+    所以加一道**確定性的**上限。
+
+    ## 為什麼是「任務開始之後的對話輪數」
+
+    不是總輪數：玩家可能跟這隻靈魂聊過很久才拿到任務。也不是今天的輪數：
+    跨日之後重新開始提，等於每天跳針一次。
+
+    ## 提完了不代表玩家沒事做
+
+    年代簿裡隨時查得到還差哪一步。對話只負責「讓他第一次知道有這件事」，
+    不負責一直催。
+    """
+    from app.modules.body.models import DialogueTurn
+
+    started_at = (
+        db.query(QuestProgress.created_at)
+        .filter_by(player_id=uuid.UUID(str(player_id)), quest_id=quest_id)
+        .scalar()
+    )
+    if started_at is None:
+        return False
+
+    spoken = (
+        db.query(DialogueTurn.turn_id)
+        .filter(
+            DialogueTurn.player_id == uuid.UUID(str(player_id)),
+            DialogueTurn.spirit_id == spirit_id,
+            DialogueTurn.role == "player",
+            DialogueTurn.created_at >= started_at,
+        )
+        .count()
+    )
+    return spoken >= GUIDANCE_TURN_LIMIT
 
 
 def build_prompt(
@@ -463,5 +617,6 @@ def build_prompt(
             daily_context=daily_context,
             long_term_memories=memories,
             recent_turns=recent,
+            active_quest=active_quest_for(db, player_id=player_id, spirit_id=spirit_id),
         ),
     )

@@ -126,6 +126,9 @@ def test_daily_quests_returns_the_full_item_shape(client, db_session, spirit, pl
             "title": None,
             "intro": None,
             "steps": [],
+            # 逐項進度（0033）。daily 型任務沒有步驟，永遠是空陣列——但欄位
+            # 一定要在，客戶端照它畫「哪幾步已經做到」。
+            "completed_step_ids": [],
         }
     ]
 

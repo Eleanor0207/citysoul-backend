@@ -753,6 +753,13 @@
             "title": "Attempts Today",
             "type": "integer"
           },
+          "completed_step_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Completed Step Ids",
+            "type": "array"
+          },
           "intro": {
             "anyOf": [
               {
@@ -839,6 +846,60 @@
           "attempts_today"
         ],
         "title": "QuestStateResponse",
+        "type": "object"
+      },
+      "QuestStepCompleteResponse": {
+        "description": "`POST /api/v1/quests/{quest_id}/steps/{step_id}/complete` 的回應。",
+        "properties": {
+          "completed_step_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Completed Step Ids",
+            "type": "array"
+          },
+          "newly_completed": {
+            "title": "Newly Completed",
+            "type": "boolean"
+          },
+          "pending_steps": {
+            "items": {
+              "type": "object"
+            },
+            "title": "Pending Steps",
+            "type": "array"
+          },
+          "quest_completed": {
+            "title": "Quest Completed",
+            "type": "boolean"
+          },
+          "quest_id": {
+            "title": "Quest Id",
+            "type": "string"
+          },
+          "quest_wrapper_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quest Wrapper Text"
+          },
+          "step_id": {
+            "title": "Step Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "quest_id",
+          "step_id",
+          "newly_completed",
+          "quest_completed"
+        ],
+        "title": "QuestStepCompleteResponse",
         "type": "object"
       },
       "QuestsDailyResponse": {
@@ -1948,6 +2009,109 @@
           }
         ],
         "summary": "Landmark Photo",
+        "tags": [
+          "body"
+        ]
+      }
+    },
+    "/api/v1/quests/{quest_id}/steps/{step_id}/complete": {
+      "post": {
+        "description": "劇情任務的單一步驟完成（0033）。\n\n## 為什麼需要這支\n\n劇情任務的 `steps` 一直只是顯示用的文字——沒有任何地方存「哪一步做完了」，\n也沒有任何介面能完成它們。而唯一能完成整個任務的 `/quests/{id}/complete`\n在 2026-08-22 換 UI 之後失去了呼叫端（舊的 uGUI `QuestPanelController`\n還在但沒有入口）。結果是劇情任務永遠停在 `in_progress`，主線第一章因此\n卡死——它的第三道門正是這個任務。\n\n## 判定是玩家自陳\n\nCONTEXT.md 明訂「可驗證微任務由後端確定性規則判定，**不由 LLM 判定**」。\n這裡的規則是「玩家說他看到了」。沒有自動驗證是已知的弱點，換掉它不需要改\n資料結構（見 `quests.complete_step` 的說明）。\n\n## 只收 Encounter Token\n\n理由同 `/quests/{id}/complete`：步驟寫的是「抬頭看正殿屋脊」這種**在現場\n才做得到**的事。Sense Token 代表「你在 150m 內」，那不夠。\n\n## 全部做完就一併完成任務\n\n玩家不必再按一次「完成任務」——有步驟又有完成鈕等於「做完了沒」有兩個定義。\n任務因此完成時，這一支同時發放共鳴值與包裝台詞，跟 `/complete` 同一組規則。",
+        "operationId": "complete_quest_step_endpoint_api_v1_quests__quest_id__steps__step_id__complete_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quest_id",
+            "required": true,
+            "schema": {
+              "title": "Quest Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "step_id",
+            "required": true,
+            "schema": {
+              "title": "Step Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Encounter-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Encounter-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuestStepCompleteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Session token 無效或未提供"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Encounter token 屬於別的靈魂，或兩張憑證不屬於同一個玩家"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "任務不存在、玩家還沒有這筆進度，或這個任務沒有這個步驟"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Complete Quest Step Endpoint",
         "tags": [
           "body"
         ]

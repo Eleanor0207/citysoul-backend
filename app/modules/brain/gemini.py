@@ -89,6 +89,16 @@ class GeminiClient(ABC):
         `VertexAIGeminiClient._latin_leak`）。
         """
 
+    def for_classification(self) -> "GeminiClient":
+        """
+        同一個模型、給**只回一個標籤**的呼叫用的變體。
+
+        預設回自己：fake 與測試不需要知道有這回事。真實 client 覆寫它，
+        關掉 thinking 並把輸出上限壓到一個標籤的長度——B4 的分類串在生成
+        之前，它省下來的每一毫秒都是玩家在等的時間。
+        """
+        return self
+
 
 class VertexAIGeminiClient(GeminiClient):
     """
@@ -120,10 +130,36 @@ class VertexAIGeminiClient(GeminiClient):
         )
         self._client_factory = client_factory or self._create_client
         self._client = None
+        self._classification_client: "VertexAIGeminiClient | None" = None
 
         self.last_failure_reason: str | None = None
         self.last_truncated: bool = False
         self.last_latin_leak: list[str] = []
+        self.last_simplified_leak: list[str] = []
+
+    # 分類呼叫的輸出上限。標籤最長是 `religious_doctrine`，遠在這個數字之內；
+    # 留餘裕是因為撞到上限會被判成截斷，而截斷在 B4 是 fail-closed（誤擋玩家）。
+    _CLASSIFICATION_MAX_TOKENS = 32
+
+    def for_classification(self) -> "GeminiClient":
+        """
+        關掉 thinking、壓低輸出上限的同一個模型。
+
+        對話用的設定（`thinking_level=LOW`、`max_output_tokens=1536`）是為了
+        寫出三四段敘事而調的。B4 要的是一個單字標籤，那些預算換不到任何準確度，
+        只換到玩家在生成之前多等的一段時間。
+
+        每次呼叫都重建一個 client 太浪費，所以快取在實例上。
+        """
+        if self._classification_client is None:
+            self._classification_client = VertexAIGeminiClient(
+                model_name=self._model_name,
+                max_output_tokens=self._CLASSIFICATION_MAX_TOKENS,
+                timeout_seconds=self._timeout_seconds,
+                thinking_level=None,
+                client_factory=self._client_factory,
+            )
+        return self._classification_client
 
     def _create_client(self):
         import google.auth
@@ -178,6 +214,12 @@ class VertexAIGeminiClient(GeminiClient):
         所以是重生一次，不是修剪。重生保留「模型輸出不被我們改寫」這條線，而
         修剪會誤傷 MOCA、IMAX 這種地標本身就有的名字。
 
+        ## 簡體字用同一條路處理
+
+        2026-08-23 實測漏出「還→还」。簡體比英文嚴重：客戶端字型
+        （`NotoSansTC-VF.ttf`）只收繁中，簡體字**一個都畫不出來**，玩家看到的是
+        方框而不是看得懂的錯字。偵測清單正是從那份字型的 cmap 推出來的。
+
         ⚠️ 只重生**一次**。第二次仍然漏就回退到人工預寫台詞：再試下去是拿玩家
         的等待時間與我們的帳單去賭一個機率性的結果。
         """
@@ -187,12 +229,14 @@ class VertexAIGeminiClient(GeminiClient):
             return first
 
         leaked = self._latin_leak(first)
-        if not leaked:
+        simplified = self._simplified_leak(first)
+        if not leaked and not simplified:
             return first
 
         logger.warning(
-            "回應混進英文單字 %s（模型 %s），重生一次。",
+            "回應混進不該有的字（英文 %s／簡體 %s，模型 %s），重生一次。",
             leaked,
+            simplified,
             self._model_name,
         )
         second = self._generate_once(prompt)
@@ -200,18 +244,22 @@ class VertexAIGeminiClient(GeminiClient):
             return second
 
         still_leaked = self._latin_leak(second)
-        if not still_leaked:
+        still_simplified = self._simplified_leak(second)
+        if not still_leaked and not still_simplified:
             return second
 
         self.last_latin_leak = still_leaked
+        self.last_simplified_leak = still_simplified
         return self._fall_back(
-            f"連續兩次混進英文 {still_leaked}（模型 {self._model_name}）"
+            f"連續兩次混進英文 {still_leaked} 或簡體 {still_simplified}"
+            f"（模型 {self._model_name}）"
         )
 
     def _generate_once(self, prompt: str) -> str:
         self.last_failure_reason = None
         self.last_truncated = False
         self.last_latin_leak = []
+        self.last_simplified_leak = []
 
         try:
             client = self._ensure_client()
@@ -278,6 +326,43 @@ class VertexAIGeminiClient(GeminiClient):
     # 專有名詞白名單。這些出現在回應裡是正常的——地標本身就叫這個名字。
     _ALLOWED_LATIN = {"moca", "imax", "ar", "vr", "bot", "led"}
 
+    # 簡體字。**這份清單是從客戶端字型的 cmap 推出來的**，不是憑印象列的：
+    # `NotoSansTC-VF.ttf` 只收 20,745 個繁中字元，下面每一個字它都畫不出來。
+    #
+    # 所以漏出簡體不只是「用字不對」，是玩家會看到**一整排方框**——比混進英文
+    # 嚴重，英文至少讀得出來。
+    #
+    # ⚠️ 不完備，也不打算完備：Unicode 沒有「簡體」這個屬性，判斷簡繁需要一份
+    # 對照表（opencc 那類）。這裡收的是模型真的會漏的高頻字（2026-08-23 實測
+    # 漏出「还」），成本是一個 frozenset 的查表。要更準就得加一個相依，
+    # 而那要先量得出漏網率有多高——目前量不出來。
+    # 第二類：**字型畫得出來、但仍然是簡體**。上面那份清單漏掉它們，因為它是從
+    # 字型 cmap 推的——這幾個字剛好在 20,745 個字元裡。
+    #
+    # ⚠️ 只收在繁中文本裡**幾乎不可能正確**的。刻意排除掉這些看起來很像簡體、
+    # 其實在台灣是正字的：
+    #   台（台北）、范（范姓）、松（松樹）、沈（沈姓）、制（制度）、
+    #   向、致、板、号
+    # 擋了它們等於每次講到台北都要重生一次。
+    _SIMPLIFIED_ALSO_IN_FONT = frozenset("个从么无与发样叶复")
+
+    _SIMPLIFIED_HAN = frozenset(
+        "专丛丝严丧临为举乐习乡书买乱亏产亩亲仓们伞伟传伪佥侦偿兰关写军击凿刘则刚创别剧劝"
+        "办励劳势勋区单卖卢卫厅历厉压厌县叹员哑喷嘱围图圆场垦壮壶夺奖娄婶孙审宾寝对导将尝"
+        "层屿岂岛巩帅师帐帧应开弃张弯归当录忧态恳恼悬悯慑戏战执扩扫报拦挚挠挣掷摄摊攒敌斩"
+        "断时昼暂术杀杂权来杨枣栏树桨桩检椭欢欧歼殴毕汇汤泽浆涛涨涩渍渔渗湾湿满滤灭烂烛烫"
+        "热爱爷牵牺状犹狮狰猎环现疗疟疡瘫皱盏盐盘睁瞩矿砖砚础硕积称稳穷窍签简粤紧约纫纳纵"
+        "纸纹线练组绅细终绍结绝继绪续绳绽缘罗罢聂职肾肿胀脏脑脓腾艰艳节获营虏虑虽蚀蚁蝇衬"
+        "观觉誉誊认讨让议讲许证诅识诊诌译试诗详语诱说诺课谁谈谓谢谣贞责质贪贫购费贼赂赃资"
+        "赔赚赠赡赵趋躯转软轰轻载辖辗辽过还这进远违迟选邓邹郑郧酝酱酿释针钥钻铀铡铣锁锌锥"
+        "闪问闷闸闹闻阅阎队阴阶陆陈陕隐难雾韧项顺须顾预颐颖题颜额饮饰饲饶驱驶驻骂骆验鲁鲜"
+        "鸡鸣鸦鹅"
+    )
+
+    # 檢查用的聯集。兩份清單分開留著是因為出處不同（字型畫不出來／字型畫得出來
+    # 但仍是簡體），檢查時沒有差別。
+    _SIMPLIFIED = _SIMPLIFIED_HAN | _SIMPLIFIED_ALSO_IN_FONT
+
     def _latin_leak(self, text: str) -> list[str]:
         """
         這段文字裡不該出現的英文單字。純判斷，不改文字也不記 log。
@@ -291,6 +376,18 @@ class VertexAIGeminiClient(GeminiClient):
             w for w in re.findall(r"[A-Za-z]{2,}", text)
             if w.lower() not in self._ALLOWED_LATIN
         ]
+
+    def _simplified_leak(self, text: str) -> list[str]:
+        """
+        這段文字裡的簡體字。純判斷，不改文字。
+
+        跟 `_latin_leak` 一樣由 `expect_chinese` 開啟——分類器與 JSON 那類呼叫
+        不需要，而且它們的輸出本來就不是給玩家讀的。
+
+        去重並保持出現順序：log 要能一眼看出「漏了哪幾個字」，重複列出同一個字
+        只是噪音。
+        """
+        return list(dict.fromkeys(ch for ch in text if ch in self._SIMPLIFIED))
 
     @staticmethod
     def _was_truncated(response) -> bool:
