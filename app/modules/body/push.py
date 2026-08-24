@@ -31,6 +31,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.modules.body.models import PushSubscription
@@ -163,17 +164,32 @@ def register_push_token(db: Session, *, player_id, push_token: str) -> PushSubsc
 
     主鍵是 `player_id`，所以這裡是「有就改、沒有就建」。換手機或 token 輪替時
     舊的直接被覆蓋，不會留下失效的列。
+
+    ## 為什麼是 upsert，不是「先查再寫」
+
+    原本是 `query(...).first()` 再決定 add 或改欄位。那個寫法在**兩個請求同時
+    進來**時會爆：兩邊都查到 None、兩邊都 INSERT，第二個撞主鍵，玩家收到 500。
+    實機上真的發生過（2026-08-24，`push_subscriptions_pkey` duplicate key）——
+    客戶端啟動時有不只一條路徑會註冊，時間點幾乎相同。
+
+    交給資料庫用 `ON CONFLICT DO UPDATE` 判斷，就沒有那個空隙。跟
+    `router._grant_district_entry_item()` 是同一條理由。
     """
-    row = db.query(PushSubscription).filter_by(player_id=player_id).first()
+    statement = (
+        pg_insert(PushSubscription)
+        .values(player_id=player_id, push_token=push_token, is_subscribed=True)
+        .on_conflict_do_update(
+            index_elements=["player_id"],
+            set_={
+                "push_token": push_token,
+                # 重新註冊視為重新訂閱——玩家會這樣做通常就是因為想再收到通知。
+                "is_subscribed": True,
+            },
+        )
+        .returning(PushSubscription)
+    )
 
-    if row is None:
-        row = PushSubscription(player_id=player_id, push_token=push_token, is_subscribed=True)
-        db.add(row)
-    else:
-        row.push_token = push_token
-        # 重新註冊視為重新訂閱——玩家會這樣做通常就是因為想再收到通知。
-        row.is_subscribed = True
-
+    row = db.execute(statement).scalar_one()
     db.commit()
     db.refresh(row)
     return row
