@@ -189,7 +189,39 @@ def _extract_painting_body(raw: str) -> str:
 
     # 去掉 Markdown 的粗體記號。這段文字的讀者是背包畫面，不是 Markdown
     # 算繪器——原樣送出去玩家看到的會是「**〈回家的畫〉**」連星號一起。
-    return paragraphs[0].replace("**", "")
+    body = paragraphs[0].replace("**", "")
+
+    return _strip_meta_sentences(body)
+
+
+# §2.2 最後一句是**寫給製作團隊看的規格說明**（「畫名不是作者留下的題字，而是
+# 玩家在年代簿中為其使用的暫稱」），不是玩家該讀到的敘述。原樣匯進去的話，
+# 背包裡那件道具會在描述完畫面之後，突然用旁白口吻解釋這個命名慣例——2026-08-26
+# 實機回報「這些應該不是寫出來讓玩家閱讀的」。
+#
+# 用句子裡的措辭來認，而不是「砍掉最後一句」：後者會在有人替這段補上一句真正的
+# 敘述時默默砍錯東西，而那種錯誤沒有任何症狀浮上來。
+_META_SENTENCE_MARKERS = (
+    "玩家在年代簿",
+    "畫名不是作者",
+)
+
+
+def _strip_meta_sentences(body: str) -> str:
+    """Drop spec-facing sentences from a player-facing body."""
+
+    sentences = [part for part in re.split(r"(?<=。)", body) if part.strip()]
+    kept = [
+        sentence
+        for sentence in sentences
+        if not any(marker in sentence for marker in _META_SENTENCE_MARKERS)
+    ]
+    if not kept:
+        raise StoryStringImportError(
+            "painting description is entirely spec prose after stripping meta sentences"
+        )
+
+    return "".join(kept).strip()
 
 
 def _extract_prologue_looks(raw: str) -> dict[str, str]:

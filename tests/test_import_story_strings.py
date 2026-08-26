@@ -62,8 +62,14 @@ def test_source_seed_keys_all_have_a_reference() -> None:
     # 畫的正文（§2.2）。它是道具正文，不是任何人的台詞——`GET /inventory` 顯示用。
     painting = texts["wanhua.item.homeward_painting"]
     assert painting.startswith("一名側身人物站在畫面中央")
-    assert "〈回家的畫〉" in painting
     assert "**" not in painting, "粗體記號要在匯入時去掉，背包不是 Markdown 算繪器。"
+
+    # §2.2 的最後一句是寫給製作團隊的規格說明（畫名怎麼來的），不是玩家該讀到的
+    # 敘述。留著的話背包裡那件道具會在描述完畫面之後，突然用旁白口吻解釋命名慣例
+    # ——2026-08-26 實機回報。
+    assert "玩家在年代簿" not in painting
+    assert "畫名不是作者" not in painting
+    assert painting.endswith("街道轉角。")
 
 
 def test_item_body_keys_are_the_only_orphans_allowed() -> None:
